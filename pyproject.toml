@@ -30,6 +30,7 @@ dev = [
 
 [project.scripts]
 agency-audit = "agency_audit.cli:app"
+agency-audit-mcp = "agency_audit.mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agency_audit"]
