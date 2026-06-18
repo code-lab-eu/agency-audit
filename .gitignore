@@ -26,6 +26,9 @@ env/
 .coverage
 htmlcov/
 
+# Ruff
+.ruff_cache/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -33,3 +36,7 @@ Thumbs.db
 # Playwright
 playwright-report/
 test-results/
+
+# PostgreSQL helper scripts (deployment-specific)
+pg_cmd.sh
+pg_start.sh
