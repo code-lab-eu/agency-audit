@@ -40,3 +40,7 @@ test-results/
 # PostgreSQL helper scripts (deployment-specific)
 pg_cmd.sh
 pg_start.sh
+
+# PostgreSQL data
+pg/
+pg_data/
