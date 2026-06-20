@@ -498,20 +498,23 @@ def run_cmd(
             elif phase_name == "discovery":
                 table.add_row(
                     "Discovery",
-                    f"{phase['cities_processed']} cities, {phase['agencies_found']} agencies "
-                    f"({phase['duration_seconds']}s)",
+                    f"{phase.get('cities_processed', 0)} cities, {phase.get('agencies_found', 0)} agencies "
+                    f"({phase.get('duration_seconds', 0)}s)",
                 )
             elif phase_name == "audit":
+                # Orchestrator returns audits_succeeded / audits_failed
+                audits_ok = phase.get("audits_succeeded", 0)
+                audits_fail = phase.get("audits_failed", 0)
                 table.add_row(
                     "Audit",
-                    f"{phase['succeeded']} ✓ / {phase['failed']} ✗ "
-                    f"({phase['duration_seconds']}s)",
+                    f"{audits_ok} ✓ / {audits_fail} ✗ "
+                    f"({phase.get('duration_seconds', 0)}s)",
                 )
             elif phase_name == "qc":
                 table.add_row(
                     "QC",
-                    f"{phase['findings']} findings (scores: {phase['suspicious_scores']}, "
-                    f"dupes: {phase['duplicate_domains']})",
+                    f"{phase.get('findings', 0)} findings (scores: {phase.get('suspicious_scores', 0)}, "
+                    f"dupes: {phase.get('duplicate_domains', 0)})",
                 )
             elif phase_name == "reaudit":
                 table.add_row(
