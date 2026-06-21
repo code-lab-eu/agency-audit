@@ -63,8 +63,8 @@ uv run ruff check src/ tests/
 # Format check (use `ruff format` without --check to auto-apply)
 uv run ruff format --check src/ tests/
 
-# Type check (mypy is not a project dependency; pull it in on demand)
-uv run --with mypy mypy src/
+# Type check
+uv run mypy src/
 
 # Tests
 uv run pytest
