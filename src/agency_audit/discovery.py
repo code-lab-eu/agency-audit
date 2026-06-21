@@ -174,7 +174,10 @@ class PlacesAPIClient:
             if location_bias:
                 body["locationBias"] = {
                     "circle": {
-                        "center": {"latitude": location_bias[0], "longitude": location_bias[1]},
+                        "center": {
+                            "latitude": float(location_bias[0]),
+                            "longitude": float(location_bias[1]),
+                        },
                         "radius": radius,
                     }
                 }
