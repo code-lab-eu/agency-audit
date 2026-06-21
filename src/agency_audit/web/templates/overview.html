@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Overview — Agency Audit{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>📊 Overview</h2>
+    <div>
+        <button class="btn btn-sm btn-outline-primary"
+                hx-get="/htmx/stats" hx-target="#stats-container" hx-indicator="#refresh-ind">
+            ⟳ Refresh Stats
+        </button>
+        <span id="refresh-ind" class="htmx-indicator spinner-border spinner-border-sm text-primary"></span>
+    </div>
+</div>
+
+<div id="stats-container">
+    {% include "_stats.html" %}
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>📋 Recent Activity</span>
+                <div>
+                    <button class="btn btn-sm btn-outline-secondary"
+                            hx-get="/htmx/recent-activity" hx-target="#activity-container" hx-indicator="#act-ind">
+                        ⟳
+                    </button>
+                    <span id="act-ind" class="htmx-indicator spinner-border spinner-border-sm"></span>
+                </div>
+            </div>
+            <div id="activity-container" class="card-body p-0">
+                {% include "_recent_activity.html" %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-5">
+        <div class="card">
+            <div class="card-header">📈 Score Distribution</div>
+            <div class="card-body">
+                <canvas id="scoreChart" style="max-height:250px;"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    function drawChart(data) {
+        const ctx = document.getElementById('scoreChart');
+        if (!ctx) return;
+        const old = Chart.getChart('scoreChart');
+        if (old) old.destroy();
+        const labels = data.map(d => d.bucket);
+        const counts = data.map(d => d.cnt);
+        new Chart(ctx, {
+            type: 'bar',
+            data: { labels: labels, datasets: [{ label: 'Websites', data: counts, backgroundColor: ['#dc3545','#6c757d','#ffc107','#198754'] }] },
+            options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+        });
+    }
+    drawChart({{ stats.score_distribution | tojson }});
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target.id === 'stats-container') {
+            fetch('/api/stats').then(r => r.json()).then(d => drawChart(d.score_distribution));
+        }
+    });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,96 @@
+{% if data.in_progress %}
+<h5 class="text-info mt-3">🔄 In Progress ({{ data.in_progress | length }})</h5>
+<div class="card mb-3">
+    <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0">
+            <thead class="table-light">
+                <tr><th>City</th><th>Country</th><th class="text-end">Population</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+                {% for ci in data.in_progress %}
+                <tr>
+                    <td><strong>{{ ci.label }}</strong></td>
+                    <td>{{ ci.country_label }} <small class="text-muted">({{ ci.country }})</small></td>
+                    <td class="text-end">{{ "{:,}".format(ci.population) }}</td>
+                    <td>{{ 'in_progress' | status_badge }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<h5 class="text-warning">⏳ Pending ({{ data.pending | length }}{% if data.counts.pending and data.counts.pending | int > 50 %} of {{ data.counts.pending }}{% endif %})</h5>
+<div class="card mb-3">
+    <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>City</th>
+                    <th>Country</th>
+                    <th class="text-end">Population</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ci in data.pending %}
+                <tr>
+                    <td><strong>{{ ci.label }}</strong></td>
+                    <td>{{ ci.country_label }} <small class="text-muted">({{ ci.country }})</small></td>
+                    <td class="text-end">{{ "{:,}".format(ci.population) }}</td>
+                    <td>
+                        <button class="btn btn-xs btn-outline-primary"
+                                hx-post="/htmx/discovery/rediscover/{{ ci.id }}"
+                                hx-target="#queue-container"
+                                hx-indicator="#q-ind"
+                                hx-confirm="Reset {{ ci.label }} to pending for re-discovery?">
+                            ↻ Rediscover
+                        </button>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="text-muted text-center py-3">No pending cities</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if data.done %}
+<h5 class="text-success">✅ Completed ({{ data.done | length }}{% if data.counts.done and data.counts.done | int > 50 %} of {{ data.counts.done }}{% endif %})</h5>
+<div class="card">
+    <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>City</th>
+                    <th>Country</th>
+                    <th class="text-end">Population</th>
+                    <th class="text-end">Websites Found</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ci in data.done %}
+                <tr>
+                    <td><strong>{{ ci.label }}</strong></td>
+                    <td>{{ ci.country_label }} <small class="text-muted">({{ ci.country }})</small></td>
+                    <td class="text-end">{{ "{:,}".format(ci.population) }}</td>
+                    <td class="text-end">{{ ci.websites_found }}</td>
+                    <td>
+                        <button class="btn btn-xs btn-outline-secondary"
+                                hx-post="/htmx/discovery/rediscover/{{ ci.id }}"
+                                hx-target="#queue-container"
+                                hx-indicator="#q-ind"
+                                hx-confirm="Reset {{ ci.label }} for re-discovery?">
+                            ↻ Rediscover
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}

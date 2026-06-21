@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}{{ data.country.label }} — Agency Audit{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center mb-4">
+    <a href="/countries" class="btn btn-outline-secondary btn-sm me-3">← Back</a>
+    <h2 class="mb-0">🌍 {{ data.country.label }} <small class="text-muted">({{ data.country.iso }})</small></h2>
+</div>
+
+<div class="row">
+    <div class="col-md-7">
+        <h5>🏙️ Cities</h5>
+        <div class="card mb-4">
+            <div class="card-body p-0">
+                <table class="table table-sm table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>City</th>
+                            <th class="text-end">Population</th>
+                            <th class="text-end">Websites</th>
+                            <th class="text-end">Audited</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for ci in data.cities %}
+                        <tr>
+                            <td>
+                                <strong>{{ ci.label }}</strong>
+                                <small class="text-muted">/{{ ci.slug }}</small>
+                            </td>
+                            <td class="text-end">{{ "{:,}".format(ci.population) }}</td>
+                            <td class="text-end">{{ ci.website_count }}</td>
+                            <td class="text-end">{{ ci.audited_count }}</td>
+                            <td>{{ ci.discovery_status | status_badge }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="text-muted text-center py-3">No cities imported</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-5">
+        <h5>🌐 Websites</h5>
+        <div class="card">
+            <div class="card-body p-0">
+                <table class="table table-sm table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Website</th>
+                            <th class="text-end">Score</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for w in data.websites %}
+                        <tr onclick="window.location='/website/{{ w.id }}'">
+                            <td>
+                                <strong>{{ w.label or w.url }}</strong>
+                                <br><small class="text-muted">{{ w.url }}</small>
+                            </td>
+                            <td class="text-end">
+                                <span class="{{ w.score | score_color }}">{{ w.score }}</span>
+                            </td>
+                            <td>{{ w.audit_status | status_badge }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="3" class="text-muted text-center py-3">No websites discovered yet</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

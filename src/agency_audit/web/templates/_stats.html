@@ -1,0 +1,69 @@
+{% set s = stats %}
+<div class="row g-3">
+    <div class="col-md-3">
+        <div class="card stat-card text-center">
+            <div class="card-body">
+                <div class="text-secondary small">Countries</div>
+                <h3>{{ s.countries }}</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card text-center">
+            <div class="card-body">
+                <div class="text-secondary small">Cities Processed</div>
+                <h3>{{ s.cities_done }} <small class="text-muted">/ {{ s.cities_total }}</small></h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card text-center">
+            <div class="card-body">
+                <div class="text-secondary small">Websites Discovered</div>
+                <h3>{{ s.websites_total }}</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card text-center">
+            <div class="card-body">
+                <div class="text-secondary small">Websites Audited</div>
+                <h3>{{ s.websites_audited }} <small class="text-muted">/ {{ s.websites_total }}</small></h3>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="row g-3 mt-1">
+    <div class="col-md-3">
+        <div class="card stat-card text-center border-info">
+            <div class="card-body">
+                <div class="text-info small">Cities In Progress</div>
+                <h4>{{ s.cities_in_progress }}</h4>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card text-center border-warning">
+            <div class="card-body">
+                <div class="text-warning small">Cities Pending</div>
+                <h4>{{ s.cities_pending }}</h4>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card text-center border-secondary">
+            <div class="card-body">
+                <div class="text-secondary small">Pending Audits</div>
+                <h4>{{ s.websites_pending }}</h4>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card text-center border-success">
+            <div class="card-body">
+                <div class="text-success small">Avg Score</div>
+                <h4>{{ s.avg_score }}</h4>
+            </div>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block title %}{{ data.website.label or data.website.url }} — Agency Audit{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center mb-4">
+    <a href="javascript:history.back()" class="btn btn-outline-secondary btn-sm me-3">← Back</a>
+    <h2 class="mb-0">🌐 {{ data.website.label or data.website.url }}</h2>
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card mb-3">
+            <div class="card-header">📋 Website Info</div>
+            <div class="card-body">
+                <table class="table table-borderless table-sm">
+                    <tr>
+                        <td class="text-muted" style="width:150px;">URL</td>
+                        <td><a href="{{ data.website.url }}" target="_blank">{{ data.website.url }} ↗</a></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Label</td>
+                        <td>{{ data.website.label or '—' }}</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Audit Status</td>
+                        <td>{{ data.website.audit_status | status_badge }}</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Score</td>
+                        <td><span class="fs-4 fw-bold {{ data.website.score | score_color }}">{{ data.website.score }}</span></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Last Audited</td>
+                        <td>{{ data.website.last_audited_at.strftime('%Y-%m-%d %H:%M') if data.website.last_audited_at else '—' }}</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Created</td>
+                        <td>{{ data.website.created_at.strftime('%Y-%m-%d %H:%M') if data.website.created_at else '—' }}</td>
+                    </tr>
+                    {% if data.website.maps_place_id %}
+                    <tr>
+                        <td class="text-muted">Maps Place ID</td>
+                        <td><code>{{ data.website.maps_place_id }}</code></td>
+                    </tr>
+                    {% endif %}
+                    {% if data.website.address %}
+                    <tr>
+                        <td class="text-muted">Address</td>
+                        <td>{{ data.website.address }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if data.website.phone %}
+                    <tr>
+                        <td class="text-muted">Phone</td>
+                        <td>{{ data.website.phone }}</td>
+                    </tr>
+                    {% endif %}
+                </table>
+            </div>
+        </div>
+
+        {% if data.website.audit_data and data.website.audit_data != {} %}
+        <div class="card mb-3">
+            <div class="card-header">🔍 Audit Results</div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <thead class="table-light">
+                        <tr><th>Check</th><th>Result</th></tr>
+                    </thead>
+                    <tbody>
+                        {% set ad = data.website.audit_data %}
+                        <tr>
+                            <td>Robots.txt Allows</td>
+                            <td>
+                                {% if ad.get('robots_txt_allows') %}
+                                <span class="text-success">✓ Yes</span>
+                                {% else %}
+                                <span class="text-danger">✗ No</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Anti-Scraping Detected</td>
+                            <td>
+                                {% if ad.get('has_anti_scraping') %}
+                                <span class="text-danger">⚠ Yes</span>
+                                {% else %}
+                                <span class="text-success">✓ No</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Has API</td>
+                            <td>
+                                {% if ad.get('has_api') %}
+                                <span class="text-success">✓ Yes</span>
+                                {% if ad.get('api_url') %}<br><small class="text-muted">{{ ad.api_url }}</small>{% endif %}
+                                {% else %}
+                                <span class="text-muted">— No</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Property Count</td>
+                            <td>{{ ad.get('property_count', '—') }}</td>
+                        </tr>
+                        <tr>
+                            <td>Has Property Map</td>
+                            <td>
+                                {% if ad.get('has_property_map') %}
+                                <span class="text-success">✓ Yes</span>
+                                {% else %}
+                                <span class="text-muted">— No</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Listings Have Price</td>
+                            <td>
+                                {% if ad.get('listings_have_price') %}
+                                <span class="text-success">✓ Yes</span>
+                                {% else %}
+                                <span class="text-muted">— No</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Listings Have Location</td>
+                            <td>
+                                {% if ad.get('listings_have_location') %}
+                                <span class="text-success">✓ Yes</span>
+                                {% else %}
+                                <span class="text-muted">— No</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Listings Have Images</td>
+                            <td>
+                                {% if ad.get('listings_have_images') %}
+                                <span class="text-success">✓ Yes</span>
+                                {% else %}
+                                <span class="text-muted">— No</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Response Time</td>
+                            <td>{{ ad.get('response_time_ms', '—') }} ms</td>
+                        </tr>
+                        <tr>
+                            <td>SSL Valid</td>
+                            <td>
+                                {% if ad.get('ssl_valid') %}
+                                <span class="text-success">✓ Yes</span>
+                                {% else %}
+                                <span class="text-danger">✗ No</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Language</td>
+                            <td>{{ ad.get('language', '—') }}</td>
+                        </tr>
+                        <tr>
+                            <td>Listing Quality Score</td>
+                            <td>{{ ad.get('listing_quality_score', '—') }}</td>
+                        </tr>
+                        {% if ad.get('notes') %}
+                        <tr>
+                            <td>Notes</td>
+                            <td>{{ ad.notes }}</td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if data.website.audit_data and data.website.audit_data.get('technology_stack') %}
+        <div class="card mb-3">
+            <div class="card-header">🛠️ Technology Stack</div>
+            <div class="card-body">
+                {% for tech in data.website.audit_data.technology_stack %}
+                <span class="badge bg-primary me-1 mb-1">{{ tech }}</span>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="col-md-4">
+        <div class="card mb-3">
+            <div class="card-header">📍 Cities</div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr><th>City</th><th>Discovered Via</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for c in data.cities %}
+                        <tr>
+                            <td>
+                                <strong>{{ c.label }}</strong>
+                                <small class="text-muted">({{ c.country }})</small>
+                            </td>
+                            <td><small>{{ c.discovered_via or '—' }}</small></td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="2" class="text-muted text-center py-3">No cities linked</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">📜 Discovery Log</div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr><th>When</th><th>Agent</th><th>Status</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for d in data.discovery_logs %}
+                        <tr>
+                            <td class="small">{{ d.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                            <td><small>{{ d.agent or '—' }}</small></td>
+                            <td>{{ d.status | status_badge }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="3" class="text-muted text-center py-3">No logs</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -43,4 +43,5 @@ pg_start.sh
 
 # PostgreSQL data
 pg/
+pgdata/
 pg_data/
