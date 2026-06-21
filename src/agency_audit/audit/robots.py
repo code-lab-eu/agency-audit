@@ -8,11 +8,10 @@ Fetches /robots.txt, parses rules using urllib.robotparser, and records:
 
 from __future__ import annotations
 
-import asyncio
+import contextlib
 import logging
-from io import StringIO
-from urllib.robotparser import RobotFileParser
 from urllib.parse import urlsplit
+from urllib.robotparser import RobotFileParser
 
 import httpx
 
@@ -74,19 +73,15 @@ def _extract_crawl_delay(content: str, user_agent: str) -> float | None:
     for line in lines:
         stripped = line.strip().lower()
         if stripped.startswith("user-agent:"):
-            ua = stripped[len("user-agent:"):].strip()
+            ua = stripped[len("user-agent:") :].strip()
             in_our_section = ua.lower() == user_agent.lower()
             in_star_section = ua == "*"
         elif in_our_section and stripped.startswith("crawl-delay:"):
-            try:
-                our_delay = float(stripped[len("crawl-delay:"):].strip())
-            except ValueError:
-                pass
+            with contextlib.suppress(ValueError):
+                our_delay = float(stripped[len("crawl-delay:") :].strip())
         elif in_star_section and stripped.startswith("crawl-delay:"):
-            try:
-                star_delay = float(stripped[len("crawl-delay:"):].strip())
-            except ValueError:
-                pass
+            with contextlib.suppress(ValueError):
+                star_delay = float(stripped[len("crawl-delay:") :].strip())
 
     return our_delay if our_delay is not None else star_delay
 
@@ -97,7 +92,7 @@ def _extract_sitemaps(content: str) -> list[str]:
     for line in content.splitlines():
         stripped = line.strip()
         if stripped.lower().startswith("sitemap:"):
-            url = stripped[len("sitemap:"):].strip()
+            url = stripped[len("sitemap:") :].strip()
             if url:
                 sitemaps.append(url)
     return sitemaps
@@ -124,6 +119,7 @@ async def fetch_robots_txt(
             follow_redirects=True,
             headers={"User-Agent": DEFAULT_USER_AGENT},
         )
+    assert client is not None
 
     try:
         resp = await client.get(robots_url)
@@ -157,7 +153,7 @@ async def check_robots_allows(
 ) -> bool:
     """Quick check whether robots.txt allows scraping for a URL."""
     result = await fetch_robots_txt(base_url)
-    return result.allows_scraping
+    return bool(result.allows_scraping)
 
 
 # Convenience for synchronous code paths

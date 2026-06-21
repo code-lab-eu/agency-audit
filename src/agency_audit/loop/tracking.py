@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from agency_audit.db import get_pool
@@ -80,7 +80,7 @@ async def log_discovery_run(
         agencies_found,
         duration_seconds,
     )
-    return log_id
+    return int(log_id)
 
 
 async def log_audit_run(
@@ -121,7 +121,7 @@ async def log_audit_run(
             _make_json({"website_id": website_id, "score": score}),
             error,
         )
-    return log_id
+    return int(log_id)
 
 
 async def log_full_loop_run(
@@ -163,7 +163,7 @@ async def log_full_loop_run(
                 }
             ),
         )
-    return log_id
+    return int(log_id)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -218,7 +218,8 @@ async def get_progress() -> dict[str, Any]:
                    COUNT(DISTINCT ci.id) AS total_cities,
                    COUNT(DISTINCT ci.id) FILTER (WHERE ci.discovery_status = 'done') AS cities_done,
                    COUNT(DISTINCT w.id) AS total_websites,
-                   COUNT(DISTINCT w.id) FILTER (WHERE w.audit_status = 'audited') AS websites_audited,
+                   COUNT(DISTINCT w.id) FILTER (WHERE w.audit_status = 'audited')
+                       AS websites_audited,
                    ROUND(AVG(w.score) FILTER (WHERE w.audit_status = 'audited'), 1) AS avg_score
                FROM countries c
                LEFT JOIN cities ci ON ci.country = c.iso

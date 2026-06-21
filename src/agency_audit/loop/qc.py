@@ -170,9 +170,7 @@ async def detect_duplicates() -> list[QCFinding]:
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def mark_for_manual_review(
-    website_id: int, reason: str, severity: str = "error"
-) -> None:
+async def mark_for_manual_review(website_id: int, reason: str, severity: str = "error") -> None:
     """Flag a website for manual review.
 
     Args:

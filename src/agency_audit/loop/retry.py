@@ -16,14 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, TypeVar
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
 
 from agency_audit.db import get_pool
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 
 @dataclass
@@ -44,7 +43,7 @@ DEFAULT_RETRY_CONFIG = RetryConfig()
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def retry(
+async def retry[T](
     func: Callable[..., Awaitable[T]],
     *args: Any,
     max_attempts: int = 3,
@@ -72,13 +71,11 @@ async def retry(
     Raises:
         The last exception after all retries are exhausted.
     """
-    last_exception: Exception | None = None
 
     for attempt in range(1, max_attempts + 1):
         try:
             return await func(*args, **kwargs)
         except retryable_exceptions as exc:
-            last_exception = exc
             if attempt == max_attempts:
                 logger.error(
                     "All %d attempts failed for %s(%r, %r): %s",
@@ -101,6 +98,9 @@ async def retry(
             )
             await asyncio.sleep(delay)
 
+    # Unreachable when max_attempts >= 1: the loop always returns or raises.
+    raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Failure marking (for items that exhaust all retries)
@@ -122,7 +122,8 @@ async def mark_failed_website(website_id: int, error: str) -> None:
         )
         # Also log in audit_log
         await conn.execute(
-            """INSERT INTO audit_log (run_type, country, items_processed, items_failed, summary, error)
+            """INSERT INTO audit_log
+                   (run_type, country, items_processed, items_failed, summary, error)
                SELECT 'audit', wc.country, 1, 1, '{}'::jsonb, $1
                FROM website_cities wc
                WHERE wc.website_id = $2
