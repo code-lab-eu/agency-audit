@@ -49,3 +49,11 @@ testpaths = ["tests"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+namespace_packages = true
+explicit_package_bases = true
+ignore_missing_imports = true
+warn_return_any = true
+warn_unused_configs = true
