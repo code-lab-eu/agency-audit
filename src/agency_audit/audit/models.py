@@ -85,6 +85,7 @@ class AuditData:
     def to_dict(self) -> dict:
         """Serialize to dict for JSONB storage."""
         return {
+            "url": self.url,
             "robots_txt_allows": self.robots.allows_scraping,
             "robots_txt_fetched": self.robots.fetched,
             "robots_crawl_delay": self.robots.crawl_delay,
