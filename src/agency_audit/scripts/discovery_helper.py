@@ -9,6 +9,7 @@ Commands:
   mark-failed <city_id> <reason>  — mark city as failed
   pending <country_iso> <limit>  — list pending cities for a country
 """
+
 import asyncio
 import json
 import os
@@ -16,13 +17,18 @@ import sys
 
 os.chdir("/opt/data/workspace/agency-audit")
 sys.path.insert(0, "src")
-from agency_audit.config import settings
-from agency_audit.db import get_pool
+from agency_audit.db import get_pool  # noqa: E402  (import after sys.path setup)
 
 
-async def insert_agency(city_id: int, name: str, url: str, phone: str = None, 
-                         address: str = None, place_id: str = None,
-                         search_query: str = None):
+async def insert_agency(
+    city_id: int,
+    name: str,
+    url: str,
+    phone: str | None = None,
+    address: str | None = None,
+    place_id: str | None = None,
+    search_query: str | None = None,
+):
     """Insert a single agency into the database."""
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -37,7 +43,11 @@ async def insert_agency(city_id: int, name: str, url: str, phone: str = None,
                    VALUES ($1, $2, $3, $4, $5)
                    ON CONFLICT (url) DO UPDATE SET label = EXCLUDED.label
                    RETURNING id""",
-                url, name, place_id, address, phone,
+                url,
+                name,
+                place_id,
+                address,
+                phone,
             )
             created = True
 
@@ -45,7 +55,9 @@ async def insert_agency(city_id: int, name: str, url: str, phone: str = None,
         await conn.execute(
             """INSERT INTO website_cities (website_id, city_id, discovered_via)
                VALUES ($1, $2, $3) ON CONFLICT DO NOTHING""",
-            website_id, city_id, "google_maps_browser",
+            website_id,
+            city_id,
+            "google_maps_browser",
         )
 
         # Log discovery
@@ -53,7 +65,10 @@ async def insert_agency(city_id: int, name: str, url: str, phone: str = None,
         await conn.execute(
             """INSERT INTO discovery_log (city_id, website_id, agent, search_query, status)
                VALUES ($1, $2, $3, $4, 'found')""",
-            city_id, website_id, "google_maps_browser", q,
+            city_id,
+            website_id,
+            "google_maps_browser",
+            q,
         )
         return website_id, created
 
@@ -75,7 +90,8 @@ async def batch_insert(city_id: int, search_query: str, agencies: list[dict]):
                 if not url and place_id:
                     url = f"https://www.google.com/maps/place/?q=place_id:{place_id}"
                 if not url and name:
-                    url = f"https://www.google.com/search?q={name.replace(' ', '+')}+{address.replace(' ', '+')}".strip()
+                    query = f"{name.replace(' ', '+')}+{address.replace(' ', '+')}"
+                    url = f"https://www.google.com/search?q={query}".strip()
                 if not url:
                     continue
 
@@ -88,44 +104,57 @@ async def batch_insert(city_id: int, search_query: str, agencies: list[dict]):
                        VALUES ($1, $2, $3, $4, $5)
                        ON CONFLICT (url) DO UPDATE SET label = EXCLUDED.label
                        RETURNING id""",
-                    url, name, place_id or None, address or None, phone or None,
+                    url,
+                    name,
+                    place_id or None,
+                    address or None,
+                    phone or None,
                 )
 
             await conn.execute(
                 """INSERT INTO website_cities (website_id, city_id, discovered_via)
                    VALUES ($1, $2, $3) ON CONFLICT DO NOTHING""",
-                website_id, city_id, "google_maps_browser",
+                website_id,
+                city_id,
+                "google_maps_browser",
             )
 
             log_query = f"{name} @ {url}"
             await conn.execute(
                 """INSERT INTO discovery_log (city_id, website_id, agent, search_query, status)
                    VALUES ($1, $2, $3, $4, 'found')""",
-                city_id, website_id, "google_maps_browser", log_query,
+                city_id,
+                website_id,
+                "google_maps_browser",
+                log_query,
             )
             count += 1
 
         return count
 
 
-async def mark_city(city_id: int, status: str, note: str = None):
+async def mark_city(city_id: int, status: str, note: str | None = None):
     """Mark a city's discovery status."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE cities SET discovery_status = $1 WHERE id = $2",
-            status, city_id,
+            status,
+            city_id,
         )
         if note:
             log_status = "searched"  # valid enum values: searched, found, skipped, failed
             await conn.execute(
                 """INSERT INTO discovery_log (city_id, agent, search_query, status)
                    VALUES ($1, $2, $3, $4)""",
-                city_id, "google_maps_browser", note, log_status,
+                city_id,
+                "google_maps_browser",
+                note,
+                log_status,
             )
 
 
-async def list_pending(country_iso: str = None, limit: int = 5):
+async def list_pending(country_iso: str | None = None, limit: int = 5):
     """List pending cities for a country, or the top pending cities across all countries."""
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -135,7 +164,8 @@ async def list_pending(country_iso: str = None, limit: int = 5):
                    FROM cities
                    WHERE discovery_status = 'pending' AND country = $1
                    ORDER BY population DESC LIMIT $2""",
-                country_iso, limit,
+                country_iso,
+                limit,
             )
         else:
             rows = await conn.fetch(

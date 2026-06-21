@@ -122,12 +122,10 @@ def compute_score(audit: AuditData, config: dict | None = None) -> tuple[int, di
 
     # property count (tiered — first match wins)
     count = audit.property_count.count
-    tier_applied = False
     for tier in config["property_count_tiers"]:
         if count >= tier["min"]:
             breakdown[f"property_count_{tier['min']}+"] = tier["points"]
             score += tier["points"]
-            tier_applied = True
             break
 
     # listing quality

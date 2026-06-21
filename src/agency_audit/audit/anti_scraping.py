@@ -61,9 +61,7 @@ def _check_cloudflare_headers(headers: httpx.Headers) -> bool:
     if server in CLOUDFLARE_SERVER_VALUES:
         return True
     # cf-ray header is a strong signal
-    if "cf-ray" in headers:
-        return True
-    return False
+    return "cf-ray" in headers
 
 
 def _check_bot_detection_headers(headers: httpx.Headers) -> list[str]:
@@ -85,19 +83,13 @@ def _check_bot_detection_headers(headers: httpx.Headers) -> list[str]:
 def _check_recaptcha(html_text: str) -> bool:
     """Check HTML for reCAPTCHA presence."""
     html_lower = html_text.lower()
-    for pattern in RECAPTCHA_PATTERNS:
-        if re.search(pattern, html_lower):
-            return True
-    return False
+    return any(re.search(pattern, html_lower) for pattern in RECAPTCHA_PATTERNS)
 
 
 def _check_cloudflare_body(html_text: str) -> bool:
     """Check HTML body for Cloudflare challenge page indicators."""
     html_lower = html_text.lower()
-    for pattern in CLOUDFLARE_BODY_PATTERNS:
-        if re.search(pattern, html_lower):
-            return True
-    return False
+    return any(re.search(pattern, html_lower) for pattern in CLOUDFLARE_BODY_PATTERNS)
 
 
 def _check_js_only_rendering(html_text: str) -> bool:
@@ -110,7 +102,12 @@ def _check_js_only_rendering(html_text: str) -> bool:
         # selectolax may auto-add body to incomplete HTML, so also check
         # if the html tag has no children at all
         html_el = tree.css_first("html")
-        if html_el is None or len(html_el.attributes) == 0 and not tree.css("body") and not tree.css("head"):
+        if (
+            html_el is None
+            or len(html_el.attributes) == 0
+            and not tree.css("body")
+            and not tree.css("head")
+        ):
             return True  # No body = likely JS-only
         return True  # No body = likely JS-only
 

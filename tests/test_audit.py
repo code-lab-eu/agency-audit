@@ -37,7 +37,7 @@ from agency_audit.audit.models import (
     RobotsResult,
     TechStackResult,
 )
-from agency_audit.audit.robots import parse_robots_txt, _extract_sitemaps, _extract_crawl_delay
+from agency_audit.audit.robots import _extract_crawl_delay, _extract_sitemaps, parse_robots_txt
 from agency_audit.audit.scoring import compute_score, load_scoring_config
 from agency_audit.audit.tech_stack import (
     _detect_cdn,
@@ -46,7 +46,6 @@ from agency_audit.audit.tech_stack import (
     _detect_hosting,
     _detect_technologies,
 )
-
 
 # ---------------------------------------------------------------------------
 # robots.txt
@@ -71,10 +70,7 @@ class TestRobotsTxt:
         assert result.crawl_delay == 5.0
 
     def test_parse_crawl_delay_specific_agent(self):
-        content = (
-            "User-agent: AgencyAuditBot\nCrawl-delay: 2\n"
-            "User-agent: *\nCrawl-delay: 10\n"
-        )
+        content = "User-agent: AgencyAuditBot\nCrawl-delay: 2\nUser-agent: *\nCrawl-delay: 10\n"
         result = parse_robots_txt(content, "https://example.com", "AgencyAuditBot")
         assert result.crawl_delay == 2.0
 
@@ -151,7 +147,7 @@ class TestAntiScraping:
 
     def test_js_only_rendering_short_body(self):
         html = (
-            '<html><body><noscript>Please enable JavaScript</noscript>'
+            "<html><body><noscript>Please enable JavaScript</noscript>"
             '<script src="app.js"></script></body></html>'
         )
         assert _check_js_only_rendering(html) is True
@@ -161,11 +157,7 @@ class TestAntiScraping:
         assert _check_js_only_rendering(html) is False
 
     def test_js_only_rendering_many_scripts_short_text(self):
-        html = (
-            '<html><body>'
-            + '<script src="app.js"></script>' * 10
-            + '</body></html>'
-        )
+        html = "<html><body>" + '<script src="app.js"></script>' * 10 + "</body></html>"
         assert _check_js_only_rendering(html) is True
 
     def test_no_body_is_js_only(self):
@@ -181,11 +173,11 @@ class TestAntiScraping:
 class TestApiDetection:
     def test_jsonld_structured_data_found(self):
         html = (
-            '<html><head>'
+            "<html><head>"
             '<script type="application/ld+json">'
             '{"@type": "Product", "name": "Test Property"}'
-            '</script>'
-            '</head><body></body></html>'
+            "</script>"
+            "</head><body></body></html>"
         )
         found, types = _check_jsonld_structured_data(html)
         assert found is True
@@ -193,22 +185,22 @@ class TestApiDetection:
 
     def test_jsonld_no_realestate_type(self):
         html = (
-            '<html><head>'
+            "<html><head>"
             '<script type="application/ld+json">'
             '{"@type": "WebPage", "name": "Home"}'
-            '</script>'
-            '</head><body></body></html>'
+            "</script>"
+            "</head><body></body></html>"
         )
         found, types = _check_jsonld_structured_data(html)
         assert found is False
 
     def test_jsonld_with_graph(self):
         html = (
-            '<html><head>'
+            "<html><head>"
             '<script type="application/ld+json">'
             '{"@graph": [{"@type": "Place"}, {"@type": "WebPage"}]}'
-            '</script>'
-            '</head><body></body></html>'
+            "</script>"
+            "</head><body></body></html>"
         )
         found, types = _check_jsonld_structured_data(html)
         assert found is True
@@ -247,11 +239,7 @@ class TestPropertyCount:
     def test_count_from_html_listing_items(self):
         from agency_audit.audit.property_count import _count_from_html
 
-        html = (
-            '<html><body>'
-            + '<div class="property-item">A</div>' * 20
-            + '</body></html>'
-        )
+        html = "<html><body>" + '<div class="property-item">A</div>' * 20 + "</body></html>"
         count, conf = _count_from_html(html)
         assert count == 20
         assert conf == 0.3
@@ -259,11 +247,7 @@ class TestPropertyCount:
     def test_count_from_html_json_data(self):
         from agency_audit.audit.property_count import _count_from_html
 
-        html = (
-            '<html><body><script>'
-            'var data = {"totalCount": 850};'
-            '</script></body></html>'
-        )
+        html = '<html><body><script>var data = {"totalCount": 850};</script></body></html>'
         count, conf = _count_from_html(html)
         assert count == 850
         assert conf == 0.5
@@ -278,11 +262,7 @@ class TestPropertyCount:
     def test_find_listing_page_url(self):
         from agency_audit.audit.property_count import _find_listing_page_url
 
-        html = (
-            '<html><body>'
-            '<nav><a href="/properties">Properties</a></nav>'
-            '</body></html>'
-        )
+        html = '<html><body><nav><a href="/properties">Properties</a></nav></body></html>'
         url = _find_listing_page_url("https://example.com", html)
         assert url is not None
         assert "properties" in url
@@ -291,9 +271,9 @@ class TestPropertyCount:
         from agency_audit.audit.property_count import _find_listing_page_url
 
         html = (
-            '<html><body>'
+            "<html><body>"
             '<nav><a href="https://example.com/listings">Listings</a></nav>'
-            '</body></html>'
+            "</body></html>"
         )
         url = _find_listing_page_url("https://example.com", html)
         assert url == "https://example.com/listings"
@@ -314,21 +294,21 @@ class TestPropertyCount:
 class TestListingQuality:
     def test_structured_data_jsonld(self):
         html = (
-            '<html><head>'
+            "<html><head>"
             '<script type="application/ld+json">'
             '{"@type": "Product", "name": "Villa"}'
-            '</script>'
-            '</head><body></body></html>'
+            "</script>"
+            "</head><body></body></html>"
         )
         assert _check_structured_data(html) is True
 
     def test_structured_data_microdata(self):
         html = (
-            '<html><body>'
+            "<html><body>"
             '<div itemtype="https://schema.org/Product">'
             '<span itemprop="name">Villa</span>'
-            '</div>'
-            '</body></html>'
+            "</div>"
+            "</body></html>"
         )
         assert _check_structured_data(html) is True
 
@@ -338,30 +318,22 @@ class TestListingQuality:
 
     def test_map_detected_google(self):
         html = (
-            '<html><body>'
+            "<html><body>"
             '<iframe src="https://maps.googleapis.com/map/embed"></iframe>'
-            '</body></html>'
+            "</body></html>"
         )
         assert _check_map(html) is True
 
     def test_map_detected_leaflet(self):
-        html = (
-            '<html><body>'
-            '<div class="leaflet-container"></div>'
-            '</body></html>'
-        )
+        html = '<html><body><div class="leaflet-container"></div></body></html>'
         assert _check_map(html) is True
 
     def test_no_map(self):
-        html = '<html><body><p>No map here</p></body></html>'
+        html = "<html><body><p>No map here</p></body></html>"
         assert _check_map(html) is False
 
     def test_map_not_sitemap(self):
-        html = (
-            '<html><body>'
-            '<div class="sitemap"><a href="/page1">Page 1</a></div>'
-            '</body></html>'
-        )
+        html = '<html><body><div class="sitemap"><a href="/page1">Page 1</a></div></body></html>'
         # "sitemap" should not trigger map detection
         assert _check_map(html) is False
 
@@ -389,7 +361,9 @@ class TestTechStack:
         assert _detect_framework_from_html(html) == "WordPress"
 
     def test_framework_from_html_nextjs(self):
-        html = '<html><head><script id="__NEXT_DATA__" type="application/json"></script></head></html>'
+        html = (
+            '<html><head><script id="__NEXT_DATA__" type="application/json"></script></head></html>'
+        )
         assert _detect_framework_from_html(html) == "Next.js"
 
     def test_framework_from_html_react(self):
@@ -414,7 +388,7 @@ class TestTechStack:
 
     def test_hosting_detection(self):
         headers = httpx.Headers({"server": "nginx"})
-        html = '<html><body><!-- hosted by WP Engine --></body></html>'
+        html = "<html><body><!-- hosted by WP Engine --></body></html>"
         assert _detect_hosting(headers, html) == "WP Engine"
 
     def test_hosting_none(self):
@@ -424,11 +398,11 @@ class TestTechStack:
 
     def test_technologies_detected(self):
         html = (
-            '<html><head>'
+            "<html><head>"
             '<script src="jquery.min.js"></script>'
             '<script src="bootstrap.bundle.js"></script>'
             '<script src="google-analytics.js"></script>'
-            '</head><body></body></html>'
+            "</head><body></body></html>"
         )
         techs = _detect_technologies(html)
         assert "jQuery" in techs
@@ -677,6 +651,7 @@ class TestFullAuditor:
 
     async def test_audit_with_mock_client(self, mock_response):
         """Run full audit using a mock transport that returns our test HTML."""
+
         # Create a mock transport that handles different paths
         def mock_handler(request: httpx.Request) -> httpx.Response:
             url = str(request.url)
@@ -749,6 +724,7 @@ class TestFullAuditor:
 
     async def test_audit_returns_error_notes_on_failure(self):
         """Audit should still return an AuditData with notes on connection error."""
+
         def error_handler(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("Connection refused")
 
@@ -772,6 +748,7 @@ class TestFullAuditor:
 class TestAuditWebsitesBatch:
     async def test_audit_multiple_websites(self):
         """Batch audit should return results for all URLs."""
+
         def mock_handler(request: httpx.Request) -> httpx.Response:
             if "/robots.txt" in str(request.url):
                 return httpx.Response(200, text="User-agent: *\nAllow: /\n", request=request)

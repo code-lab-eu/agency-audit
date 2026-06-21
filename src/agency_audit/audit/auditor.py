@@ -28,8 +28,8 @@ from agency_audit.audit.anti_scraping import detect_anti_scraping
 from agency_audit.audit.api_detection import detect_api
 from agency_audit.audit.listing_quality import assess_listing_quality
 from agency_audit.audit.models import AuditData
-from agency_audit.audit.property_count import count_properties, _find_listing_page_url
-from agency_audit.audit.robots import fetch_robots_txt, DEFAULT_USER_AGENT
+from agency_audit.audit.property_count import _find_listing_page_url, count_properties
+from agency_audit.audit.robots import DEFAULT_USER_AGENT, fetch_robots_txt
 from agency_audit.audit.scoring import compute_score, load_scoring_config
 from agency_audit.audit.tech_stack import detect_tech_stack
 
@@ -49,9 +49,11 @@ def _check_ssl_valid(url: str) -> bool:
         return False
     try:
         ctx = ssl.create_default_context()
-        with socket.create_connection((host, port), timeout=10) as sock:
-            with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-                ssock.getpeercert()
+        with (
+            socket.create_connection((host, port), timeout=10) as sock,
+            ctx.wrap_socket(sock, server_hostname=host) as ssock,
+        ):
+            ssock.getpeercert()
         return True
     except Exception:
         return False
@@ -60,7 +62,7 @@ def _check_ssl_valid(url: str) -> bool:
 def _detect_language(html_text: str, headers: httpx.Headers) -> str | None:
     """Detect primary language of the page."""
     # Check Content-Language header
-    content_lang = headers.get("content-language", "")
+    content_lang: str = headers.get("content-language", "")
     if content_lang:
         return content_lang.split(",")[0].strip().lower()
 
@@ -106,6 +108,7 @@ async def audit_website(
             follow_redirects=True,
             headers={"User-Agent": DEFAULT_USER_AGENT},
         )
+    assert client is not None
 
     try:
         import time
@@ -224,7 +227,7 @@ async def audit_websites(
 
     # Convert exceptions to AuditData with error notes
     final = []
-    for url, result in zip(urls, results):
+    for url, result in zip(urls, results, strict=False):
         if isinstance(result, Exception):
             audit = AuditData(url=url, notes=f"Exception: {result}")
             final.append(audit)
