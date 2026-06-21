@@ -107,8 +107,8 @@ class PlacesAPIClient:
     Uses the Places API (New) endpoint:
       POST https://places.googleapis.com/v1/places:searchText
 
-    Requires an API key set via GOOGLE_MAPS_API_KEY env var or
-    AGENCY_AUDIT_GOOGLE_MAPS_API_KEY env var.
+    Requires an API key set via the AGENCY_AUDIT_GOOGLE_MAPS_API_KEY
+    env var.
     """
 
     BASE_URL = "https://places.googleapis.com/v1/places:searchText"
@@ -123,16 +123,11 @@ class PlacesAPIClient:
         """Load API key from environment."""
         import os
 
-        key = (
-            os.environ.get("AGENCY_AUDIT_GOOGLE_MAPS_API_KEY")
-            or os.environ.get("GOOGLE_MAPS_API_KEY")
-            or os.environ.get("GOOGLE_PLACES_API_KEY")
-            or ""
-        )
+        key = os.environ.get("AGENCY_AUDIT_GOOGLE_MAPS_API_KEY") or ""
         if not key:
             logger.warning(
                 "No Google Maps API key found. "
-                "Set GOOGLE_MAPS_API_KEY or AGENCY_AUDIT_GOOGLE_MAPS_API_KEY."
+                "Set AGENCY_AUDIT_GOOGLE_MAPS_API_KEY."
             )
         return key
 

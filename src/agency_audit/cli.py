@@ -420,9 +420,9 @@ def discover(
 ):
     """Discover real estate agencies via Google Maps Places API or browser.
 
-    Reads AGENCY_AUDIT_GOOGLE_MAPS_API_KEY (or GOOGLE_MAPS_API_KEY) from
-    the environment. If no API key is set, discovery falls back to
-    browser-based Google Maps scraping.
+    Reads AGENCY_AUDIT_GOOGLE_MAPS_API_KEY from the environment. If no
+    API key is set, discovery falls back to browser-based Google Maps
+    scraping.
 
     Each city's discovery_status is updated to 'done' when finished.
     Agencies are inserted into the websites table and linked via
