@@ -439,7 +439,11 @@ def discover(
             country_list = [country.upper()]
         else:
             country_list = None
-        summary = await run_discovery(countries=country_list, max_cities=max_cities)
+        try:
+            summary = await run_discovery(countries=country_list, max_cities=max_cities)
+        except RuntimeError as e:
+            console.print(f"[red]{e}[/]")
+            raise typer.Exit(1) from None
 
         table = Table(title="Discovery Pipeline Results")
         table.add_column("Country", style="cyan")

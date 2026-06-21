@@ -108,28 +108,22 @@ class PlacesAPIClient:
       POST https://places.googleapis.com/v1/places:searchText
 
     Requires an API key set via the AGENCY_AUDIT_GOOGLE_MAPS_API_KEY
-    env var.
+    env var (or .env file).
     """
 
     BASE_URL = "https://places.googleapis.com/v1/places:searchText"
 
     def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or self._load_api_key()
+        self.api_key = api_key if api_key is not None else self._load_api_key()
         self._client: httpx.AsyncClient | None = None
         self._request_count = 0
         self._last_request_time = 0.0
 
     def _load_api_key(self) -> str:
-        """Load API key from environment."""
-        import os
+        """Load API key from application settings (env var or .env)."""
+        from agency_audit.config import settings
 
-        key = os.environ.get("AGENCY_AUDIT_GOOGLE_MAPS_API_KEY") or ""
-        if not key:
-            logger.warning(
-                "No Google Maps API key found. "
-                "Set AGENCY_AUDIT_GOOGLE_MAPS_API_KEY."
-            )
-        return key
+        return str(settings.google_maps_api_key)
 
     @property
     def available(self) -> bool:
@@ -480,6 +474,12 @@ async def run_discovery(
 ) -> dict[str, Any]:
     """Run the discovery pipeline and return a summary."""
     pipeline = DiscoveryPipeline(batch_size=max_cities)
+    if not pipeline.places.available:
+        await pipeline.close()
+        raise RuntimeError(
+            "No Google Maps API key found. "
+            "Set AGENCY_AUDIT_GOOGLE_MAPS_API_KEY in your environment or .env file."
+        )
     try:
         summary = await pipeline.run_for_countries(
             country_codes=countries,
