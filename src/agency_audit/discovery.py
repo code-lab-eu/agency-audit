@@ -1,9 +1,8 @@
 """
 Google Maps Places discovery pipeline for agency-audit.
 
-Discovers real estate agencies per city using:
-1. Google Maps Places API (Text Search) — primary, requires API key
-2. Browser-based Google Maps scraping — fallback
+Discovers real estate agencies per city using the Google Maps Places API
+(Text Search), which requires an API key.
 
 Reports findings to the agency-audit MCP database.
 """
@@ -252,11 +251,9 @@ class DiscoveryPipeline:
     def __init__(
         self,
         places_client: PlacesAPIClient | None = None,
-        use_browser_fallback: bool = False,
         batch_size: int = 10,
     ):
         self.places = places_client or PlacesAPIClient()
-        self.use_browser_fallback = use_browser_fallback
         self.batch_size = batch_size
         self._pool = None
 

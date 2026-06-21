@@ -418,11 +418,10 @@ def discover(
         help="Max cities to process per country",
     ),
 ):
-    """Discover real estate agencies via Google Maps Places API or browser.
+    """Discover real estate agencies via the Google Maps Places API.
 
-    Reads AGENCY_AUDIT_GOOGLE_MAPS_API_KEY from the environment. If no
-    API key is set, discovery falls back to browser-based Google Maps
-    scraping.
+    Reads AGENCY_AUDIT_GOOGLE_MAPS_API_KEY from the environment (or .env).
+    An API key is required; discovery exits with an error if none is set.
 
     Each city's discovery_status is updated to 'done' when finished.
     Agencies are inserted into the websites table and linked via
