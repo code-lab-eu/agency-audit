@@ -31,8 +31,16 @@ async def db_conn():
 
     Uses a fresh connection (not the pool) so it works reliably across
     pytest-asyncio's per-function event loops.
+
+    These are integration tests that run against a live, seeded
+    PostgreSQL database. When no database is reachable (e.g. in CI
+    without a Postgres service), the whole module is skipped rather
+    than failing.
     """
-    conn = await asyncpg.connect(dsn=settings.dsn)
+    try:
+        conn = await asyncpg.connect(dsn=settings.dsn)
+    except OSError as exc:
+        pytest.skip(f"PostgreSQL not available for integration tests: {exc}")
     try:
         yield conn
     finally:
