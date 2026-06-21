@@ -7,15 +7,13 @@ Discovers real estate agencies per city using:
 
 Reports findings to the agency-audit MCP database.
 """
+
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import math
-import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -86,6 +84,7 @@ DEFAULT_RADIUS = 10000
 @dataclass
 class PlaceResult:
     """A discovered real estate agency from Google Maps."""
+
     place_id: str
     name: str
     formatted_address: str | None = None
@@ -123,11 +122,18 @@ class PlacesAPIClient:
     def _load_api_key(self) -> str:
         """Load API key from environment."""
         import os
-        key = os.environ.get("AGENCY_AUDIT_GOOGLE_MAPS_API_KEY") or \
-              os.environ.get("GOOGLE_MAPS_API_KEY") or \
-              os.environ.get("GOOGLE_PLACES_API_KEY") or ""
+
+        key = (
+            os.environ.get("AGENCY_AUDIT_GOOGLE_MAPS_API_KEY")
+            or os.environ.get("GOOGLE_MAPS_API_KEY")
+            or os.environ.get("GOOGLE_PLACES_API_KEY")
+            or ""
+        )
         if not key:
-            logger.warning("No Google Maps API key found. Set GOOGLE_MAPS_API_KEY or AGENCY_AUDIT_GOOGLE_MAPS_API_KEY.")
+            logger.warning(
+                "No Google Maps API key found. "
+                "Set GOOGLE_MAPS_API_KEY or AGENCY_AUDIT_GOOGLE_MAPS_API_KEY."
+            )
         return key
 
     @property
@@ -172,7 +178,10 @@ class PlacesAPIClient:
         next_page_token: str | None = None
 
         while len(results) < max_results:
-            body: dict[str, Any] = {"textQuery": query, "pageSize": min(20, max_results - len(results))}
+            body: dict[str, Any] = {
+                "textQuery": query,
+                "pageSize": min(20, max_results - len(results)),
+            }
             if location_bias:
                 body["locationBias"] = {
                     "circle": {
@@ -199,17 +208,19 @@ class PlacesAPIClient:
             places = data.get("places", [])
             for p in places:
                 loc = p.get("location", {})
-                results.append(PlaceResult(
-                    place_id=p.get("id", ""),
-                    name=p.get("displayName", {}).get("text", ""),
-                    formatted_address=p.get("formattedAddress"),
-                    phone=p.get("internationalPhoneNumber"),
-                    website=p.get("websiteUri"),
-                    latitude=loc.get("latitude"),
-                    longitude=loc.get("longitude"),
-                    rating=p.get("rating"),
-                    user_ratings_total=p.get("userRatingCount"),
-                ))
+                results.append(
+                    PlaceResult(
+                        place_id=p.get("id", ""),
+                        name=p.get("displayName", {}).get("text", ""),
+                        formatted_address=p.get("formattedAddress"),
+                        phone=p.get("internationalPhoneNumber"),
+                        website=p.get("websiteUri"),
+                        latitude=loc.get("latitude"),
+                        longitude=loc.get("longitude"),
+                        rating=p.get("rating"),
+                        user_ratings_total=p.get("userRatingCount"),
+                    )
+                )
 
             next_page_token = data.get("nextPageToken")
             if not next_page_token:
@@ -302,13 +313,14 @@ class DiscoveryPipeline:
                     break
 
                 for p in places:
-                    if p.place_id and p.place_id not in seen_place_ids:
-                        # Filter: must have a name and either website or place_id
-                        if p.name:
-                            found_places.append(p)
-                            seen_place_ids.add(p.place_id)
+                    # Filter: must have a name and a not-yet-seen place_id
+                    if p.place_id and p.place_id not in seen_place_ids and p.name:
+                        found_places.append(p)
+                        seen_place_ids.add(p.place_id)
 
-                logger.info(f"Query '{search_query}': found {len(places)} places, {len(found_places)} new")
+                logger.info(
+                    f"Query '{search_query}': found {len(places)} places, {len(found_places)} new"
+                )
 
             except Exception as e:
                 logger.error(f"Error searching '{search_query}': {e}")
@@ -325,10 +337,11 @@ class DiscoveryPipeline:
             url = place.website or f"https://maps.google.com/?cid={place.place_id}"
             async with pool.acquire() as conn:
                 # Insert or find website
-                existing = await conn.fetchrow("SELECT id FROM websites WHERE maps_place_id = $1", place.place_id)
+                existing = await conn.fetchrow(
+                    "SELECT id FROM websites WHERE maps_place_id = $1", place.place_id
+                )
                 if existing:
                     website_id = existing["id"]
-                    created = False
                 else:
                     website_id = await conn.fetchval(
                         """INSERT INTO websites (url, label, maps_place_id, address, phone)
@@ -341,7 +354,6 @@ class DiscoveryPipeline:
                         place.formatted_address,
                         place.phone,
                     )
-                    created = True
 
                 # Link website to city
                 await conn.execute(
@@ -375,7 +387,9 @@ class DiscoveryPipeline:
             await conn.execute(
                 """INSERT INTO discovery_log (city_id, agent, search_query, status)
                    VALUES ($1, $2, $3, 'searched')""",
-                city_id, "google_maps_places_api", ",".join(queries),
+                city_id,
+                "google_maps_places_api",
+                ",".join(queries),
             )
 
         logger.info(f"{city_label}: reported {reported} agencies")

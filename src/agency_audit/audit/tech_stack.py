@@ -216,9 +216,13 @@ async def detect_tech_stack(
             result.framework = _detect_framework_from_headers(headers)
         # Also capture the web server/header-level framework as hosting/tech
         header_framework = _detect_framework_from_headers(headers)
-        if header_framework and header_framework != result.framework:
-            if result.hosting is None and header_framework in {"Apache", "Nginx", "Microsoft IIS", "LiteSpeed"}:
-                result.hosting = header_framework
+        if (
+            header_framework
+            and header_framework != result.framework
+            and result.hosting is None
+            and header_framework in {"Apache", "Nginx", "Microsoft IIS", "LiteSpeed"}
+        ):
+            result.hosting = header_framework
 
         # Detect CDN
         result.cdn = _detect_cdn(headers)

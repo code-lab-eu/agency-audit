@@ -8,7 +8,7 @@ re-audit and queues them (sets audit_status back to 'pending').
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from agency_audit.db import get_pool
@@ -48,7 +48,7 @@ async def get_reaudit_queue(
         List of website dicts with id, url, score, last_audited_at, age_days.
     """
     pool = await get_pool()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=interval_days)
+    cutoff = datetime.now(UTC) - timedelta(days=interval_days)
 
     query = """SELECT w.id, w.url, w.label, w.score,
                       w.last_audited_at,
@@ -110,7 +110,7 @@ async def schedule_reaudits(
         Summary dict with count of queued websites and oldest age.
     """
     pool = await get_pool()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=interval_days)
+    cutoff = datetime.now(UTC) - timedelta(days=interval_days)
 
     async with pool.acquire() as conn:
         # Get the websites to re-audit

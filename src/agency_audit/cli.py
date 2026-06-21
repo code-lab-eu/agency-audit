@@ -148,17 +148,10 @@ def serve(
 @app.command("audit")
 def audit(
     website_id: int = typer.Option(
-        None, "--website-id", "-w",
-        help="Website ID to audit (uses full pipeline)"
+        None, "--website-id", "-w", help="Website ID to audit (uses full pipeline)"
     ),
-    url: str = typer.Option(
-        None, "--url", "-u",
-        help="URL to audit directly (uses full pipeline)"
-    ),
-    output: str = typer.Option(
-        "table", "--output", "-o",
-        help="Output format: table, json, db"
-    ),
+    url: str = typer.Option(None, "--url", "-u", help="URL to audit directly (uses full pipeline)"),
+    output: str = typer.Option("table", "--output", "-o", help="Output format: table, json, db"),
 ):
     """Run a full audit on a website using the complete audit pipeline.
 
@@ -210,7 +203,9 @@ def audit(
             table.add_column("Check", style="cyan")
             table.add_column("Result", style="green")
 
-            table.add_row("Robots.txt", "Allowed" if result.robots.allows_scraping else "Disallowed")
+            table.add_row(
+                "Robots.txt", "Allowed" if result.robots.allows_scraping else "Disallowed"
+            )
             if result.robots.crawl_delay:
                 table.add_row("Crawl Delay", f"{result.robots.crawl_delay}s")
             if result.robots.sitemap_urls:
@@ -222,9 +217,19 @@ def audit(
             if result.anti_scraping.recaptcha:
                 table.add_row("  reCAPTCHA", "Yes")
 
-            table.add_row("API", f"{result.api_detection.api_type or 'None'} ({result.api_detection.api_url or '-'})")
-            table.add_row("Property Count", f"{result.property_count.count:,} ({result.property_count.source}, conf={result.property_count.confidence:.1%})")
-            table.add_row("Structured Data", "Yes" if result.listing_quality.has_structured_data else "No")
+            table.add_row(
+                "API",
+                f"{result.api_detection.api_type or 'None'} "
+                f"({result.api_detection.api_url or '-'})",
+            )
+            table.add_row(
+                "Property Count",
+                f"{result.property_count.count:,} ({result.property_count.source}, "
+                f"conf={result.property_count.confidence:.1%})",
+            )
+            table.add_row(
+                "Structured Data", "Yes" if result.listing_quality.has_structured_data else "No"
+            )
             table.add_row("Has Prices", "Yes" if result.listing_quality.has_prices else "No")
             table.add_row("Has Locations", "Yes" if result.listing_quality.has_locations else "No")
             table.add_row("Has Images", "Yes" if result.listing_quality.has_images else "No")
@@ -232,8 +237,16 @@ def audit(
             table.add_row("Framework", result.tech_stack.framework or "Unknown")
             table.add_row("CDN", result.tech_stack.cdn or "None")
             table.add_row("Hosting", result.tech_stack.hosting or "Unknown")
-            table.add_row("Technologies", ", ".join(result.tech_stack.technologies) if result.tech_stack.technologies else "None")
-            table.add_row("Response Time", f"{result.response_time_ms}ms" if result.response_time_ms else "N/A")
+            table.add_row(
+                "Technologies",
+                ", ".join(result.tech_stack.technologies)
+                if result.tech_stack.technologies
+                else "None",
+            )
+            table.add_row(
+                "Response Time",
+                f"{result.response_time_ms}ms" if result.response_time_ms else "N/A",
+            )
             table.add_row("SSL", "Valid" if result.ssl_valid else "Invalid")
             table.add_row("Language", result.language or "Unknown")
 
@@ -323,8 +336,14 @@ def batch_audit(
             resp = f"{r.response_time_ms}ms" if r.response_time_ms else "-"
 
             table.add_row(
-                r.url, f"[{score_color}]{r.score}[/]",
-                robots, api, props, framework, ssl, resp,
+                r.url,
+                f"[{score_color}]{r.score}[/]",
+                robots,
+                api,
+                props,
+                framework,
+                ssl,
+                resp,
             )
 
         console.print(table)
@@ -333,7 +352,10 @@ def batch_audit(
         scores = [r.score for r in results]
         avg = sum(scores) / len(scores) if scores else 0
         positive = sum(1 for s in scores if s > 0)
-        console.print(f"\n[bold]Summary:[/] Avg score: {avg:.0f} | Positive: {positive}/{len(results)} | Range: {min(scores)}..{max(scores)}")
+        console.print(
+            f"\n[bold]Summary:[/] Avg score: {avg:.0f} | "
+            f"Positive: {positive}/{len(results)} | Range: {min(scores)}..{max(scores)}"
+        )
 
     asyncio.run(_run())
 
@@ -379,15 +401,20 @@ def stats():
 @app.command("discover")
 def discover(
     country: str | None = typer.Option(
-        None, "--country", "-c",
+        None,
+        "--country",
+        "-c",
         help="ISO country code (e.g., 'BG'). Default: all pending",
     ),
     countries: str | None = typer.Option(
-        None, "--countries",
+        None,
+        "--countries",
         help="Comma-separated ISO codes (e.g., 'BG,GB,DE'). Overrides --country.",
     ),
     max_cities: int = typer.Option(
-        3, "--max-cities", "-n",
+        3,
+        "--max-cities",
+        "-n",
         help="Max cities to process per country",
     ),
 ):
@@ -446,27 +473,17 @@ def run_cmd(
     max_cities: int | None = typer.Option(
         None, "--max-cities", "-n", help="Max cities to discover (default: all pending)"
     ),
-    concurrency: int = typer.Option(
-        3, "--concurrency", help="Max concurrent audits"
-    ),
+    concurrency: int = typer.Option(3, "--concurrency", help="Max concurrent audits"),
     reaudit: int = typer.Option(
         30, "--reaudit-days", help="Days until re-audit triggers (default: 30)"
     ),
     reaudit_limit: int = typer.Option(
         100, "--reaudit-limit", help="Max websites to queue for re-audit"
     ),
-    skip_discovery: bool = typer.Option(
-        False, "--skip-discovery", help="Skip the discovery phase"
-    ),
-    skip_audit: bool = typer.Option(
-        False, "--skip-audit", help="Skip the audit phase"
-    ),
-    skip_qc: bool = typer.Option(
-        False, "--skip-qc", help="Skip QC checks"
-    ),
-    skip_reaudit: bool = typer.Option(
-        False, "--skip-reaudit", help="Skip re-audit scheduling"
-    ),
+    skip_discovery: bool = typer.Option(False, "--skip-discovery", help="Skip the discovery phase"),
+    skip_audit: bool = typer.Option(False, "--skip-audit", help="Skip the audit phase"),
+    skip_qc: bool = typer.Option(False, "--skip-qc", help="Skip QC checks"),
+    skip_reaudit: bool = typer.Option(False, "--skip-reaudit", help="Skip re-audit scheduling"),
 ):
     """Execute full operational loop for one country: discover → audit → QC → re-audit."""
     from agency_audit.loop.orchestrator import run_country
@@ -498,7 +515,8 @@ def run_cmd(
             elif phase_name == "discovery":
                 table.add_row(
                     "Discovery",
-                    f"{phase.get('cities_processed', 0)} cities, {phase.get('agencies_found', 0)} agencies "
+                    f"{phase.get('cities_processed', 0)} cities, "
+                    f"{phase.get('agencies_found', 0)} agencies "
                     f"({phase.get('duration_seconds', 0)}s)",
                 )
             elif phase_name == "audit":
@@ -507,19 +525,20 @@ def run_cmd(
                 audits_fail = phase.get("audits_failed", 0)
                 table.add_row(
                     "Audit",
-                    f"{audits_ok} ✓ / {audits_fail} ✗ "
-                    f"({phase.get('duration_seconds', 0)}s)",
+                    f"{audits_ok} ✓ / {audits_fail} ✗ ({phase.get('duration_seconds', 0)}s)",
                 )
             elif phase_name == "qc":
                 table.add_row(
                     "QC",
-                    f"{phase.get('findings', 0)} findings (scores: {phase.get('suspicious_scores', 0)}, "
+                    f"{phase.get('findings', 0)} findings "
+                    f"(scores: {phase.get('suspicious_scores', 0)}, "
                     f"dupes: {phase.get('duplicate_domains', 0)})",
                 )
             elif phase_name == "reaudit":
                 table.add_row(
                     "Re-audit",
-                    f"{phase['queued']} websites queued (oldest: {phase.get('oldest_age_days', 'N/A')}d)",
+                    f"{phase['queued']} websites queued "
+                    f"(oldest: {phase.get('oldest_age_days', 'N/A')}d)",
                 )
 
         table.add_row(
@@ -543,9 +562,7 @@ def run_all_cmd(
     max_cities: int | None = typer.Option(
         None, "--max-cities", "-n", help="Max cities per country (default: all pending)"
     ),
-    concurrency: int = typer.Option(
-        3, "--concurrency", help="Max concurrent audits per country"
-    ),
+    concurrency: int = typer.Option(3, "--concurrency", help="Max concurrent audits per country"),
     reaudit: int = typer.Option(
         30, "--reaudit-days", help="Days until re-audit triggers (default: 30)"
     ),
@@ -623,18 +640,14 @@ def qc_cmd(
     website_id: int | None = typer.Option(
         None, "--website-id", "-w", help="Website ID (for mark-review)"
     ),
-    reason: str | None = typer.Option(
-        None, "--reason", "-r", help="Reason (for mark-review)"
-    ),
-    severity: str = typer.Option(
-        "warning", "--severity", "-s", help="Severity: warning or error"
-    ),
+    reason: str | None = typer.Option(None, "--reason", "-r", help="Reason (for mark-review)"),
+    severity: str = typer.Option("warning", "--severity", "-s", help="Severity: warning or error"),
 ):
     """Run quality control checks or manage flagged websites."""
     from agency_audit.loop.qc import (
-        run_qc_checks,
         get_websites_needing_review,
         mark_for_manual_review,
+        run_qc_checks,
     )
 
     async def _run():
@@ -677,15 +690,11 @@ def qc_cmd(
 
 @app.command("reaudit")
 def reaudit_cmd(
-    action: str = typer.Option(
-        "queue", "--action", "-a", help="Action: queue, trigger"
-    ),
+    action: str = typer.Option("queue", "--action", "-a", help="Action: queue, trigger"),
     interval: int = typer.Option(
         30, "--interval", "-i", help="Days until re-audit triggers (default: 30)"
     ),
-    limit: int = typer.Option(
-        100, "--limit", "-l", help="Max websites to queue (default: 100)"
-    ),
+    limit: int = typer.Option(100, "--limit", "-l", help="Max websites to queue (default: 100)"),
     country: str | None = typer.Option(
         None, "--country", "-c", help="Country ISO code to filter by"
     ),
@@ -729,7 +738,11 @@ def reaudit_cmd(
             )
             console.print(
                 f"[green]Re-audit triggered: {result['queued']} websites queued"
-                + (f" (oldest: {result['oldest_age_days']}d)" if result.get("oldest_age_days") else "")
+                + (
+                    f" (oldest: {result['oldest_age_days']}d)"
+                    if result.get("oldest_age_days")
+                    else ""
+                )
                 + "[/]"
             )
 
@@ -765,7 +778,9 @@ def progress_cmd():
         console.print(table)
 
         # Per-country table (top 15 by cities)
-        per_country = sorted(data["per_country"], key=lambda x: x["total_cities"], reverse=True)[:15]
+        per_country = sorted(data["per_country"], key=lambda x: x["total_cities"], reverse=True)[
+            :15
+        ]
         if per_country:
             ct = Table(title="Top Countries")
             ct.add_column("Country", style="cyan")

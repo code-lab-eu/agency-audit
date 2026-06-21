@@ -110,10 +110,10 @@ def _find_api_endpoints_in_html(html_text: str) -> list[str]:
 
     # Look for absolute API URLs
     api_url_patterns = [
-        r'https?://[^/]+/api/v\d+/',
-        r'https?://[^/]+/api/listings',
-        r'https?://[^/]+/api/properties',
-        r'https?://[^/]+/graphql',
+        r"https?://[^/]+/api/v\d+/",
+        r"https?://[^/]+/api/listings",
+        r"https?://[^/]+/api/properties",
+        r"https?://[^/]+/graphql",
     ]
     for pattern in api_url_patterns:
         matches = re.findall(pattern, html_text, re.IGNORECASE)

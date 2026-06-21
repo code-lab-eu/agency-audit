@@ -25,8 +25,8 @@ from agency_audit.audit.auditor import audit_website
 from agency_audit.db import get_pool
 from agency_audit.discovery import DiscoveryPipeline, PlacesAPIClient
 from agency_audit.loop.qc import run_qc_checks
-from agency_audit.loop.reaudit import get_reaudit_queue, schedule_reaudits
-from agency_audit.loop.retry import mark_failed, retry
+from agency_audit.loop.reaudit import schedule_reaudits
+from agency_audit.loop.retry import retry
 from agency_audit.loop.tracking import log_discovery_run, log_full_loop_run
 
 logger = logging.getLogger(__name__)
@@ -247,15 +247,13 @@ async def run_all_countries(
         if countries:
             iso_list = countries
         else:
-            rows = await conn.fetch(
-                "SELECT iso FROM countries WHERE active = true ORDER BY iso"
-            )
+            rows = await conn.fetch("SELECT iso FROM countries WHERE active = true ORDER BY iso")
             iso_list = [r["iso"] for r in rows]
 
     logger.info("Running full loop for %d countries: %s", len(iso_list), ", ".join(iso_list))
 
     all_results: dict[str, Any] = {}
-    totals = {
+    totals: dict[str, Any] = {
         "countries_processed": 0,
         "cities_processed": 0,
         "agencies_found": 0,
@@ -413,19 +411,21 @@ def _format_summary(result: dict[str, Any]) -> str:
     parts = []
     disc = result["phases"].get("discovery", {})
     if disc:
-        parts.append(f"discovery:{disc.get('cities_processed',0)}c/{disc.get('agencies_found',0)}a")
+        parts.append(
+            f"discovery:{disc.get('cities_processed', 0)}c/{disc.get('agencies_found', 0)}a"
+        )
 
     audit = result["phases"].get("audit", {})
     if audit:
-        parts.append(f"audit:{audit.get('succeeded',0)}✓/{audit.get('failed',0)}✗")
+        parts.append(f"audit:{audit.get('succeeded', 0)}✓/{audit.get('failed', 0)}✗")
 
     qc = result["phases"].get("qc", {})
     if qc:
-        parts.append(f"qc:{qc.get('findings',0)}")
+        parts.append(f"qc:{qc.get('findings', 0)}")
 
     reaudit = result["phases"].get("reaudit", {})
     if reaudit:
-        parts.append(f"reaudit:{reaudit.get('queued',0)}q")
+        parts.append(f"reaudit:{reaudit.get('queued', 0)}q")
 
     errors = result.get("errors", [])
     if errors:
