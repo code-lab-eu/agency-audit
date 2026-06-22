@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 @dataclass
 class RobotsResult:
     """Result of robots.txt fetch & parse."""
+
     fetched: bool = False
     allows_scraping: bool = True  # default allow if no robots.txt
     crawl_delay: float | None = None
@@ -19,6 +20,7 @@ class RobotsResult:
 @dataclass
 class AntiScrapingResult:
     """Result of anti-scraping detection."""
+
     detected: bool = False
     cloudflare: bool = False
     recaptcha: bool = False
@@ -30,6 +32,7 @@ class AntiScrapingResult:
 @dataclass
 class ApiDetectionResult:
     """Result of API endpoint detection."""
+
     detected: bool = False
     api_type: str | None = None  # "graphql", "rest", "json-ld"
     api_url: str | None = None
@@ -39,6 +42,7 @@ class ApiDetectionResult:
 @dataclass
 class PropertyCountResult:
     """Result of property count estimation."""
+
     count: int = 0
     source: str = "unknown"  # "listing_page", "sitemap", "api", "json-ld"
     confidence: float = 0.0
@@ -47,6 +51,7 @@ class PropertyCountResult:
 @dataclass
 class ListingQualityResult:
     """Result of listing quality checks."""
+
     has_structured_data: bool = False
     has_images: bool = False
     has_descriptions: bool = False
@@ -59,6 +64,7 @@ class ListingQualityResult:
 @dataclass
 class TechStackResult:
     """Result of technology stack detection."""
+
     framework: str | None = None
     hosting: str | None = None
     cdn: str | None = None
@@ -68,6 +74,7 @@ class TechStackResult:
 @dataclass
 class AuditData:
     """Complete audit result combining all checks."""
+
     url: str = ""
     robots: RobotsResult = field(default_factory=RobotsResult)
     anti_scraping: AntiScrapingResult = field(default_factory=AntiScrapingResult)
@@ -85,6 +92,7 @@ class AuditData:
     def to_dict(self) -> dict:
         """Serialize to dict for JSONB storage."""
         return {
+            "url": self.url,
             "robots_txt_allows": self.robots.allows_scraping,
             "robots_txt_fetched": self.robots.fetched,
             "robots_crawl_delay": self.robots.crawl_delay,

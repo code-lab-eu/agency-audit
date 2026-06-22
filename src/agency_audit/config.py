@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     geonames_min_population: int = 50000
     geonames_url: str = "https://download.geonames.org/export/dump/cities15000.zip"
 
+    # Google Maps Places API key, used by the discovery pipeline
+    google_maps_api_key: str = ""
+
     @property
     def dsn(self) -> str:
         """Asyncpg connection DSN."""

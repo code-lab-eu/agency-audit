@@ -1,21 +1,18 @@
 """
 Google Maps Places discovery pipeline for agency-audit.
 
-Discovers real estate agencies per city using:
-1. Google Maps Places API (Text Search) — primary, requires API key
-2. Browser-based Google Maps scraping — fallback
+Discovers real estate agencies per city using the Google Maps Places API
+(Text Search), which requires an API key.
 
 Reports findings to the agency-audit MCP database.
 """
+
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import math
-import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -86,6 +83,7 @@ DEFAULT_RADIUS = 10000
 @dataclass
 class PlaceResult:
     """A discovered real estate agency from Google Maps."""
+
     place_id: str
     name: str
     formatted_address: str | None = None
@@ -108,27 +106,23 @@ class PlacesAPIClient:
     Uses the Places API (New) endpoint:
       POST https://places.googleapis.com/v1/places:searchText
 
-    Requires an API key set via GOOGLE_MAPS_API_KEY env var or
-    AGENCY_AUDIT_GOOGLE_MAPS_API_KEY env var.
+    Requires an API key set via the AGENCY_AUDIT_GOOGLE_MAPS_API_KEY
+    env var (or .env file).
     """
 
     BASE_URL = "https://places.googleapis.com/v1/places:searchText"
 
     def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or self._load_api_key()
+        self.api_key = api_key if api_key is not None else self._load_api_key()
         self._client: httpx.AsyncClient | None = None
         self._request_count = 0
         self._last_request_time = 0.0
 
     def _load_api_key(self) -> str:
-        """Load API key from environment."""
-        import os
-        key = os.environ.get("AGENCY_AUDIT_GOOGLE_MAPS_API_KEY") or \
-              os.environ.get("GOOGLE_MAPS_API_KEY") or \
-              os.environ.get("GOOGLE_PLACES_API_KEY") or ""
-        if not key:
-            logger.warning("No Google Maps API key found. Set GOOGLE_MAPS_API_KEY or AGENCY_AUDIT_GOOGLE_MAPS_API_KEY.")
-        return key
+        """Load API key from application settings (env var or .env)."""
+        from agency_audit.config import settings
+
+        return str(settings.google_maps_api_key)
 
     @property
     def available(self) -> bool:
@@ -172,11 +166,17 @@ class PlacesAPIClient:
         next_page_token: str | None = None
 
         while len(results) < max_results:
-            body: dict[str, Any] = {"textQuery": query, "pageSize": min(20, max_results - len(results))}
+            body: dict[str, Any] = {
+                "textQuery": query,
+                "pageSize": min(20, max_results - len(results)),
+            }
             if location_bias:
                 body["locationBias"] = {
                     "circle": {
-                        "center": {"latitude": location_bias[0], "longitude": location_bias[1]},
+                        "center": {
+                            "latitude": float(location_bias[0]),
+                            "longitude": float(location_bias[1]),
+                        },
                         "radius": radius,
                     }
                 }
@@ -199,17 +199,19 @@ class PlacesAPIClient:
             places = data.get("places", [])
             for p in places:
                 loc = p.get("location", {})
-                results.append(PlaceResult(
-                    place_id=p.get("id", ""),
-                    name=p.get("displayName", {}).get("text", ""),
-                    formatted_address=p.get("formattedAddress"),
-                    phone=p.get("internationalPhoneNumber"),
-                    website=p.get("websiteUri"),
-                    latitude=loc.get("latitude"),
-                    longitude=loc.get("longitude"),
-                    rating=p.get("rating"),
-                    user_ratings_total=p.get("userRatingCount"),
-                ))
+                results.append(
+                    PlaceResult(
+                        place_id=p.get("id", ""),
+                        name=p.get("displayName", {}).get("text", ""),
+                        formatted_address=p.get("formattedAddress"),
+                        phone=p.get("internationalPhoneNumber"),
+                        website=p.get("websiteUri"),
+                        latitude=loc.get("latitude"),
+                        longitude=loc.get("longitude"),
+                        rating=p.get("rating"),
+                        user_ratings_total=p.get("userRatingCount"),
+                    )
+                )
 
             next_page_token = data.get("nextPageToken")
             if not next_page_token:
@@ -249,11 +251,9 @@ class DiscoveryPipeline:
     def __init__(
         self,
         places_client: PlacesAPIClient | None = None,
-        use_browser_fallback: bool = False,
         batch_size: int = 10,
     ):
         self.places = places_client or PlacesAPIClient()
-        self.use_browser_fallback = use_browser_fallback
         self.batch_size = batch_size
         self._pool = None
 
@@ -302,13 +302,14 @@ class DiscoveryPipeline:
                     break
 
                 for p in places:
-                    if p.place_id and p.place_id not in seen_place_ids:
-                        # Filter: must have a name and either website or place_id
-                        if p.name:
-                            found_places.append(p)
-                            seen_place_ids.add(p.place_id)
+                    # Filter: must have a name and a not-yet-seen place_id
+                    if p.place_id and p.place_id not in seen_place_ids and p.name:
+                        found_places.append(p)
+                        seen_place_ids.add(p.place_id)
 
-                logger.info(f"Query '{search_query}': found {len(places)} places, {len(found_places)} new")
+                logger.info(
+                    f"Query '{search_query}': found {len(places)} places, {len(found_places)} new"
+                )
 
             except Exception as e:
                 logger.error(f"Error searching '{search_query}': {e}")
@@ -325,10 +326,11 @@ class DiscoveryPipeline:
             url = place.website or f"https://maps.google.com/?cid={place.place_id}"
             async with pool.acquire() as conn:
                 # Insert or find website
-                existing = await conn.fetchrow("SELECT id FROM websites WHERE maps_place_id = $1", place.place_id)
+                existing = await conn.fetchrow(
+                    "SELECT id FROM websites WHERE maps_place_id = $1", place.place_id
+                )
                 if existing:
                     website_id = existing["id"]
-                    created = False
                 else:
                     website_id = await conn.fetchval(
                         """INSERT INTO websites (url, label, maps_place_id, address, phone)
@@ -341,7 +343,6 @@ class DiscoveryPipeline:
                         place.formatted_address,
                         place.phone,
                     )
-                    created = True
 
                 # Link website to city
                 await conn.execute(
@@ -375,7 +376,9 @@ class DiscoveryPipeline:
             await conn.execute(
                 """INSERT INTO discovery_log (city_id, agent, search_query, status)
                    VALUES ($1, $2, $3, 'searched')""",
-                city_id, "google_maps_places_api", ",".join(queries),
+                city_id,
+                "google_maps_places_api",
+                ",".join(queries),
             )
 
         logger.info(f"{city_label}: reported {reported} agencies")
@@ -471,6 +474,12 @@ async def run_discovery(
 ) -> dict[str, Any]:
     """Run the discovery pipeline and return a summary."""
     pipeline = DiscoveryPipeline(batch_size=max_cities)
+    if not pipeline.places.available:
+        await pipeline.close()
+        raise RuntimeError(
+            "No Google Maps API key found. "
+            "Set AGENCY_AUDIT_GOOGLE_MAPS_API_KEY in your environment or .env file."
+        )
     try:
         summary = await pipeline.run_for_countries(
             country_codes=countries,

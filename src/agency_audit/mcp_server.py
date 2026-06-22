@@ -46,7 +46,7 @@ async def _fetchone(pool: asyncpg.Pool, query: str, *args: Any) -> asyncpg.Recor
 
 async def _execute(pool: asyncpg.Pool, query: str, *args: Any) -> str:
     async with pool.acquire() as conn:
-        return await conn.execute(query, *args)
+        return str(await conn.execute(query, *args))
 
 
 # ---------------------------------------------------------------------------
@@ -135,13 +135,9 @@ async def report_website(
     async with pool.acquire() as conn:
         city_row = None
         if city.isdigit():
-            city_row = await conn.fetchrow(
-                "SELECT id FROM cities WHERE id = $1", int(city)
-            )
+            city_row = await conn.fetchrow("SELECT id FROM cities WHERE id = $1", int(city))
         else:
-            city_row = await conn.fetchrow(
-                "SELECT id FROM cities WHERE slug = $1", city
-            )
+            city_row = await conn.fetchrow("SELECT id FROM cities WHERE slug = $1", city)
         if city_row is None:
             return {"error": f"city not found: {city}"}
         city_id = city_row["id"]

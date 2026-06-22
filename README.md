@@ -45,6 +45,38 @@ src/agency_audit/
   tests/          # Test suite
 ```
 
+## Quality Assurance
+
+Install the dev dependencies (ruff, pytest) into the project environment first:
+
+```bash
+uv sync --extra dev
+```
+
+The CI `quality` job runs the following checks. Run them locally before pushing —
+they must all pass for the build to go green:
+
+```bash
+# Lint
+uv run ruff check src/ tests/
+
+# Format check (use `ruff format` without --check to auto-apply)
+uv run ruff format --check src/ tests/
+
+# Type check
+uv run mypy src/
+
+# Tests
+uv run pytest
+```
+
+To auto-fix most lint and all formatting issues:
+
+```bash
+uv run ruff check --fix src/ tests/
+uv run ruff format src/ tests/
+```
+
 ## Database Schema
 
 - **countries** — 44 European countries (ISO codes, names, active flag)

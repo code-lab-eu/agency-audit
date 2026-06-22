@@ -120,7 +120,7 @@ def _check_structured_data(html_text: str) -> bool:
 
     # Check microdata
     for scope in tree.css("[itemtype]"):
-        item_type = scope.attributes.get("itemtype", "")
+        item_type = scope.attributes.get("itemtype", "") or ""
         for schema_type in REALESTATE_SCHEMA_TYPES:
             if schema_type.lower() in item_type.lower():
                 return True
@@ -130,10 +130,7 @@ def _check_structured_data(html_text: str) -> bool:
 
 def _has_elements(tree, selectors: list[str]) -> bool:
     """Check if any of the CSS selectors match at least one element."""
-    for selector in selectors:
-        if tree.css_first(selector):
-            return True
-    return False
+    return any(tree.css_first(selector) for selector in selectors)
 
 
 def _count_elements(tree, selectors: list[str]) -> int:
@@ -171,7 +168,13 @@ def _check_map(html_text: str) -> bool:
                     if any(excl in mc for excl in EXCLUDE_MAP_PATTERNS):
                         continue
                     # A dedicated map class like "map", "map-container", "property-map"
-                    if mc in ("map", "map-container", "property-map", "listing-map", "leaflet-container"):
+                    if mc in (
+                        "map",
+                        "map-container",
+                        "property-map",
+                        "listing-map",
+                        "leaflet-container",
+                    ):
                         return True
                     # Or contains map but not sitemap
                     if "map" in mc and "site" not in mc and "image" not in mc:
@@ -248,9 +251,7 @@ async def assess_listing_quality(
                     if not result.has_images:
                         result.has_images = _has_elements(listing_tree, IMAGE_SELECTORS)
                     if not result.has_descriptions:
-                        result.has_descriptions = _has_elements(
-                            listing_tree, DESCRIPTION_SELECTORS
-                        )
+                        result.has_descriptions = _has_elements(listing_tree, DESCRIPTION_SELECTORS)
                     if not result.has_property_map:
                         result.has_property_map = _check_map(listing_resp.text)
             except Exception:

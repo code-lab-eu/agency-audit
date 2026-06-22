@@ -4,11 +4,9 @@ Tests cover: QC checks, re-audit scheduling, retry logic, progress tracking,
 and orchestrator integration.
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Retry tests
@@ -92,6 +90,7 @@ class TestRetry:
             return "ok"
 
         import time
+
         start = time.monotonic()
         result = await retry(fails_twice, max_attempts=3, base_delay=0.05, backoff_factor=2.0)
         elapsed = time.monotonic() - start
@@ -286,7 +285,7 @@ class TestOrchestrator:
 
     def test_run_country_importable(self):
         """run_country should be importable."""
-        from agency_audit.loop.orchestrator import run_country, run_all_countries
+        from agency_audit.loop.orchestrator import run_all_countries, run_country
 
         assert callable(run_country)
         assert callable(run_all_countries)
@@ -380,6 +379,14 @@ class TestCLICommands:
         from agency_audit.cli import app
 
         commands = [c.name for c in app.registered_commands]
-        for cmd in ["db-init", "seed-countries", "import-cities", "serve",
-                     "audit", "batch-audit", "stats", "discover"]:
+        for cmd in [
+            "db-init",
+            "seed-countries",
+            "import-cities",
+            "serve",
+            "audit",
+            "batch-audit",
+            "stats",
+            "discover",
+        ]:
             assert cmd in commands, f"{cmd} should be registered"

@@ -82,7 +82,8 @@ async def _overview_stats(pool: asyncpg.Pool) -> dict[str, Any]:
             "SELECT COUNT(*) FROM websites WHERE audit_status = 'pending'"
         )
         avg_score = await conn.fetchval(
-            "SELECT COALESCE(AVG(score), 0)::numeric(10,2) FROM websites WHERE audit_status = 'audited'"
+            "SELECT COALESCE(AVG(score), 0)::numeric(10,2) "
+            "FROM websites WHERE audit_status = 'audited'"
         )
         # Score distribution buckets
         dist = await conn.fetch(
@@ -406,9 +407,7 @@ async def htmx_rediscover_city(request: Request, city_id: int):
     """Reset a city's discovery_status to 'pending' for re-discovery."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE cities SET discovery_status = 'pending' WHERE id = $1", city_id
-        )
+        await conn.execute("UPDATE cities SET discovery_status = 'pending' WHERE id = $1", city_id)
     data = await _discovery_queue(pool)
     return templates.TemplateResponse(
         request,

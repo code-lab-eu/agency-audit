@@ -31,8 +31,16 @@ async def db_conn():
 
     Uses a fresh connection (not the pool) so it works reliably across
     pytest-asyncio's per-function event loops.
+
+    These are integration tests that run against a live, seeded
+    PostgreSQL database. When no database is reachable (e.g. in CI
+    without a Postgres service), the whole module is skipped rather
+    than failing.
     """
-    conn = await asyncpg.connect(dsn=settings.dsn)
+    try:
+        conn = await asyncpg.connect(dsn=settings.dsn)
+    except OSError as exc:
+        pytest.skip(f"PostgreSQL not available for integration tests: {exc}")
     try:
         yield conn
     finally:
@@ -78,9 +86,7 @@ async def test_get_next_city_returns_pending_city():
 async def test_get_next_city_marks_in_progress(db_conn):
     result = await get_next_city()
     city_id = result["id"]
-    status = await db_conn.fetchval(
-        "SELECT discovery_status FROM cities WHERE id = $1", city_id
-    )
+    status = await db_conn.fetchval("SELECT discovery_status FROM cities WHERE id = $1", city_id)
     assert status == "in_progress"
 
 
@@ -201,9 +207,7 @@ async def test_get_unaudited_website_returns_pending(db_conn):
     assert result["url"] == "https://test-unaudited.example.com"
 
     # Verify it was marked as auditing
-    status = await db_conn.fetchval(
-        "SELECT audit_status FROM websites WHERE id = $1", result["id"]
-    )
+    status = await db_conn.fetchval("SELECT audit_status FROM websites WHERE id = $1", result["id"])
     assert status == "auditing"
 
 
@@ -297,9 +301,7 @@ async def test_submit_audit_negative_score(db_conn):
     )
     assert result["status"] == "audited"
 
-    score = await db_conn.fetchval(
-        "SELECT score FROM websites WHERE id = $1", ws["website_id"]
-    )
+    score = await db_conn.fetchval("SELECT score FROM websites WHERE id = $1", ws["website_id"])
     assert score == -50
 
 
