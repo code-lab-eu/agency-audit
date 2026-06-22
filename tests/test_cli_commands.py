@@ -38,8 +38,10 @@ def test_stats_command_executes():
     mock_get_pool = AsyncMock(return_value=mock_pool)
     mock_close_pool = AsyncMock()
 
-    with patch("agency_audit.cli.get_pool", new=mock_get_pool), \
-         patch("agency_audit.cli.close_pool", new=mock_close_pool):
+    with (
+        patch("agency_audit.cli.get_pool", new=mock_get_pool),
+        patch("agency_audit.cli.close_pool", new=mock_close_pool),
+    ):
         result = runner.invoke(app, ["stats"])
         assert result.exit_code == 0
 
@@ -58,11 +60,18 @@ def test_run_command_executes():
             "errors": [],
             "duration_seconds": 0.01,
         }
-        result = runner.invoke(app, [
-            "run", "--country", "BG",
-            "--skip-discovery", "--skip-audit",
-            "--skip-qc", "--skip-reaudit",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--country",
+                "BG",
+                "--skip-discovery",
+                "--skip-audit",
+                "--skip-qc",
+                "--skip-reaudit",
+            ],
+        )
         assert result.exit_code == 0
 
 
@@ -138,11 +147,18 @@ def test_qc_list_review_action():
 def test_qc_mark_review_action():
     """qc --action mark-review invokes mark_for_manual_review."""
     with patch("agency_audit.loop.qc.mark_for_manual_review"):
-        result = runner.invoke(app, [
-            "qc", "--action", "mark-review",
-            "--website-id", "42",
-            "--reason", "suspicious",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "qc",
+                "--action",
+                "mark-review",
+                "--website-id",
+                "42",
+                "--reason",
+                "suspicious",
+            ],
+        )
         assert result.exit_code == 0
 
 
@@ -170,9 +186,7 @@ def test_reaudit_trigger_with_country():
     """reaudit --action trigger filters by country."""
     with patch("agency_audit.loop.reaudit.schedule_reaudits") as mock_sched:
         mock_sched.return_value = {"queued": 3, "oldest_age_days": 30}
-        result = runner.invoke(app, [
-            "reaudit", "--action", "trigger", "--country", "BG"
-        ])
+        result = runner.invoke(app, ["reaudit", "--action", "trigger", "--country", "BG"])
         assert result.exit_code == 0
 
 

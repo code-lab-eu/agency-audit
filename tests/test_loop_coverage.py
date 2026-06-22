@@ -65,9 +65,10 @@ class TestQCRunChecks:
         from agency_audit.loop.qc import run_qc_checks
 
         # Mock both flag_suspicious_scores and detect_duplicates
-        with patch("agency_audit.loop.qc.flag_suspicious_scores") as mock_flag, \
-             patch("agency_audit.loop.qc.detect_duplicates") as mock_dup:
-
+        with (
+            patch("agency_audit.loop.qc.flag_suspicious_scores") as mock_flag,
+            patch("agency_audit.loop.qc.detect_duplicates") as mock_dup,
+        ):
             mock_flag.return_value = []
             mock_dup.return_value = []
 
@@ -80,9 +81,10 @@ class TestQCRunChecks:
     async def test_run_qc_checks_with_findings(self):
         from agency_audit.loop.qc import QCFinding, run_qc_checks
 
-        with patch("agency_audit.loop.qc.flag_suspicious_scores") as mock_flag, \
-             patch("agency_audit.loop.qc.detect_duplicates") as mock_dup:
-
+        with (
+            patch("agency_audit.loop.qc.flag_suspicious_scores") as mock_flag,
+            patch("agency_audit.loop.qc.detect_duplicates") as mock_dup,
+        ):
             mock_flag.return_value = [
                 QCFinding(1, "https://a.com", "score 0"),
                 QCFinding(2, "https://b.com", "score 100"),
@@ -365,9 +367,7 @@ class TestTrackingLogFunctions:
             mock_pool.acquire.return_value = mock_ctx
             mock_conn.fetchval = AsyncMock(return_value=5)
 
-            log_id = await log_full_loop_run(
-                "BG", 10, 25, 20, 18, 2, 3, 5, 30.5
-            )
+            log_id = await log_full_loop_run("BG", 10, 25, 20, 18, 2, 3, 5, 30.5)
             assert log_id == 5
 
 

@@ -24,8 +24,10 @@ class TestOrchestratorSkipPaths:
         """run_country with all skip flags should still log and return."""
         from agency_audit.loop.orchestrator import run_country
 
-        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool, \
-             patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log:
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
+        ):
             mock_pool = MagicMock()
             mock_get_pool.return_value = mock_pool
             mock_log.return_value = 1
@@ -46,8 +48,10 @@ class TestOrchestratorSkipPaths:
         """When log_full_loop_run fails, it should be caught and not crash."""
         from agency_audit.loop.orchestrator import run_country
 
-        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool, \
-             patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log:
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
+        ):
             mock_pool = MagicMock()
             mock_get_pool.return_value = mock_pool
             mock_log.side_effect = RuntimeError("db error")
@@ -72,8 +76,10 @@ class TestOrchestratorSkipPaths:
         mock_pool = MagicMock()
         mock_pool.acquire.return_value = mock_ctx
 
-        with patch("agency_audit.loop.orchestrator.get_pool", return_value=mock_pool), \
-             patch("agency_audit.loop.orchestrator.run_country") as mock_run:
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool", return_value=mock_pool),
+            patch("agency_audit.loop.orchestrator.run_country") as mock_run,
+        ):
             mock_run.return_value = {
                 "country": "BG",
                 "phases": {},
@@ -104,8 +110,10 @@ class TestOrchestratorSkipPaths:
         mock_pool = MagicMock()
         mock_pool.acquire.return_value = mock_ctx
 
-        with patch("agency_audit.loop.orchestrator.get_pool", return_value=mock_pool), \
-             patch("agency_audit.loop.orchestrator.run_country") as mock_run:
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool", return_value=mock_pool),
+            patch("agency_audit.loop.orchestrator.run_country") as mock_run,
+        ):
             mock_run.side_effect = RuntimeError("boom")
 
             result = await run_all_countries(countries=["BG"])
@@ -332,33 +340,48 @@ class TestCLICommands:
 
     def test_run_command_with_country(self):
         """run command with --country invokes run_country."""
-        with patch("agency_audit.loop.orchestrator.run_country") as mock_run, \
-             patch("agency_audit.cli.asyncio"):
+        with (
+            patch("agency_audit.loop.orchestrator.run_country") as mock_run,
+            patch("agency_audit.cli.asyncio"),
+        ):
             mock_run.return_value = {
                 "country": "BG",
                 "phases": {},
                 "errors": [],
                 "duration_seconds": 0.01,
             }
-            result = runner.invoke(app, ["run", "--country", "BG",
-                                         "--skip-discovery", "--skip-audit",
-                                         "--skip-qc", "--skip-reaudit"])
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "--country",
+                    "BG",
+                    "--skip-discovery",
+                    "--skip-audit",
+                    "--skip-qc",
+                    "--skip-reaudit",
+                ],
+            )
             # asyncio.run is mocked, so it won't actually execute
             # But the command argument parsing still runs
             assert result.exit_code == 0
 
     def test_run_all_command(self):
         """run-all command invokes run_all_countries."""
-        with patch("agency_audit.loop.orchestrator.run_all_countries") as mock_run, \
-             patch("agency_audit.cli.asyncio"):
+        with (
+            patch("agency_audit.loop.orchestrator.run_all_countries") as mock_run,
+            patch("agency_audit.cli.asyncio"),
+        ):
             mock_run.return_value = {"results": {}, "totals": {}}
             result = runner.invoke(app, ["run-all"])
             assert result.exit_code == 0
 
     def test_qc_command(self):
         """qc command invokes run_qc_checks."""
-        with patch("agency_audit.loop.qc.run_qc_checks") as mock_qc, \
-             patch("agency_audit.cli.asyncio"):
+        with (
+            patch("agency_audit.loop.qc.run_qc_checks") as mock_qc,
+            patch("agency_audit.cli.asyncio"),
+        ):
             mock_qc.return_value = {
                 "suspicious_scores": 1,
                 "duplicate_domains": 0,
@@ -369,9 +392,11 @@ class TestCLICommands:
 
     def test_reaudit_command(self):
         """reaudit command invokes schedule_reaudits and get_reaudit_queue."""
-        with patch("agency_audit.loop.reaudit.schedule_reaudits") as mock_sched, \
-             patch("agency_audit.loop.reaudit.get_reaudit_queue") as mock_queue, \
-             patch("agency_audit.cli.asyncio"):
+        with (
+            patch("agency_audit.loop.reaudit.schedule_reaudits") as mock_sched,
+            patch("agency_audit.loop.reaudit.get_reaudit_queue") as mock_queue,
+            patch("agency_audit.cli.asyncio"),
+        ):
             mock_sched.return_value = {"queued": 5, "oldest_age_days": 45}
             mock_queue.return_value = []
             result = runner.invoke(app, ["reaudit"])
@@ -379,16 +404,20 @@ class TestCLICommands:
 
     def test_reaudit_dry_run(self):
         """reaudit --action queue only queries, does not schedule."""
-        with patch("agency_audit.loop.reaudit.get_reaudit_queue") as mock_queue, \
-             patch("agency_audit.cli.asyncio"):
+        with (
+            patch("agency_audit.loop.reaudit.get_reaudit_queue") as mock_queue,
+            patch("agency_audit.cli.asyncio"),
+        ):
             mock_queue.return_value = []
             result = runner.invoke(app, ["reaudit", "--action", "queue"])
             assert result.exit_code == 0
 
     def test_progress_command(self):
         """progress command invokes get_progress."""
-        with patch("agency_audit.loop.tracking.get_progress") as mock_prog, \
-             patch("agency_audit.cli.asyncio"):
+        with (
+            patch("agency_audit.loop.tracking.get_progress") as mock_prog,
+            patch("agency_audit.cli.asyncio"),
+        ):
             mock_prog.return_value = {
                 "overview": {
                     "countries": 44,

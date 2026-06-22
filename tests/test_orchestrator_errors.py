@@ -13,10 +13,11 @@ class TestOrchestratorErrorPaths:
         """Error in discovery phase should be caught and recorded."""
         from agency_audit.loop.orchestrator import run_country
 
-        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool, \
-             patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log, \
-             patch("agency_audit.loop.orchestrator.DiscoveryPipeline") as mock_dp_cls:
-
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
+            patch("agency_audit.loop.orchestrator.DiscoveryPipeline") as mock_dp_cls,
+        ):
             mock_pool = MagicMock()
             mock_get_pool.return_value = mock_pool
             mock_log.return_value = 1
@@ -45,10 +46,11 @@ class TestOrchestratorErrorPaths:
         """Error in audit phase should be caught and recorded."""
         from agency_audit.loop.orchestrator import run_country
 
-        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool, \
-             patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log, \
-             patch("agency_audit.loop.orchestrator._audit_country_websites") as mock_audit:
-
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
+            patch("agency_audit.loop.orchestrator._audit_country_websites") as mock_audit,
+        ):
             mock_pool = MagicMock()
             mock_get_pool.return_value = mock_pool
             mock_log.return_value = 1
@@ -70,10 +72,11 @@ class TestOrchestratorErrorPaths:
         """Error in QC phase should be caught and recorded."""
         from agency_audit.loop.orchestrator import run_country
 
-        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool, \
-             patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log, \
-             patch("agency_audit.loop.orchestrator.run_qc_checks") as mock_qc:
-
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
+            patch("agency_audit.loop.orchestrator.run_qc_checks") as mock_qc,
+        ):
             mock_pool = MagicMock()
             mock_get_pool.return_value = mock_pool
             mock_log.return_value = 1
@@ -95,10 +98,11 @@ class TestOrchestratorErrorPaths:
         """Error in reaudit phase should be caught and recorded."""
         from agency_audit.loop.orchestrator import run_country
 
-        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool, \
-             patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log, \
-             patch("agency_audit.loop.orchestrator.schedule_reaudits") as mock_reaudit:
-
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
+            patch("agency_audit.loop.orchestrator.schedule_reaudits") as mock_reaudit,
+        ):
             mock_pool = MagicMock()
             mock_get_pool.return_value = mock_pool
             mock_log.return_value = 1
@@ -158,12 +162,12 @@ class TestOrchestratorHappyPaths:
         mock_ctx.__aenter__.return_value = mock_conn
         mock_pool = MagicMock()
         mock_pool.acquire.return_value = mock_ctx
-        mock_conn.fetch = AsyncMock(return_value=[
-            {"iso": "BG"}, {"iso": "GB"}
-        ])
+        mock_conn.fetch = AsyncMock(return_value=[{"iso": "BG"}, {"iso": "GB"}])
 
-        with patch("agency_audit.loop.orchestrator.get_pool", return_value=mock_pool), \
-             patch("agency_audit.loop.orchestrator.run_country") as mock_run:
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool", return_value=mock_pool),
+            patch("agency_audit.loop.orchestrator.run_country") as mock_run,
+        ):
             mock_run.return_value = {
                 "country": "BG",
                 "phases": {},
@@ -180,18 +184,21 @@ class TestOrchestratorHappyPaths:
         """Discovery success should log discovery run."""
         from agency_audit.loop.orchestrator import run_country
 
-        with patch("agency_audit.loop.orchestrator.get_pool"), \
-             patch("agency_audit.loop.orchestrator.DiscoveryPipeline") as mock_dp_cls, \
-             patch("agency_audit.loop.orchestrator.log_discovery_run") as mock_log, \
-             patch("agency_audit.loop.orchestrator.log_full_loop_run"):
-
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool"),
+            patch("agency_audit.loop.orchestrator.DiscoveryPipeline") as mock_dp_cls,
+            patch("agency_audit.loop.orchestrator.log_discovery_run") as mock_log,
+            patch("agency_audit.loop.orchestrator.log_full_loop_run"),
+        ):
             mock_dp = MagicMock()
-            mock_dp.run_for_countries = AsyncMock(return_value={
-                "cities_processed": 5,
-                "agencies_found": 12,
-                "countries_processed": 1,
-                "results": {},
-            })
+            mock_dp.run_for_countries = AsyncMock(
+                return_value={
+                    "cities_processed": 5,
+                    "agencies_found": 12,
+                    "countries_processed": 1,
+                    "results": {},
+                }
+            )
             mock_dp.close = AsyncMock()
             mock_dp_cls.return_value = mock_dp
 
@@ -212,10 +219,11 @@ class TestOrchestratorHappyPaths:
         """Audit success should not log an error."""
         from agency_audit.loop.orchestrator import run_country
 
-        with patch("agency_audit.loop.orchestrator.get_pool"), \
-             patch("agency_audit.loop.orchestrator._audit_country_websites") as mock_audit, \
-             patch("agency_audit.loop.orchestrator.log_full_loop_run"):
-
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool"),
+            patch("agency_audit.loop.orchestrator._audit_country_websites") as mock_audit,
+            patch("agency_audit.loop.orchestrator.log_full_loop_run"),
+        ):
             mock_audit.return_value = {
                 "audited": 10,
                 "succeeded": 8,
@@ -238,10 +246,11 @@ class TestOrchestratorHappyPaths:
         """QC success should record findings."""
         from agency_audit.loop.orchestrator import run_country
 
-        with patch("agency_audit.loop.orchestrator.get_pool"), \
-             patch("agency_audit.loop.orchestrator.run_qc_checks") as mock_qc, \
-             patch("agency_audit.loop.orchestrator.log_full_loop_run"):
-
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool"),
+            patch("agency_audit.loop.orchestrator.run_qc_checks") as mock_qc,
+            patch("agency_audit.loop.orchestrator.log_full_loop_run"),
+        ):
             mock_qc.return_value = {
                 "suspicious_scores": 2,
                 "duplicate_domains": 1,
@@ -264,10 +273,11 @@ class TestOrchestratorHappyPaths:
         """Reaudit success should record queue count."""
         from agency_audit.loop.orchestrator import run_country
 
-        with patch("agency_audit.loop.orchestrator.get_pool"), \
-             patch("agency_audit.loop.orchestrator.schedule_reaudits") as mock_reaudit, \
-             patch("agency_audit.loop.orchestrator.log_full_loop_run"):
-
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool"),
+            patch("agency_audit.loop.orchestrator.schedule_reaudits") as mock_reaudit,
+            patch("agency_audit.loop.orchestrator.log_full_loop_run"),
+        ):
             mock_reaudit.return_value = {
                 "queued": 8,
                 "oldest_age_days": 45,

@@ -137,9 +137,7 @@ def test_country_detail_route_found():
         mock_ctx.__aenter__.return_value = mock_conn
         mock_pool.acquire.return_value = mock_ctx
 
-        mock_conn.fetchrow = AsyncMock(
-            return_value={"iso": "BG", "label": "Bulgaria"}
-        )
+        mock_conn.fetchrow = AsyncMock(return_value={"iso": "BG", "label": "Bulgaria"})
         mock_conn.fetch = AsyncMock(return_value=[])
 
         response = client.get("/country/BG")
@@ -435,9 +433,7 @@ async def test_country_detail():
         mock_ctx.__aenter__.return_value = mock_conn
         mock_pool.acquire.return_value = mock_ctx
 
-        mock_conn.fetchrow = AsyncMock(
-            return_value={"iso": "BG", "label": "Bulgaria"}
-        )
+        mock_conn.fetchrow = AsyncMock(return_value={"iso": "BG", "label": "Bulgaria"})
         mock_conn.fetch = AsyncMock(return_value=[])
 
         result = await _country_detail(mock_pool, "BG")
