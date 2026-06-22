@@ -25,6 +25,98 @@ def _make_pool_mock():
 
 
 # ──────────────────────────────────────────────────────────────────────
+# help text — every command's --help should show relevant description
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestHelpText:
+    """Verify each subcommand's --help output includes the expected description."""
+
+    def test_app_help(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "Real Estate Radar" in result.output
+
+    def test_db_init_help(self):
+        result = runner.invoke(app, ["db-init", "--help"])
+        assert result.exit_code == 0
+        assert "Apply migrations" in result.output
+
+    def test_seed_countries_help(self):
+        result = runner.invoke(app, ["seed-countries", "--help"])
+        assert result.exit_code == 0
+        assert "Seed the countries table" in result.output
+
+    def test_import_cities_help(self):
+        result = runner.invoke(app, ["import-cities", "--help"])
+        assert result.exit_code == 0
+        assert "Import cities from Geonames dump" in result.output
+
+    def test_serve_help(self):
+        result = runner.invoke(app, ["serve", "--help"])
+        assert result.exit_code == 0
+        assert "Start the FastAPI + HTMX web dashboard" in result.output
+
+    def test_audit_help(self):
+        result = runner.invoke(app, ["audit", "--help"])
+        assert result.exit_code == 0
+        assert "Run a full audit on a website" in result.output
+
+    def test_stats_help(self):
+        result = runner.invoke(app, ["stats", "--help"])
+        assert result.exit_code == 0
+        assert "Show database statistics" in result.output
+
+    def test_batch_audit_help(self):
+        result = runner.invoke(app, ["batch-audit", "--help"])
+        assert result.exit_code == 0
+        assert "Audit multiple websites concurrently" in result.output
+
+    def test_discover_help(self):
+        result = runner.invoke(app, ["discover", "--help"])
+        assert result.exit_code == 0
+        assert "Discover real estate agencies" in result.output
+
+    def test_run_command_help(self):
+        result = runner.invoke(app, ["run", "--help"])
+        assert result.exit_code == 0
+        assert "Execute full operational loop for one country" in result.output
+
+    def test_run_all_command_help(self):
+        result = runner.invoke(app, ["run-all", "--help"])
+        assert result.exit_code == 0
+        assert "Execute full operational loop for all countries" in result.output
+
+    def test_qc_command_help(self):
+        result = runner.invoke(app, ["qc", "--help"])
+        assert result.exit_code == 0
+        assert "Run quality control checks" in result.output
+
+    def test_reaudit_command_help(self):
+        result = runner.invoke(app, ["reaudit", "--help"])
+        assert result.exit_code == 0
+        assert "Manage re-audit queue" in result.output
+
+    def test_progress_command_help(self):
+        result = runner.invoke(app, ["progress", "--help"])
+        assert result.exit_code == 0
+        assert "Show overall pipeline progress" in result.output
+
+
+# ──────────────────────────────────────────────────────────────────────
+# argument validation
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_audit_arg_validation():
+    """audit requires --website-id or --url; exits with error otherwise."""
+    with patch("agency_audit.cli.asyncio.run") as mock_asyncio:
+        result = runner.invoke(app, ["audit"])
+        assert result.exit_code == 1
+        mock_asyncio.assert_not_called()
+
+
+# ──────────────────────────────────────────────────────────────────────
 # stats command
 # ──────────────────────────────────────────────────────────────────────
 

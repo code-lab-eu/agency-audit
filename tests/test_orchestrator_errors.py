@@ -293,3 +293,131 @@ class TestOrchestratorHappyPaths:
             assert "reaudit" in result["phases"]
             assert "error" not in result["phases"]["reaudit"]
             assert result["phases"]["reaudit"]["queued"] == 8
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Orchestrator: run_country with all phases skipped
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestOrchestratorSkipPaths:
+    """run_country with all skip flags should still log and return."""
+
+    @pytest.mark.asyncio
+    async def test_run_country_all_phases_skipped(self):
+        from agency_audit.loop.orchestrator import run_country
+
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
+        ):
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+            mock_log.return_value = 1
+
+            result = await run_country(
+                "bg",
+                skip_discovery=True,
+                skip_audit=True,
+                skip_qc=True,
+                skip_reaudit=True,
+            )
+            assert result["country"] == "BG"
+            assert result["phases"] == {}
+            mock_log.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_country_log_full_loop_error_handled(self):
+        """When log_full_loop_run fails, it should be caught and not crash."""
+        from agency_audit.loop.orchestrator import run_country
+
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
+        ):
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+            mock_log.side_effect = RuntimeError("db error")
+
+            result = await run_country(
+                "bg",
+                skip_discovery=True,
+                skip_audit=True,
+                skip_qc=True,
+                skip_reaudit=True,
+            )
+            assert result["country"] == "BG"
+
+    @pytest.mark.asyncio
+    async def test_run_all_countries_with_countries_list(self):
+        """run_all_countries with explicit countries list, all skipped."""
+        from agency_audit.loop.orchestrator import run_all_countries
+
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_pool = MagicMock()
+        mock_pool.acquire.return_value = mock_ctx
+
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool", return_value=mock_pool),
+            patch("agency_audit.loop.orchestrator.run_country") as mock_run,
+        ):
+            mock_run.return_value = {
+                "country": "BG",
+                "phases": {},
+                "errors": [],
+                "duration_seconds": 0.01,
+            }
+
+            result = await run_all_countries(countries=["BG"])
+            assert "results" in result
+            assert "totals" in result
+            assert result["totals"]["countries_processed"] == 1
+            mock_run.assert_called_once_with(
+                country_iso="BG",
+                max_cities=None,
+                audit_concurrency=3,
+                reaudit_interval_days=30,
+                reaudit_limit=100,
+            )
+
+    @pytest.mark.asyncio
+    async def test_run_all_countries_error_handling(self):
+        """When one country errors, run_all_countries should continue and record error."""
+        from agency_audit.loop.orchestrator import run_all_countries
+
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_pool = MagicMock()
+        mock_pool.acquire.return_value = mock_ctx
+
+        with (
+            patch("agency_audit.loop.orchestrator.get_pool", return_value=mock_pool),
+            patch("agency_audit.loop.orchestrator.run_country") as mock_run,
+        ):
+            mock_run.side_effect = RuntimeError("boom")
+
+            result = await run_all_countries(countries=["BG"])
+            assert "BG" in result["results"]
+            assert "error" in result["results"]["BG"]
+            assert len(result["totals"]["errors"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_audit_country_websites_empty(self):
+        """_audit_country_websites returns zeros when no pending websites."""
+        from agency_audit.loop.orchestrator import _audit_country_websites
+
+        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+            mock_conn.fetch = AsyncMock(return_value=[])
+
+            result = await _audit_country_websites("BG")
+            assert result == {"audited": 0, "succeeded": 0, "failed": 0}
