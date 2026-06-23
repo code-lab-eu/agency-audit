@@ -806,6 +806,7 @@ class TestAuditDataToDictContract:
         """Every key emitted by to_dict() is known — no surprise regressions."""
         data = populated_audit.to_dict()
         expected_keys = {
+            "url",
             "robots_txt_allows",
             "robots_txt_fetched",
             "robots_crawl_delay",
@@ -870,6 +871,7 @@ class TestAuditDataToDictContract:
         """Default AuditData should not introduce extra keys beyond the known set."""
         data = default_audit.to_dict()
         known = {
+            "url",
             "robots_txt_allows", "robots_txt_fetched", "robots_crawl_delay",
             "robots_sitemap_urls", "has_anti_scraping", "anti_scraping_details",
             "cloudflare", "recaptcha", "has_api", "api_type", "api_url",
