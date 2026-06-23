@@ -1126,6 +1126,314 @@ class TestAuditDataSerialization:
         assert parsed["score"] == 42
 
 
+class TestAuditDataToDictContract:
+    """Fixture-driven contract tests for AuditData.to_dict().
+
+    These assert the byte-contract consumed by cli.py:208-273 (table/json
+    output) and orchestrator.py:373-379 (JSONB persistence).  Every key
+    the CLI and orchestrator consume must be present with the correct type.
+    """
+
+    @pytest.fixture
+    def populated_audit(self) -> AuditData:
+        """A fully-populated AuditData with realistic values for every field."""
+        return AuditData(
+            url="https://example.com",
+            robots=RobotsResult(
+                fetched=True,
+                allows_scraping=False,
+                crawl_delay=5.0,
+                sitemap_urls=["https://example.com/sitemap.xml"],
+                raw_content="User-agent: *\nDisallow: /\n",
+                error=None,
+            ),
+            anti_scraping=AntiScrapingResult(
+                detected=True,
+                cloudflare=True,
+                recaptcha=True,
+                bot_detection_headers=True,
+                js_only_rendering=False,
+                details=["cloudflare", "recaptcha", "sucuri"],
+            ),
+            api_detection=ApiDetectionResult(
+                detected=True,
+                api_type="json-ld",
+                api_url="https://example.com/api/graphql",
+                endpoints_found=["/api/graphql", "/api/v1"],
+            ),
+            property_count=PropertyCountResult(
+                count=1250,
+                source="sitemap",
+                confidence=0.85,
+            ),
+            listing_quality=ListingQualityResult(
+                has_structured_data=True,
+                has_images=True,
+                has_descriptions=True,
+                has_prices=True,
+                has_locations=True,
+                has_property_map=True,
+                quality_score=0.92,
+            ),
+            tech_stack=TechStackResult(
+                framework="WordPress",
+                hosting="AWS",
+                cdn="Cloudflare",
+                technologies=["WordPress", "PHP", "MySQL", "jQuery"],
+            ),
+            response_time_ms=345.6,
+            ssl_valid=True,
+            language="en",
+            notes="High-quality real estate site.",
+            score=72,
+            score_breakdown={
+                "robots_allowed": 10,
+                "property_count_accurate": 15,
+                "listing_quality": 20,
+                "no_anti_scraping": -5,
+                "has_api": 10,
+            },
+        )
+
+    @pytest.fixture
+    def default_audit(self) -> AuditData:
+        """An AuditData with all defaults — no values explicitly set."""
+        return AuditData(url="https://default.test")
+
+    # ── CLI-consumed fields (cli.py:208-273) ──────────────────────────────
+
+    def test_cli_robots_allows_scraping(self, populated_audit: AuditData):
+        """cli.py:213 reads result.robots.allows_scraping → robots_txt_allows."""
+        data = populated_audit.to_dict()
+        assert data["robots_txt_allows"] is False
+        assert isinstance(data["robots_txt_allows"], bool)
+
+    def test_cli_framework(self, populated_audit: AuditData):
+        """cli.py:232 reads result.tech_stack.framework → framework."""
+        data = populated_audit.to_dict()
+        assert data["framework"] == "WordPress"
+        assert isinstance(data["framework"], str)
+
+    def test_cli_framework_none(self, default_audit: AuditData):
+        """framework can be None when undetected."""
+        data = default_audit.to_dict()
+        assert data["framework"] is None
+
+    def test_cli_property_count_source(self, populated_audit: AuditData):
+        """cli.py:226 reads result.property_count.source → property_count_source."""
+        data = populated_audit.to_dict()
+        assert data["property_count_source"] == "sitemap"
+        assert isinstance(data["property_count_source"], str)
+
+    def test_cli_property_count_confidence(self, populated_audit: AuditData):
+        """cli.py:226 reads result.property_count.confidence → property_count_confidence."""
+        data = populated_audit.to_dict()
+        assert data["property_count_confidence"] == 0.85
+        assert isinstance(data["property_count_confidence"], float)
+
+    def test_cli_property_count_defaults(self, default_audit: AuditData):
+        """property_count defaults: count=0, source='unknown', confidence=0.0."""
+        data = default_audit.to_dict()
+        assert data["property_count"] == 0
+        assert data["property_count_source"] == "unknown"
+        assert data["property_count_confidence"] == 0.0
+
+    def test_cli_score_breakdown(self, populated_audit: AuditData):
+        """cli.py:243 iterates result.score_breakdown → score_breakdown."""
+        data = populated_audit.to_dict()
+        breakdown = data["score_breakdown"]
+        assert isinstance(breakdown, dict)
+        assert breakdown["robots_allowed"] == 10
+        assert breakdown["no_anti_scraping"] == -5
+        assert len(breakdown) == 5
+
+    def test_cli_score(self, populated_audit: AuditData):
+        """cli.py:242 reads result.score → score."""
+        data = populated_audit.to_dict()
+        assert data["score"] == 72
+        assert isinstance(data["score"], int)
+
+    def test_cli_tech_stack_technologies(self, populated_audit: AuditData):
+        """cli.py:235 reads result.tech_stack.technologies → technology_stack."""
+        data = populated_audit.to_dict()
+        assert data["technology_stack"] == ["WordPress", "PHP", "MySQL", "jQuery"]
+        assert isinstance(data["technology_stack"], list)
+
+    def test_cli_hosting(self, populated_audit: AuditData):
+        """cli.py:234 reads result.tech_stack.hosting → hosting."""
+        data = populated_audit.to_dict()
+        assert data["hosting"] == "AWS"
+        assert isinstance(data["hosting"], str)
+
+    def test_cli_cdn(self, populated_audit: AuditData):
+        """cli.py:233 reads result.tech_stack.cdn → cdn."""
+        data = populated_audit.to_dict()
+        assert data["cdn"] == "Cloudflare"
+        assert isinstance(data["cdn"], str)
+
+    def test_cli_response_time(self, populated_audit: AuditData):
+        """cli.py:236 reads result.response_time_ms → response_time_ms."""
+        data = populated_audit.to_dict()
+        assert data["response_time_ms"] == 345.6
+        assert isinstance(data["response_time_ms"], float)
+
+    def test_cli_response_time_none(self, default_audit: AuditData):
+        """response_time_ms can be None."""
+        data = default_audit.to_dict()
+        assert data["response_time_ms"] is None
+
+    def test_cli_ssl_valid(self, populated_audit: AuditData):
+        """cli.py:237 reads result.ssl_valid → ssl_valid."""
+        data = populated_audit.to_dict()
+        assert data["ssl_valid"] is True
+        assert isinstance(data["ssl_valid"], bool)
+
+    def test_cli_language(self, populated_audit: AuditData):
+        """cli.py:238 reads result.language → language."""
+        data = populated_audit.to_dict()
+        assert data["language"] == "en"
+        assert isinstance(data["language"], str)
+
+    def test_cli_language_none(self, default_audit: AuditData):
+        """language can be None."""
+        data = default_audit.to_dict()
+        assert data["language"] is None
+
+    # ── Orchestrator-consumed fields (orchestrator.py:373-379) ────────────
+
+    def test_orchestrator_score(self, populated_audit: AuditData):
+        """orchestrator.py:377 persists result.score → score."""
+        data = populated_audit.to_dict()
+        assert "score" in data
+        assert data["score"] == 72
+
+    def test_orchestrator_to_dict_is_jsonb_safe(self, populated_audit: AuditData):
+        """orchestrator.py:376 persists json.dumps(result.to_dict()) as JSONB."""
+        data = populated_audit.to_dict()
+        json_str = json.dumps(data)
+        assert json_str is not None
+        roundtripped = json.loads(json_str)
+        # spot-check critical fields survive the JSON roundtrip
+        assert roundtripped["score"] == 72
+        assert roundtripped["robots_txt_allows"] is False
+        assert roundtripped["framework"] == "WordPress"
+        assert roundtripped["property_count_source"] == "sitemap"
+        assert roundtripped["score_breakdown"]["listing_quality"] == 20
+
+    def test_orchestrator_to_dict_default_is_jsonb_safe(self, default_audit: AuditData):
+        """Even a default AuditData must be JSONB-serializable."""
+        data = default_audit.to_dict()
+        json_str = json.dumps(data)
+        roundtripped = json.loads(json_str)
+        assert roundtripped["score"] == 0
+        assert roundtripped["robots_txt_allows"] is True
+
+    # ── Complete key coverage ─────────────────────────────────────────────
+
+    def test_to_dict_exact_keys(self, populated_audit: AuditData):
+        """Every key emitted by to_dict() is known — no surprise regressions."""
+        data = populated_audit.to_dict()
+        expected_keys = {
+            "robots_txt_allows",
+            "robots_txt_fetched",
+            "robots_crawl_delay",
+            "robots_sitemap_urls",
+            "has_anti_scraping",
+            "anti_scraping_details",
+            "cloudflare",
+            "recaptcha",
+            "has_api",
+            "api_type",
+            "api_url",
+            "api_endpoints",
+            "property_count",
+            "property_count_source",
+            "property_count_confidence",
+            "has_structured_data",
+            "listings_have_images",
+            "listings_have_descriptions",
+            "listings_have_prices",
+            "listings_have_locations",
+            "has_property_map",
+            "listing_quality_score",
+            "technology_stack",
+            "framework",
+            "hosting",
+            "cdn",
+            "response_time_ms",
+            "ssl_valid",
+            "language",
+            "notes",
+            "score",
+            "score_breakdown",
+        }
+        assert set(data.keys()) == expected_keys
+
+    def test_to_dict_all_keys_present_on_default(self, default_audit: AuditData):
+        """Even a default AuditData must emit every key."""
+        data = default_audit.to_dict()
+        assert "robots_txt_allows" in data
+        assert "framework" in data
+        assert "property_count_source" in data
+        assert "score_breakdown" in data
+        assert "score" in data
+        assert "technology_stack" in data
+        assert "listing_quality_score" in data
+
+    def test_to_dict_scores_int(self, default_audit: AuditData):
+        """score must always be int, score_breakdown must be dict."""
+        data = default_audit.to_dict()
+        assert isinstance(data["score"], int)
+        assert isinstance(data["score_breakdown"], dict)
+
+    def test_to_dict_lists_are_lists(self, populated_audit: AuditData):
+        """List fields (sitemap_urls, details, endpoints, technologies) must be lists."""
+        data = populated_audit.to_dict()
+        assert isinstance(data["robots_sitemap_urls"], list)
+        assert isinstance(data["anti_scraping_details"], list)
+        assert isinstance(data["api_endpoints"], list)
+        assert isinstance(data["technology_stack"], list)
+
+    def test_to_dict_no_extra_keys_on_default(self, default_audit: AuditData):
+        """Default AuditData should not introduce extra keys beyond the known set."""
+        data = default_audit.to_dict()
+        known = {
+            "robots_txt_allows", "robots_txt_fetched", "robots_crawl_delay",
+            "robots_sitemap_urls", "has_anti_scraping", "anti_scraping_details",
+            "cloudflare", "recaptcha", "has_api", "api_type", "api_url",
+            "api_endpoints", "property_count", "property_count_source",
+            "property_count_confidence", "has_structured_data",
+            "listings_have_images", "listings_have_descriptions",
+            "listings_have_prices", "listings_have_locations",
+            "has_property_map", "listing_quality_score", "technology_stack",
+            "framework", "hosting", "cdn", "response_time_ms", "ssl_valid",
+            "language", "notes", "score", "score_breakdown",
+        }
+        assert set(data.keys()) == known
+
+    def test_to_dict_cli_scoring_display(self, populated_audit: AuditData):
+        """Simulate the CLI scoring display loop (cli.py:243-245)."""
+        data = populated_audit.to_dict()
+        breakdown = data["score_breakdown"]
+        # CLI iterates: for check, points in result.score_breakdown.items()
+        for check, points in breakdown.items():
+            assert isinstance(check, str)
+            assert isinstance(points, int)
+            # CLI uses: color = "green" if points > 0 else "red" if points < 0 else "dim"
+            _ = "green" if points > 0 else "red" if points < 0 else "dim"
+
+    def test_to_dict_cli_table_formatting(self, populated_audit: AuditData):
+        """Simulate the CLI table formatting that reads property_count fields."""
+        data = populated_audit.to_dict()
+        # cli.py:226 formats:
+        #   f"{count:,} ({source}, conf={conf:.1%})"
+        count = data["property_count"]
+        source = data["property_count_source"]
+        conf = data["property_count_confidence"]
+        formatted = f"{count:,} ({source}, conf={conf:.1%})"
+        assert formatted == "1,250 (sitemap, conf=85.0%)"
+
+
 # ---------------------------------------------------------------------------
 # Full auditor integration (uses a mock HTTP server via httpx MockTransport)
 # ---------------------------------------------------------------------------
