@@ -1,0 +1,67 @@
+# Git
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+
+# Worktrees
+.worktrees/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tests
+tests/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Docs and config
+docs/
+*.md
+!requirements.txt
+.env
+.env.*
+!.env.example
+
+# CI / GitHub
+.github/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yml
+docker-compose*.yaml
+
+# Lockfiles (only need requirements.txt)
+uv.lock
+poetry.lock
+Pipfile.lock
+
+# Data
+*.zip
+*.gz
+data/
