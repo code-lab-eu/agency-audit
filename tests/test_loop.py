@@ -153,9 +153,7 @@ class TestRetry:
             )
 
             # The SELECT must reference c.country, NOT wc.country
-            assert "c.country" in insert_sql, (
-                "Expected c.country (from cities), got: " + insert_sql
-            )
+            assert "c.country" in insert_sql, "Expected c.country (from cities), got: " + insert_sql
             assert "wc.country" not in insert_sql, (
                 "website_cities has no country column — must use c.country from cities JOIN"
             )
