@@ -228,6 +228,291 @@ class TestApiDetection:
 
 
 class TestPropertyCount:
+    # ------------------------------------------------------------------
+    # Fixtures — synthetic HTML / sitemap data for each source branch
+    # ------------------------------------------------------------------
+
+    @pytest.fixture
+    def homepage_with_text_count(self) -> str:
+        """HTML homepage with a text pattern count (high confidence)."""
+        return "<html><body><p>1,250 properties found</p></body></html>"
+
+    @pytest.fixture
+    def homepage_with_listing_items(self) -> str:
+        """HTML homepage with listing-item div elements (medium confidence)."""
+        return "<html><body>" + '<div class="property-item">A</div>' * 20 + "</body></html>"
+
+    @pytest.fixture
+    def homepage_with_json_data(self) -> str:
+        """HTML homepage with JSON embedded data (low-medium confidence)."""
+        return '<html><body><script>var data = {"totalCount": 850};</script></body></html>'
+
+    @pytest.fixture
+    def homepage_empty(self) -> str:
+        """HTML homepage with no property count indicators."""
+        return "<html><body><p>Welcome to our agency</p></body></html>"
+
+    @pytest.fixture
+    def homepage_with_listing_link(self) -> str:
+        """HTML homepage that links to a listing page but has no count inline."""
+        return (
+            '<html><body><nav><a href="/properties">Properties</a></nav>'
+            "<p>Welcome to our agency</p></body></html>"
+        )
+
+    @pytest.fixture
+    def listing_page_with_count(self) -> str:
+        """HTML listing page with a text pattern count."""
+        return "<html><body><p>500 results found</p></body></html>"
+
+    @pytest.fixture
+    def listing_page_no_count(self) -> str:
+        """HTML listing page with no count (to force sitemap fallback)."""
+        return "<html><body><p>Browse our properties</p></body></html>"
+
+    @pytest.fixture
+    def sitemap_with_property_urls(self) -> str:
+        """XML sitemap containing property-like URLs."""
+        return (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/properties/1</loc></url>\n"
+            "<url><loc>https://example.com/properties/2</loc></url>\n"
+            "<url><loc>https://example.com/properties/3</loc></url>\n"
+            "<url><loc>https://example.com/about</loc></url>\n"
+            "</urlset>"
+        )
+
+    @pytest.fixture
+    def sitemap_no_property_urls(self) -> str:
+        """XML sitemap with no property-like URLs (low confidence fallback)."""
+        return (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/about</loc></url>\n"
+            "<url><loc>https://example.com/contact</loc></url>\n"
+            "</urlset>"
+        )
+
+    @pytest.fixture
+    def sitemap_index(self) -> str:
+        """Sitemap index referencing sub-sitemaps."""
+        return (
+            '<?xml version="1.0"?>\n'
+            '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<sitemap><loc>https://example.com/sitemap-properties.xml</loc></sitemap>\n"
+            "</sitemapindex>"
+        )
+
+    # --------------------------------------------------------------
+    # count_properties — source="listing_page" (homepage text count)
+    # --------------------------------------------------------------
+
+    async def test_count_properties_listing_page_text(self, homepage_with_text_count):
+        """Homepage with '1,250 properties' → source=listing_page, conf=0.7."""
+        from agency_audit.audit.property_count import count_properties
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=homepage_with_text_count, request=req)
+            )
+        ) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 1250
+        assert result.source == "listing_page"
+        assert result.confidence == 0.7
+
+    async def test_count_properties_listing_page_items(self, homepage_with_listing_items):
+        """Homepage with 20 listing divs → source=listing_page, conf=0.3."""
+        from agency_audit.audit.property_count import count_properties
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=homepage_with_listing_items, request=req)
+            )
+        ) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 20
+        assert result.source == "listing_page"
+        assert result.confidence == 0.3
+
+    async def test_count_properties_listing_page_json(self, homepage_with_json_data):
+        """Homepage with JSON totalCount → source=listing_page, conf=0.5."""
+        from agency_audit.audit.property_count import count_properties
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=homepage_with_json_data, request=req)
+            )
+        ) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 850
+        assert result.source == "listing_page"
+        assert result.confidence == 0.5
+
+    # ------------------------------------------------------------------
+    # count_properties — source="listing_page" (via listing URL fallback)
+    # ------------------------------------------------------------------
+
+    async def test_count_properties_listing_page_fallback(
+        self, homepage_with_listing_link, listing_page_with_count
+    ):
+        """No count on homepage → follow listing link → source=listing_page."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            if "/properties" in str(req.url):
+                return httpx.Response(200, text=listing_page_with_count, request=req)
+            return httpx.Response(200, text=homepage_with_listing_link, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 500
+        assert result.source == "listing_page"
+        assert result.confidence == 0.7  # text pattern on listing page
+
+    # ------------------------------------------------------------------
+    # count_properties — source="sitemap" (provided URLs)
+    # ------------------------------------------------------------------
+
+    async def test_count_properties_sitemap_provided(
+        self, homepage_empty, sitemap_with_property_urls
+    ):
+        """No HTML count → falls back to sitemap → source=sitemap, conf=0.8."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            if "sitemap" in str(req.url):
+                return httpx.Response(200, text=sitemap_with_property_urls, request=req)
+            return httpx.Response(200, text=homepage_empty, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties(
+                "https://example.com",
+                sitemap_urls=["https://example.com/sitemap.xml"],
+                client=client,
+            )
+
+        assert result.count == 3
+        assert result.source == "sitemap"
+        assert result.confidence == 0.8
+
+    async def test_count_properties_sitemap_provided_low_confidence(
+        self, homepage_empty, sitemap_no_property_urls
+    ):
+        """Sitemap without property URLs → falls back to total URL count, conf=0.4."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            if "sitemap" in str(req.url):
+                return httpx.Response(200, text=sitemap_no_property_urls, request=req)
+            return httpx.Response(200, text=homepage_empty, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties(
+                "https://example.com",
+                sitemap_urls=["https://example.com/sitemap.xml"],
+                client=client,
+            )
+
+        assert result.count == 2
+        assert result.source == "sitemap"
+        assert result.confidence == 0.4
+
+    # ------------------------------------------------------------------
+    # count_properties — source="sitemap" (default sitemap URL)
+    # ------------------------------------------------------------------
+
+    async def test_count_properties_sitemap_default(
+        self, homepage_empty, sitemap_with_property_urls
+    ):
+        """No sitemap URLs provided → tries /sitemap.xml → source=sitemap."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            if "sitemap" in str(req.url):
+                return httpx.Response(200, text=sitemap_with_property_urls, request=req)
+            return httpx.Response(200, text=homepage_empty, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 3
+        assert result.source == "sitemap"
+        assert result.confidence == 0.8
+
+    # ------------------------------------------------------------------
+    # count_properties — source="unknown" (nothing found)
+    # ------------------------------------------------------------------
+
+    async def test_count_properties_none(self, homepage_empty):
+        """No count anywhere → source stays default 'unknown', conf=0.0."""
+        from agency_audit.audit.property_count import count_properties
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=homepage_empty, request=req)
+            )
+        ) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 0
+        assert result.source == "unknown"
+        assert result.confidence == 0.0
+
+    async def test_count_properties_none_sitemap_error(self, homepage_empty):
+        """Sitemap returns 500 → fallback exhausted → source=unknown."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            if "sitemap" in str(req.url):
+                return httpx.Response(500, text="Error", request=req)
+            return httpx.Response(200, text=homepage_empty, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 0
+        assert result.source == "unknown"
+        assert result.confidence == 0.0
+
+    # ------------------------------------------------------------------
+    # count_properties — listing-page fallback then sitemap
+    # ------------------------------------------------------------------
+
+    async def test_count_properties_listing_then_sitemap(
+        self, homepage_with_listing_link, listing_page_no_count, sitemap_with_property_urls
+    ):
+        """Listing page has no count → falls through to sitemap → source=sitemap."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            url = str(req.url)
+            if "sitemap" in url:
+                return httpx.Response(200, text=sitemap_with_property_urls, request=req)
+            if "/properties" in url:
+                return httpx.Response(200, text=listing_page_no_count, request=req)
+            return httpx.Response(200, text=homepage_with_listing_link, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties(
+                "https://example.com",
+                sitemap_urls=["https://example.com/sitemap.xml"],
+                client=client,
+            )
+
+        assert result.count == 3
+        assert result.source == "sitemap"
+        assert result.confidence == 0.8
+
+    # ------------------------------------------------------------------
+    # _count_from_html — edge cases & confidence values
+    # ------------------------------------------------------------------
+
     def test_count_from_html_text_pattern(self):
         from agency_audit.audit.property_count import _count_from_html
 
@@ -259,6 +544,10 @@ class TestPropertyCount:
         count, conf = _count_from_html(html)
         assert count == 0
 
+    # ------------------------------------------------------------------
+    # _find_listing_page_url — URL discovery edge cases
+    # ------------------------------------------------------------------
+
     def test_find_listing_page_url(self):
         from agency_audit.audit.property_count import _find_listing_page_url
 
@@ -284,6 +573,45 @@ class TestPropertyCount:
         html = '<html><body><a href="/about">About</a></body></html>'
         url = _find_listing_page_url("https://example.com", html)
         assert url is None
+
+    def test_find_listing_page_url_imoti(self):
+        """Bulgarian 'imoti' path is recognised as a listing page."""
+        from agency_audit.audit.property_count import _find_listing_page_url
+
+        html = '<html><body><a href="/imoti">Имоти</a></body></html>'
+        url = _find_listing_page_url("https://example.com", html)
+        assert url == "https://example.com/imoti"
+
+    def test_find_listing_page_url_multiple_links(self):
+        """First matching link wins when multiple candidates exist."""
+        from agency_audit.audit.property_count import _find_listing_page_url
+
+        html = (
+            "<html><body>"
+            '<a href="/offers">Offers</a>'
+            '<a href="/search">Search</a>'
+            '<a href="/annonces">Annonces</a>'
+            "</body></html>"
+        )
+        url = _find_listing_page_url("https://example.com", html)
+        # First match in pattern order: "/offers" matches r"/offers?" first
+        assert url == "https://example.com/offers"
+
+    def test_find_listing_page_url_no_links(self):
+        """Returns None when there are no links on the page."""
+        from agency_audit.audit.property_count import _find_listing_page_url
+
+        html = "<html><body><p>No navigation here</p></body></html>"
+        url = _find_listing_page_url("https://example.com", html)
+        assert url is None
+
+    def test_find_listing_page_url_empty_href(self):
+        """Skips empty href attributes."""
+        from agency_audit.audit.property_count import _find_listing_page_url
+
+        html = '<html><body><a href="">Home</a><a href="/search">Search</a></body></html>'
+        url = _find_listing_page_url("https://example.com", html)
+        assert url == "https://example.com/search"
 
 
 # ---------------------------------------------------------------------------
