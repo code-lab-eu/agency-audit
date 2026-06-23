@@ -6,6 +6,7 @@ after themselves.
 """
 
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
 import pytest
@@ -58,6 +59,185 @@ async def cleanup_test_data(db_conn):
     # Reset the module-level pool so the next test creates a fresh one
     # on its own event loop
     await close_pool()
+
+
+# ---------------------------------------------------------------------------
+# Unit tests with mocked pool — assert atomic FOR UPDATE SKIP LOCKED
+# ---------------------------------------------------------------------------
+
+
+class TestGetNextCityAtomic:
+    """Unit tests verifying get_next_city uses a single atomic statement."""
+
+    @pytest.mark.asyncio
+    async def test_single_atomic_update_for_update_skip_locked(self):
+        """get_next_city must issue exactly one SQL statement with FOR UPDATE SKIP LOCKED."""
+        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            # Simulate a row being returned
+            mock_conn.fetchrow.return_value = {
+                "id": 1,
+                "country": "BG",
+                "label": "Sofia",
+                "slug": "sofia",
+                "population": 1_200_000,
+                "latitude": 42.6977,
+                "longitude": 23.3219,
+            }
+
+            result = await get_next_city()
+
+            # Single DB call — no separate SELECT + UPDATE
+            assert mock_conn.fetchrow.call_count == 1, (
+                "Expected exactly 1 fetchrow call (atomic UPDATE), "
+                f"got {mock_conn.fetchrow.call_count}"
+            )
+            assert mock_conn.execute.call_count == 0, (
+                "Expected no separate execute call; the UPDATE is atomic"
+            )
+
+            sql = mock_conn.fetchrow.call_args.args[0]
+            assert "FOR UPDATE SKIP LOCKED" in sql, (
+                f"Atomic query missing FOR UPDATE SKIP LOCKED: {sql}"
+            )
+            assert "UPDATE cities" in sql
+            assert "RETURNING" in sql
+            assert "SELECT" in sql
+
+            assert result["id"] == 1
+            assert result["label"] == "Sofia"
+
+    @pytest.mark.asyncio
+    async def test_no_pending_cities_returns_error(self):
+        """When no row is locked/updated, return error dict."""
+        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            mock_conn.fetchrow.return_value = None
+
+            result = await get_next_city()
+
+            assert result == {"error": "no pending cities"}
+            assert mock_conn.fetchrow.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_country_filter_in_subselect(self):
+        """When country is passed, the WHERE clause must filter on country."""
+        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            mock_conn.fetchrow.return_value = {
+                "id": 2,
+                "country": "GR",
+                "label": "Athens",
+                "slug": "athens",
+                "population": 664_046,
+                "latitude": 37.9838,
+                "longitude": 23.7275,
+            }
+
+            result = await get_next_city(country="GR")
+
+            sql = mock_conn.fetchrow.call_args.args[0]
+            assert "country = $1" in sql, (
+                f"country filter missing in subselect: {sql}"
+            )
+            assert mock_conn.fetchrow.call_args.args[1] == "GR"
+            assert result["country"] == "GR"
+
+
+class TestGetUnauditedWebsiteAtomic:
+    """Unit tests verifying get_unaudited_website uses a single atomic statement."""
+
+    @pytest.mark.asyncio
+    async def test_single_atomic_update_for_update_skip_locked(self):
+        """get_unaudited_website must issue UPDATE with FOR UPDATE SKIP LOCKED,
+        followed only by a city JOIN query."""
+        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            mock_conn.fetchrow.return_value = {
+                "id": 42,
+                "url": "https://example.com",
+                "label": "Test Agency",
+                "maps_place_id": "ChIJxyz",
+                "address": "123 Main St",
+                "phone": "+359123456",
+            }
+            mock_conn.fetch.return_value = [
+                {"id": 1, "label": "Sofia", "slug": "sofia", "country": "BG"},
+            ]
+
+            result = await get_unaudited_website()
+
+            # The UPDATE must be the first call
+            assert mock_conn.fetchrow.call_count == 1
+            update_sql = mock_conn.fetchrow.call_args.args[0]
+            assert "FOR UPDATE SKIP LOCKED" in update_sql, (
+                f"Atomic query missing FOR UPDATE SKIP LOCKED: {update_sql}"
+            )
+            assert "UPDATE websites" in update_sql
+            assert "RETURNING" in update_sql
+
+            # No separate execute for status update
+            assert mock_conn.execute.call_count == 0, (
+                "Expected no separate execute; status change is atomic"
+            )
+
+            # City join is the second call
+            assert mock_conn.fetch.call_count == 1
+
+            assert result["id"] == 42
+            assert result["url"] == "https://example.com"
+            assert result["cities"] == [
+                {"id": 1, "label": "Sofia", "slug": "sofia", "country": "BG"}
+            ]
+
+    @pytest.mark.asyncio
+    async def test_no_pending_websites_returns_error(self):
+        """When no row is locked/updated, return error dict."""
+        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            mock_conn.fetchrow.return_value = None
+
+            result = await get_unaudited_website()
+
+            assert result == {"error": "no pending websites"}
+            assert mock_conn.fetchrow.call_count == 1
+            # No city join when no row found
+            assert mock_conn.fetch.call_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +298,7 @@ async def test_report_website_creates_new(db_conn):
         city="sofia",
         place_id="ChIJ1234",
         address="123 Test St",
-        phone="+359888123456",
+        phone="+359****3456",
     )
     assert result["created"] is True
     assert "website_id" in result
@@ -133,7 +313,7 @@ async def test_report_website_creates_new(db_conn):
     assert row["label"] == "Test Agency"
     assert row["maps_place_id"] == "ChIJ1234"
     assert row["address"] == "123 Test St"
-    assert row["phone"] == "+359888123456"
+    assert row["phone"] == "+359****3456"
 
     # Verify website_cities link
     link = await db_conn.fetchrow(
