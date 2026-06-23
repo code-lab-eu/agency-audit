@@ -593,6 +593,291 @@ class TestApiDetection:
 
 
 class TestPropertyCount:
+    # ------------------------------------------------------------------
+    # Fixtures — synthetic HTML / sitemap data for each source branch
+    # ------------------------------------------------------------------
+
+    @pytest.fixture
+    def homepage_with_text_count(self) -> str:
+        """HTML homepage with a text pattern count (high confidence)."""
+        return "<html><body><p>1,250 properties found</p></body></html>"
+
+    @pytest.fixture
+    def homepage_with_listing_items(self) -> str:
+        """HTML homepage with listing-item div elements (medium confidence)."""
+        return "<html><body>" + '<div class="property-item">A</div>' * 20 + "</body></html>"
+
+    @pytest.fixture
+    def homepage_with_json_data(self) -> str:
+        """HTML homepage with JSON embedded data (low-medium confidence)."""
+        return '<html><body><script>var data = {"totalCount": 850};</script></body></html>'
+
+    @pytest.fixture
+    def homepage_empty(self) -> str:
+        """HTML homepage with no property count indicators."""
+        return "<html><body><p>Welcome to our agency</p></body></html>"
+
+    @pytest.fixture
+    def homepage_with_listing_link(self) -> str:
+        """HTML homepage that links to a listing page but has no count inline."""
+        return (
+            '<html><body><nav><a href="/properties">Properties</a></nav>'
+            "<p>Welcome to our agency</p></body></html>"
+        )
+
+    @pytest.fixture
+    def listing_page_with_count(self) -> str:
+        """HTML listing page with a text pattern count."""
+        return "<html><body><p>500 results found</p></body></html>"
+
+    @pytest.fixture
+    def listing_page_no_count(self) -> str:
+        """HTML listing page with no count (to force sitemap fallback)."""
+        return "<html><body><p>Browse our properties</p></body></html>"
+
+    @pytest.fixture
+    def sitemap_with_property_urls(self) -> str:
+        """XML sitemap containing property-like URLs."""
+        return (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/properties/1</loc></url>\n"
+            "<url><loc>https://example.com/properties/2</loc></url>\n"
+            "<url><loc>https://example.com/properties/3</loc></url>\n"
+            "<url><loc>https://example.com/about</loc></url>\n"
+            "</urlset>"
+        )
+
+    @pytest.fixture
+    def sitemap_no_property_urls(self) -> str:
+        """XML sitemap with no property-like URLs (low confidence fallback)."""
+        return (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/about</loc></url>\n"
+            "<url><loc>https://example.com/contact</loc></url>\n"
+            "</urlset>"
+        )
+
+    @pytest.fixture
+    def sitemap_index(self) -> str:
+        """Sitemap index referencing sub-sitemaps."""
+        return (
+            '<?xml version="1.0"?>\n'
+            '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<sitemap><loc>https://example.com/sitemap-properties.xml</loc></sitemap>\n"
+            "</sitemapindex>"
+        )
+
+    # --------------------------------------------------------------
+    # count_properties — source="listing_page" (homepage text count)
+    # --------------------------------------------------------------
+
+    async def test_count_properties_listing_page_text(self, homepage_with_text_count):
+        """Homepage with '1,250 properties' → source=listing_page, conf=0.7."""
+        from agency_audit.audit.property_count import count_properties
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=homepage_with_text_count, request=req)
+            )
+        ) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 1250
+        assert result.source == "listing_page"
+        assert result.confidence == 0.7
+
+    async def test_count_properties_listing_page_items(self, homepage_with_listing_items):
+        """Homepage with 20 listing divs → source=listing_page, conf=0.3."""
+        from agency_audit.audit.property_count import count_properties
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=homepage_with_listing_items, request=req)
+            )
+        ) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 20
+        assert result.source == "listing_page"
+        assert result.confidence == 0.3
+
+    async def test_count_properties_listing_page_json(self, homepage_with_json_data):
+        """Homepage with JSON totalCount → source=listing_page, conf=0.5."""
+        from agency_audit.audit.property_count import count_properties
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=homepage_with_json_data, request=req)
+            )
+        ) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 850
+        assert result.source == "listing_page"
+        assert result.confidence == 0.5
+
+    # ------------------------------------------------------------------
+    # count_properties — source="listing_page" (via listing URL fallback)
+    # ------------------------------------------------------------------
+
+    async def test_count_properties_listing_page_fallback(
+        self, homepage_with_listing_link, listing_page_with_count
+    ):
+        """No count on homepage → follow listing link → source=listing_page."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            if "/properties" in str(req.url):
+                return httpx.Response(200, text=listing_page_with_count, request=req)
+            return httpx.Response(200, text=homepage_with_listing_link, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 500
+        assert result.source == "listing_page"
+        assert result.confidence == 0.7  # text pattern on listing page
+
+    # ------------------------------------------------------------------
+    # count_properties — source="sitemap" (provided URLs)
+    # ------------------------------------------------------------------
+
+    async def test_count_properties_sitemap_provided(
+        self, homepage_empty, sitemap_with_property_urls
+    ):
+        """No HTML count → falls back to sitemap → source=sitemap, conf=0.8."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            if "sitemap" in str(req.url):
+                return httpx.Response(200, text=sitemap_with_property_urls, request=req)
+            return httpx.Response(200, text=homepage_empty, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties(
+                "https://example.com",
+                sitemap_urls=["https://example.com/sitemap.xml"],
+                client=client,
+            )
+
+        assert result.count == 3
+        assert result.source == "sitemap"
+        assert result.confidence == 0.8
+
+    async def test_count_properties_sitemap_provided_low_confidence(
+        self, homepage_empty, sitemap_no_property_urls
+    ):
+        """Sitemap without property URLs → falls back to total URL count, conf=0.4."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            if "sitemap" in str(req.url):
+                return httpx.Response(200, text=sitemap_no_property_urls, request=req)
+            return httpx.Response(200, text=homepage_empty, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties(
+                "https://example.com",
+                sitemap_urls=["https://example.com/sitemap.xml"],
+                client=client,
+            )
+
+        assert result.count == 2
+        assert result.source == "sitemap"
+        assert result.confidence == 0.4
+
+    # ------------------------------------------------------------------
+    # count_properties — source="sitemap" (default sitemap URL)
+    # ------------------------------------------------------------------
+
+    async def test_count_properties_sitemap_default(
+        self, homepage_empty, sitemap_with_property_urls
+    ):
+        """No sitemap URLs provided → tries /sitemap.xml → source=sitemap."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            if "sitemap" in str(req.url):
+                return httpx.Response(200, text=sitemap_with_property_urls, request=req)
+            return httpx.Response(200, text=homepage_empty, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 3
+        assert result.source == "sitemap"
+        assert result.confidence == 0.8
+
+    # ------------------------------------------------------------------
+    # count_properties — source="unknown" (nothing found)
+    # ------------------------------------------------------------------
+
+    async def test_count_properties_none(self, homepage_empty):
+        """No count anywhere → source stays default 'unknown', conf=0.0."""
+        from agency_audit.audit.property_count import count_properties
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=homepage_empty, request=req)
+            )
+        ) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 0
+        assert result.source == "unknown"
+        assert result.confidence == 0.0
+
+    async def test_count_properties_none_sitemap_error(self, homepage_empty):
+        """Sitemap returns 500 → fallback exhausted → source=unknown."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            if "sitemap" in str(req.url):
+                return httpx.Response(500, text="Error", request=req)
+            return httpx.Response(200, text=homepage_empty, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 0
+        assert result.source == "unknown"
+        assert result.confidence == 0.0
+
+    # ------------------------------------------------------------------
+    # count_properties — listing-page fallback then sitemap
+    # ------------------------------------------------------------------
+
+    async def test_count_properties_listing_then_sitemap(
+        self, homepage_with_listing_link, listing_page_no_count, sitemap_with_property_urls
+    ):
+        """Listing page has no count → falls through to sitemap → source=sitemap."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            url = str(req.url)
+            if "sitemap" in url:
+                return httpx.Response(200, text=sitemap_with_property_urls, request=req)
+            if "/properties" in url:
+                return httpx.Response(200, text=listing_page_no_count, request=req)
+            return httpx.Response(200, text=homepage_with_listing_link, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties(
+                "https://example.com",
+                sitemap_urls=["https://example.com/sitemap.xml"],
+                client=client,
+            )
+
+        assert result.count == 3
+        assert result.source == "sitemap"
+        assert result.confidence == 0.8
+
+    # ------------------------------------------------------------------
+    # _count_from_html — edge cases & confidence values
+    # ------------------------------------------------------------------
+
     def test_count_from_html_text_pattern(self):
         from agency_audit.audit.property_count import _count_from_html
 
@@ -624,6 +909,10 @@ class TestPropertyCount:
         count, conf = _count_from_html(html)
         assert count == 0
 
+    # ------------------------------------------------------------------
+    # _find_listing_page_url — URL discovery edge cases
+    # ------------------------------------------------------------------
+
     def test_find_listing_page_url(self):
         from agency_audit.audit.property_count import _find_listing_page_url
 
@@ -649,6 +938,45 @@ class TestPropertyCount:
         html = '<html><body><a href="/about">About</a></body></html>'
         url = _find_listing_page_url("https://example.com", html)
         assert url is None
+
+    def test_find_listing_page_url_imoti(self):
+        """Bulgarian 'imoti' path is recognised as a listing page."""
+        from agency_audit.audit.property_count import _find_listing_page_url
+
+        html = '<html><body><a href="/imoti">Имоти</a></body></html>'
+        url = _find_listing_page_url("https://example.com", html)
+        assert url == "https://example.com/imoti"
+
+    def test_find_listing_page_url_multiple_links(self):
+        """First matching link wins when multiple candidates exist."""
+        from agency_audit.audit.property_count import _find_listing_page_url
+
+        html = (
+            "<html><body>"
+            '<a href="/offers">Offers</a>'
+            '<a href="/search">Search</a>'
+            '<a href="/annonces">Annonces</a>'
+            "</body></html>"
+        )
+        url = _find_listing_page_url("https://example.com", html)
+        # First match in pattern order: "/offers" matches r"/offers?" first
+        assert url == "https://example.com/offers"
+
+    def test_find_listing_page_url_no_links(self):
+        """Returns None when there are no links on the page."""
+        from agency_audit.audit.property_count import _find_listing_page_url
+
+        html = "<html><body><p>No navigation here</p></body></html>"
+        url = _find_listing_page_url("https://example.com", html)
+        assert url is None
+
+    def test_find_listing_page_url_empty_href(self):
+        """Skips empty href attributes."""
+        from agency_audit.audit.property_count import _find_listing_page_url
+
+        html = '<html><body><a href="">Home</a><a href="/search">Search</a></body></html>'
+        url = _find_listing_page_url("https://example.com", html)
+        assert url == "https://example.com/search"
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +1113,71 @@ class TestTechStack:
 
 
 class TestScoring:
+    # ------------------------------------------------------------------
+    # pytest fixtures — reusable AuditData scenarios
+    # ------------------------------------------------------------------
+
+    @pytest.fixture
+    def default_config(self) -> dict:
+        """Load default scoring config once per test."""
+        return load_scoring_config()
+
+    @pytest.fixture
+    def base_audit(self) -> AuditData:
+        """Minimal AuditData with neutral defaults (robots allows, SSL valid)."""
+        return AuditData(
+            url="https://example.com",
+            robots=RobotsResult(fetched=True, allows_scraping=True),
+            ssl_valid=True,
+        )
+
+    @pytest.fixture
+    def perfect_audit(self) -> AuditData:
+        """AuditData with every positive trait — maxes out the scoring config."""
+        return AuditData(
+            url="https://perfect.example.com",
+            robots=RobotsResult(fetched=True, allows_scraping=True),
+            anti_scraping=AntiScrapingResult(detected=False),
+            api_detection=ApiDetectionResult(detected=True, api_type="graphql"),
+            property_count=PropertyCountResult(count=2000, confidence=0.9),
+            listing_quality=ListingQualityResult(
+                has_structured_data=True,
+                has_images=True,
+                has_descriptions=True,
+                has_prices=True,
+                has_locations=True,
+                has_property_map=True,
+                quality_score=1.0,
+            ),
+            tech_stack=TechStackResult(framework="WordPress"),
+            response_time_ms=200,
+            ssl_valid=True,
+        )
+
+    @pytest.fixture
+    def negative_audit(self) -> AuditData:
+        """AuditData with every negative trait — worst possible scoring."""
+        return AuditData(
+            url="https://bad.example.com",
+            robots=RobotsResult(fetched=True, allows_scraping=False),
+            anti_scraping=AntiScrapingResult(detected=True, cloudflare=True),
+            api_detection=ApiDetectionResult(detected=False),
+            property_count=PropertyCountResult(count=0),
+            listing_quality=ListingQualityResult(quality_score=0.0),
+            tech_stack=TechStackResult(),
+            response_time_ms=5000,
+            ssl_valid=False,
+        )
+
+    @pytest.fixture
+    def empty_audit(self) -> AuditData:
+        """AuditData with all defaults — simulates pre-check state."""
+        return AuditData()
+
+    # ------------------------------------------------------------------
+    # existing tests
+    # ------------------------------------------------------------------
+
     def test_default_config_loaded(self):
         config = load_scoring_config()
         assert "robots_allows" in config
@@ -927,6 +1320,197 @@ class TestScoring:
         )
         score, breakdown = compute_score(audit)
         assert sum(breakdown.values()) == score or score == 100  # might be clamped
+
+    # ------------------------------------------------------------------
+    # fixture-driven tests — perfect score, zero score, partial data,
+    # breakdown→to_dict integration, response time boundaries, tier
+    # boundaries
+    # ------------------------------------------------------------------
+
+    def test_perfect_score_is_100(self, perfect_audit, default_config):
+        """A site with every positive trait should score 100 (clamped)."""
+        score, breakdown = compute_score(perfect_audit, default_config)
+        assert score == 100, f"Expected 100, got {score}"
+        # All positive breakdown keys should be present
+        assert "robots_allows" in breakdown
+        assert "has_graphql_api" in breakdown
+        assert "property_count_1000+" in breakdown
+        assert "has_structured_data" in breakdown
+        assert "listings_have_prices" in breakdown
+        assert "listings_have_locations" in breakdown
+        assert "listings_have_images" in breakdown
+        assert "listings_have_descriptions" in breakdown
+        assert "has_property_map" in breakdown
+        assert "response_time_fast" in breakdown
+        assert "ssl_valid" in breakdown
+
+    def test_zero_score_with_neutral_config(self, base_audit, default_config):
+        """With all config weights zeroed, any audit should score 0."""
+        zero_config = {k: 0 for k in default_config}
+        zero_config["property_count_tiers"] = []
+        zero_config["min_score"] = -100
+        zero_config["max_score"] = 100
+        score, breakdown = compute_score(base_audit, zero_config)
+        assert score == 0, f"Expected 0, got {score}"
+
+    def test_empty_audit_scores_positive(self, empty_audit, default_config):
+        """Default AuditData (robots allows + SSL valid) scores 25."""
+        score, breakdown = compute_score(empty_audit, default_config)
+        assert score == 25, f"Expected 25, got {score} (breakdown={breakdown})"
+        assert "robots_allows" in breakdown
+        assert "ssl_valid" in breakdown
+
+    def test_breakdown_propagates_to_to_dict(self, perfect_audit, default_config):
+        """score_breakdown in AuditData.to_dict() matches compute_score output."""
+        score, breakdown = compute_score(perfect_audit, default_config)
+        perfect_audit.score = score
+        perfect_audit.score_breakdown = breakdown
+        data = perfect_audit.to_dict()
+        assert data["score"] == score
+        assert data["score_breakdown"] == breakdown
+        # Verify breakdown is JSON-serializable
+        import json
+
+        json.dumps(data)
+
+    def test_breakdown_keys_are_stable(self, default_config):
+        """Breakdown keys should match the config keys they draw from."""
+        valid_keys = {
+            "robots_allows",
+            "robots_disallows",
+            "has_anti_scraping",
+            "has_api",
+            "has_graphql_api",
+            "has_structured_data",
+            "listings_have_prices",
+            "listings_have_locations",
+            "listings_have_images",
+            "listings_have_descriptions",
+            "has_property_map",
+            "response_time_fast",
+            "response_time_slow",
+            "ssl_valid",
+            "ssl_invalid",
+        }
+        # property_count_tiers produce dynamic keys like "property_count_1000+"
+        audit = AuditData(
+            robots=RobotsResult(allows_scraping=True),
+            anti_scraping=AntiScrapingResult(detected=True),
+            api_detection=ApiDetectionResult(detected=True, api_type="rest"),
+            property_count=PropertyCountResult(count=1000),
+            listing_quality=ListingQualityResult(
+                has_structured_data=True,
+                has_prices=True,
+                has_locations=True,
+                has_images=True,
+                has_descriptions=True,
+                has_property_map=True,
+            ),
+            response_time_ms=200,
+            ssl_valid=True,
+        )
+        _, breakdown = compute_score(audit, default_config)
+        for key in breakdown:
+            if not key.startswith("property_count_"):
+                assert key in valid_keys, f"Unexpected breakdown key: {key}"
+
+    def test_response_time_fast_boundary(self, base_audit, default_config):
+        """Response times strictly under 500ms earn 'fast' points."""
+        # 499ms — fast
+        audit_fast = AuditData(**{**base_audit.__dict__, "response_time_ms": 499})
+        _, bd = compute_score(audit_fast, default_config)
+        assert "response_time_fast" in bd
+
+        # 500ms — neutral (not fast, not slow)
+        audit_neutral = AuditData(**{**base_audit.__dict__, "response_time_ms": 500})
+        _, bd = compute_score(audit_neutral, default_config)
+        assert "response_time_fast" not in bd
+        assert "response_time_slow" not in bd
+
+    def test_response_time_slow_boundary(self, base_audit, default_config):
+        """Response times strictly over 3000ms earn 'slow' penalty."""
+        # 3000ms — neutral (not slow)
+        audit_neutral = AuditData(**{**base_audit.__dict__, "response_time_ms": 3000})
+        _, bd = compute_score(audit_neutral, default_config)
+        assert "response_time_slow" not in bd
+
+        # 3001ms — slow
+        audit_slow = AuditData(**{**base_audit.__dict__, "response_time_ms": 3001})
+        _, bd = compute_score(audit_slow, default_config)
+        assert "response_time_slow" in bd
+
+    def test_response_time_none_no_effect(self, base_audit, default_config):
+        """None response_time_ms should produce no performance points."""
+        audit = AuditData(**{**base_audit.__dict__, "response_time_ms": None})
+        _, breakdown = compute_score(audit, default_config)
+        assert "response_time_fast" not in breakdown
+        assert "response_time_slow" not in breakdown
+
+    def test_property_count_tier_boundaries(self, base_audit, default_config):
+        """Property counts exactly at tier minimums should earn those points."""
+
+        def score_for_count(count):
+            a = AuditData(
+                **{**base_audit.__dict__, "property_count": PropertyCountResult(count=count)},
+            )
+            s, bd = compute_score(a, default_config)
+            return s, bd
+
+        # 1000+ tier
+        _, bd = score_for_count(1000)
+        assert "property_count_1000+" in bd
+        assert bd["property_count_1000+"] == default_config["property_count_tiers"][0]["points"]
+
+        # 500+ tier
+        _, bd = score_for_count(500)
+        assert "property_count_500+" in bd
+
+        # 100+ tier
+        _, bd = score_for_count(100)
+        assert "property_count_100+" in bd
+
+        # 10+ tier
+        _, bd = score_for_count(10)
+        assert "property_count_10+" in bd
+
+        # Below lowest tier — no property_count key
+        _, bd = score_for_count(5)
+        pc_keys = [k for k in bd if k.startswith("property_count_")]
+        assert pc_keys == [], f"Unexpected property_count keys: {pc_keys}"
+
+    def test_ssl_invalid_penalty(self, base_audit, default_config):
+        """Invalid SSL should apply the ssl_invalid penalty."""
+        audit = AuditData(**{**base_audit.__dict__, "ssl_valid": False})
+        _, breakdown = compute_score(audit, default_config)
+        assert "ssl_invalid" in breakdown
+        assert "ssl_valid" not in breakdown
+
+    def test_robots_default_allow(self, default_config):
+        """Default RobotsResult (allows_scraping=True) earns robots_allows."""
+        audit = AuditData(robots=RobotsResult())  # default allow
+        _, breakdown = compute_score(audit, default_config)
+        assert "robots_allows" in breakdown
+        assert "robots_disallows" not in breakdown
+
+    def test_partial_data_only_api(self, default_config):
+        """When only API detection is populated, see API keys in breakdown."""
+        audit = AuditData(
+            api_detection=ApiDetectionResult(detected=True, api_type="rest"),
+        )
+        score, breakdown = compute_score(audit, default_config)
+        assert "has_api" in breakdown
+        # Default AuditData also has robots_allows (20) + ssl_valid (5) = 45
+        assert score == 45, f"Expected 45, got {score} (breakdown={breakdown})"
+
+    def test_partial_data_only_property_count(self, base_audit, default_config):
+        """Only property_count populated — only tier key appears."""
+        audit = AuditData(
+            **{**base_audit.__dict__, "property_count": PropertyCountResult(count=800)},
+        )
+        _, breakdown = compute_score(audit, default_config)
+        pc_keys = [k for k in breakdown if k.startswith("property_count_")]
+        assert len(pc_keys) == 1
+        assert pc_keys[0] == "property_count_500+"
 
 
 # ---------------------------------------------------------------------------
