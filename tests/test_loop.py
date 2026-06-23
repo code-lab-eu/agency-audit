@@ -390,3 +390,55 @@ class TestCLICommands:
             "discover",
         ]:
             assert cmd in commands, f"{cmd} should be registered"
+
+# ──────────────────────────────────────────────────────────────────────
+# JSONB injection safety test
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestQCJSONB:
+    """Verify QC functions build JSONB safely (json.dumps, no f-string injection)."""
+
+    @pytest.mark.asyncio
+    async def test_mark_manual_review_jsonb_with_special_chars(self):
+        """reason containing quotes, backslashes, and newlines must produce valid JSON."""
+        import json
+
+        from agency_audit.loop.qc import mark_for_manual_review
+
+        captured_args: list[tuple] = []
+
+        async def capture_execute(sql, *args):
+            captured_args.append(args)
+
+        with patch("agency_audit.loop.qc.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_conn.execute = AsyncMock(side_effect=capture_execute)
+
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            reason = 'Has "quotes", back\\slash, and\nnewline'
+            severity = "warning"
+
+            await mark_for_manual_review(1, reason, severity)
+
+        assert len(captured_args) == 1
+        args = captured_args[0]
+        assert len(args) == 3
+        jsonb_param = args[1]
+
+        parsed = json.loads(jsonb_param)
+        assert isinstance(parsed, list)
+        assert len(parsed) == 1
+        assert parsed[0]["check"] == "manual_review"
+        assert parsed[0]["severity"] == severity
+        assert parsed[0]["finding"] == reason
+
+        assert "f'" not in jsonb_param
+        assert "{reason}" not in jsonb_param
+        assert "{severity}" not in jsonb_param
