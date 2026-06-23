@@ -16,7 +16,7 @@ country-by-country through the orchestrator.
 
 ## Prerequisites
 
-- Python **3.12+** (CI gate enforces ≥3.12; uv lock targets 3.12)
+- Python **3.14+**
 - [uv](https://docs.astral.sh/uv/) for package management (no pip required)
 - **PostgreSQL 16+** with the `agency_audit` database
 - Docker (optional — `docker compose up -d` spins up a disposable PG instance)
@@ -64,24 +64,29 @@ Environment variables (all prefixed `AGENCY_AUDIT_`; see
 ## Common commands
 
 ```bash
+# Full QA gate — run this before every push (lint + format check + mypy + tests).
+# Single source of truth for "is my branch ready"; mirrors the CI quality gates.
+scripts/qa.sh
+
+# Same, but auto-fix lint + formatting first, then re-check
+scripts/qa.sh --fix
+
 # Run the test suite (NOT dependent on a live database — pool is mocked)
 uv run --extra dev pytest
 
 # Run with coverage
 uv run --extra dev pytest --cov=src/agency_audit --cov-report=term
 
-# Lint
-uvx ruff check src/ tests/
-
-# Format check (CI gate, enforce double-quotes)
-uvx ruff format --check src/ tests/
-
-# Type check (CI gate)
-uvx --from mypy mypy src/
+# Individual gates (all run via `uv run --extra dev` so they use the project's
+# Python 3.14 interpreter — do NOT run mypy via `uvx`, which defaults to an
+# older Python that cannot parse PEP 695 generics and reports false syntax errors).
+uv run --extra dev ruff check src/ tests/          # Lint
+uv run --extra dev ruff format --check src/ tests/ # Format check (enforce double-quotes)
+uv run --extra dev mypy src/                       # Type check
 
 # Apply auto-fixes before committing
-uvx ruff check --fix src/ tests/
-uvx ruff format src/ tests/
+uv run --extra dev ruff check --fix src/ tests/
+uv run --extra dev ruff format src/ tests/
 
 # Start the web dashboard (FastAPI + HTMX, http://0.0.0.0:8000)
 uv run agency-audit serve
@@ -146,6 +151,8 @@ agency-audit/
     test_mcp_server.py        # MCP server integration tests (needs live DB)
     test_audit_coverage.py    # Comprehensive audit coverage tests
     integration/test_pipeline.py  # End-to-end pipeline tests
+  scripts/
+    qa.sh                     # Full local QA gate (lint + format + mypy + tests); run before every push
   pyproject.toml              # Project metadata, deps, ruff, pytest, mypy config
   docker-compose.yml          # Local PostgreSQL 16
   scoring_config.yaml         # Audit scoring weights
@@ -159,7 +166,7 @@ agency-audit/
 - **Lint rules:** `E, F, I, UP, B, SIM` (pyflakes, import sorting, pyupgrade,
   flake8-bugbear, code simplification)
 - **Imports:** `from __future__ import annotations` at the top of every
-  type-annotated module (targets Python ≥3.12 but keeps compatibility)
+  type-annotated module (targets Python ≥3.14)
   Import order: stdlib → third-party → local (enforced by `I` rule)
 - **Types:** Pydantic `BaseSettings` for config, dataclasses for audit result
   models, type hints on all public functions
@@ -179,8 +186,9 @@ agency-audit/
 - **Test structure:** Module-level test files mirror source layout
   (`test_audit.py` → `src/agency_audit/audit/`, `test_loop.py` →
   `src/agency_audit/loop/`)
-- **Before pushing:** `uv run --extra dev pytest` must be green and
-  `uvx ruff check .` must be clean
+- **Before pushing:** run `scripts/qa.sh` — it must exit green. This runs all
+  CI quality gates (ruff lint, ruff format check, mypy) plus the test suite in
+  one shot, so a green run here means CI should pass too
 
 ## Contribution workflow
 
@@ -192,12 +200,12 @@ merge conflicts.
    `git fetch origin && git checkout -b feat/<slug> origin/master`
    (use `fix/<slug>` for fixes). In a worktree:
    `git fetch origin && git worktree add -b feat/<slug> <path> origin/master`.
-2. Make changes, write tests, run the full suite
+2. Make changes, write tests, run the full QA gate (`scripts/qa.sh`)
 3. Commit with [conventional commit](https://www.conventionalcommits.org/)
    prefixes (`feat:`, `fix:`, `test:`, `refactor:`)
 4. **Re-sync before pushing.** `master` may have moved while you worked:
    `git fetch origin && git rebase origin/master`, resolve any conflicts, then
-   re-run `uv run --extra dev pytest` and `uvx ruff check .` before continuing.
+   re-run `scripts/qa.sh` before continuing.
 5. Push your branch and open a PR against `master` — CI runs ruff lint,
    ruff format check, and mypy.  A human reviews before merge
 6. **If the PR reports conflicts with `master`**, rebase onto the latest and
