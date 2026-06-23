@@ -370,7 +370,7 @@ async def _audit_country_websites(
                                score = $2,
                                audit_status = 'audited',
                                last_audited_at = now(),
-                               audit_attempts = audit_attempts + 1,
+                               audit_attempts = 0,
                                audit_last_error = NULL
                            WHERE id = $3""",
                         json.dumps(audit_result.to_dict()),
