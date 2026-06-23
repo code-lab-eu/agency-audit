@@ -124,8 +124,9 @@ async def mark_failed_website(website_id: int, error: str) -> None:
         await conn.execute(
             """INSERT INTO audit_log
                    (run_type, country, items_processed, items_failed, summary, error)
-               SELECT 'audit', wc.country, 1, 1, '{}'::jsonb, $1
+               SELECT 'audit', c.country, 1, 1, '{}'::jsonb, $1
                FROM website_cities wc
+               JOIN cities c ON wc.city_id = c.id
                WHERE wc.website_id = $2
                LIMIT 1""",
             error,
