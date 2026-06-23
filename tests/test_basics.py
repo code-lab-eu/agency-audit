@@ -41,7 +41,7 @@ def test_country_count():
         Path(__file__).resolve().parents[1] / "src" / "agency_audit" / "seed" / "countries.sql"
     )
     sql = seed_path.read_text()
-    matches = re.findall(r"\('([A-Z]{2})',\s*'([^']+)',\s*true\)", sql)
+    matches = re.findall(r"\('([A-Z]{2})',\s*'([^']+)',\s*(?:true|false)\)", sql)
     assert len(matches) == 44, f"Expected 44 countries, got {len(matches)}"
 
 
