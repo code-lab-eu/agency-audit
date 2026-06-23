@@ -51,9 +51,7 @@ async def setup_ci_db() -> None:
         print(f"Migrations applied: {applied}")
 
         # Seed countries
-        seed_path = (
-            Path(__file__).parents[2] / "src" / "agency_audit" / "seed" / "countries.sql"
-        )
+        seed_path = Path(__file__).parents[2] / "src" / "agency_audit" / "seed" / "countries.sql"
         countries_sql = seed_path.read_text(encoding="utf-8")
         await conn.execute(countries_sql)
         print("Countries seeded")
@@ -63,9 +61,7 @@ async def setup_ci_db() -> None:
         print("Cities seeded")
 
         # Verify
-        city_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM cities WHERE country = 'BG'"
-        )
+        city_count = await conn.fetchval("SELECT COUNT(*) FROM cities WHERE country = 'BG'")
         country_count = await conn.fetchval("SELECT COUNT(*) FROM countries")
         print(f"Verification: {country_count} countries, {city_count} BG cities")
 
