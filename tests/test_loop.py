@@ -244,7 +244,6 @@ class TestQC:
             findings = await detect_duplicates()
             assert findings == []
 
-
 # ──────────────────────────────────────────────────────────────────────
 # Re-audit tests
 # ──────────────────────────────────────────────────────────────────────
@@ -392,6 +391,150 @@ class TestOrchestrator:
         assert "40✓/5✗ audits" in s
         assert "8 qc" in s
         assert "12 reaudits" in s
+
+
+class TestAuditAttemptsCounter:
+    """Tests for audit_attempts counter behaviour.
+
+    audit_attempts must reset to 0 on success and increment only on failure,
+    so that audit_attempts < 3 filters for *consecutive* failures rather than
+    total lifetime attempts.
+    """
+
+    @pytest.mark.asyncio
+    async def test_successful_audit_resets_attempts_to_zero(self):
+        """On audit success, the UPDATE must set audit_attempts = 0."""
+        from agency_audit.loop.orchestrator import _audit_country_websites
+
+        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            # Return one website to audit
+            mock_conn.fetch.return_value = [{"id": 1, "url": "https://example.com"}]
+
+            # Mock retry to succeed — returns a fake audit result
+            class FakeAuditResult:
+                @staticmethod
+                def to_dict():
+                    return {"score": 85}
+                score = 85
+
+            with patch("agency_audit.loop.orchestrator.retry",
+                       new_callable=AsyncMock) as mock_retry:
+                mock_retry.return_value = FakeAuditResult()
+
+                result = await _audit_country_websites("BG", concurrency=1)
+
+            assert result["succeeded"] == 1
+            assert result["failed"] == 0
+
+            # Collect all UPDATE calls on the mock connection
+            update_calls = [
+                call for call in mock_conn.execute.call_args_list
+                if "UPDATE websites" in str(call.args[0])
+            ]
+            assert len(update_calls) >= 1, "Expected at least one UPDATE call"
+
+            success_update = str(update_calls[0].args[0])
+            assert "audit_attempts = 0" in success_update, (
+                "successful audit should reset audit_attempts to 0, got: "
+                + success_update
+            )
+            assert "audit_attempts = audit_attempts + 1" not in success_update, (
+                "successful audit should NOT increment audit_attempts"
+            )
+
+    @pytest.mark.asyncio
+    async def test_failed_audit_increments_attempts(self):
+        """On audit failure, the UPDATE must keep audit_attempts = audit_attempts + 1."""
+        from agency_audit.loop.orchestrator import _audit_country_websites
+
+        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            mock_conn.fetch.return_value = [{"id": 1, "url": "https://example.com"}]
+
+            # Mock retry to fail
+            with patch("agency_audit.loop.orchestrator.retry",
+                       new_callable=AsyncMock) as mock_retry:
+                mock_retry.side_effect = RuntimeError("audit failed after retries")
+
+                result = await _audit_country_websites("BG", concurrency=1)
+
+            assert result["failed"] == 1
+            assert result["succeeded"] == 0
+
+            # Find the failure UPDATE
+            update_calls = [
+                call for call in mock_conn.execute.call_args_list
+                if "UPDATE websites" in str(call.args[0])
+            ]
+            assert len(update_calls) >= 1
+
+            failure_update = str(update_calls[0].args[0])
+            assert "audit_attempts = audit_attempts + 1" in failure_update, (
+                "failed audit should increment audit_attempts, got: "
+                + failure_update
+            )
+            assert "audit_attempts = 0" not in failure_update, (
+                "failed audit should NOT reset audit_attempts to 0"
+            )
+
+    @pytest.mark.asyncio
+    async def test_reaudit_scheduling_resets_attempts_to_zero(self):
+        """Re-audit scheduling should reset audit_attempts to 0, not increment."""
+        from agency_audit.loop.reaudit import schedule_reaudits
+
+        with patch("agency_audit.loop.reaudit.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            # Return one overdue website
+            mock_conn.fetch.return_value = [
+                {"id": 42, "url": "https://example.com", "score": 75,
+                 "age_days": 45},
+            ]
+
+            result = await schedule_reaudits(interval_days=30, limit=10)
+
+            assert result["queued"] == 1
+
+            # The UPDATE that sets status back to 'pending' should reset
+            # audit_attempts to 0, not increment
+            update_calls = [
+                call for call in mock_conn.execute.call_args_list
+                if "UPDATE websites" in str(call.args[0])
+                and "SET audit_status = 'pending'" in str(call.args[0])
+            ]
+            assert len(update_calls) == 1, (
+                "Expected exactly one UPDATE websites SET audit_status='pending' call"
+            )
+
+            reaudit_update = str(update_calls[0].args[0])
+            assert "audit_attempts = 0" in reaudit_update, (
+                "re-audit scheduling should reset audit_attempts to 0, got: "
+                + reaudit_update
+            )
+            assert "audit_attempts = audit_attempts + 1" not in reaudit_update, (
+                "re-audit scheduling should NOT increment audit_attempts"
+            )
 
 
 # ──────────────────────────────────────────────────────────────────────
