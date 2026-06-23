@@ -134,11 +134,12 @@ async def schedule_reaudits(
 
         website_ids = [row["id"] for row in rows]
 
-        # Reset status to pending and increment attempt counter
+        # Reset status to pending for re-audit; reset attempt counter since
+        # these websites were previously audited successfully
         await conn.execute(
             """UPDATE websites
                SET audit_status = 'pending',
-                   audit_attempts = audit_attempts + 1,
+                   audit_attempts = 0,
                    last_audited_at = NULL
                WHERE id = ANY($1)""",
             website_ids,
