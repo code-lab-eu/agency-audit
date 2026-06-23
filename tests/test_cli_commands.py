@@ -263,6 +263,36 @@ def test_qc_list_review_action():
         assert "No websites flagged" in result.output
 
 
+def test_qc_list_review_action_with_data():
+    """qc --action list-review with flagged websites prints review table."""
+    with patch("agency_audit.loop.qc.get_websites_needing_review") as mock_review:
+        mock_review.return_value = [
+            {
+                "id": 1,
+                "url": "https://example.com",
+                "label": "Example Agency",
+                "score": 0,
+                "review_reason": "suspicious score",
+                "qc_checks": None,
+            },
+            {
+                "id": 2,
+                "url": "https://test.org",
+                "label": "Test Agency",
+                "score": 100,
+                "review_reason": "perfect score",
+                "qc_checks": None,
+            },
+        ]
+        result = runner.invoke(app, ["qc", "--action", "list-review"])
+        assert result.exit_code == 0
+        assert "Websites Needing Review (2)" in result.output
+        assert "example.com" in result.output
+        assert "test.org" in result.output
+        assert "suspicious score" in result.output
+        assert "perfect score" in result.output
+
+
 def test_qc_mark_review_action():
     """qc --action mark-review invokes mark_for_manual_review and prints confirmation."""
     with patch("agency_audit.loop.qc.mark_for_manual_review"):
