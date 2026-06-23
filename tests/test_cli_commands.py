@@ -113,6 +113,7 @@ def test_audit_arg_validation():
     with patch("agency_audit.cli.asyncio.run") as mock_asyncio:
         result = runner.invoke(app, ["audit"])
         assert result.exit_code == 1
+        assert "Either --website-id or --url is required" in result.output
         mock_asyncio.assert_not_called()
 
 
@@ -122,7 +123,7 @@ def test_audit_arg_validation():
 
 
 def test_stats_command_executes():
-    """stats command executes with mocked DB."""
+    """stats command prints database statistics table."""
     mock_pool, mock_conn = _make_pool_mock()
     # stats uses pool.fetchval() directly, not acquire()
     mock_pool.fetchval = AsyncMock(return_value=10)
@@ -136,6 +137,10 @@ def test_stats_command_executes():
     ):
         result = runner.invoke(app, ["stats"])
         assert result.exit_code == 0
+        assert "Database Stats" in result.output
+        assert "Countries" in result.output
+        assert "Cities" in result.output
+        assert "Websites" in result.output
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -144,7 +149,7 @@ def test_stats_command_executes():
 
 
 def test_run_command_executes():
-    """run command invokes run_country via asyncio.run."""
+    """run command invokes run_country and prints loop results table."""
     with patch("agency_audit.loop.orchestrator.run_country") as mock_run:
         mock_run.return_value = {
             "country": "BG",
@@ -165,6 +170,9 @@ def test_run_command_executes():
             ],
         )
         assert result.exit_code == 0
+        assert "Loop Results" in result.output
+        assert "BG" in result.output
+        assert "0.01s" in result.output
 
 
 def test_run_command_with_result_phases():
@@ -174,7 +182,7 @@ def test_run_command_with_result_phases():
             "country": "BG",
             "phases": {
                 "discovery": {"cities_processed": 3, "agencies_found": 10},
-                "audit": {"succeeded": 8, "failed": 2, "websites_audited": 10},
+                "audit": {"audits_succeeded": 8, "audits_failed": 2, "websites_audited": 10},
                 "qc": {"findings": 2, "suspicious_scores": 1, "duplicate_domains": 1},
                 "reaudit": {"queued": 0, "oldest_age_days": None},
             },
@@ -183,6 +191,19 @@ def test_run_command_with_result_phases():
         }
         result = runner.invoke(app, ["run", "--country", "BG"])
         assert result.exit_code == 0
+        assert "Loop Results" in result.output
+        assert "BG" in result.output
+        assert "Discovery" in result.output
+        assert "3 cities" in result.output
+        assert "10 agencies" in result.output
+        assert "Audit" in result.output
+        assert "✓" in result.output
+        assert "✗" in result.output
+        assert "QC" in result.output
+        assert "2 findings" in result.output
+        assert "Re-audit" in result.output
+        assert "0 websites" in result.output
+        assert "5.5s" in result.output
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -191,7 +212,7 @@ def test_run_command_with_result_phases():
 
 
 def test_run_all_command_executes():
-    """run-all command invokes run_all_countries."""
+    """run-all command invokes run_all_countries and prints summary table."""
     with patch("agency_audit.loop.orchestrator.run_all_countries") as mock_run:
         mock_run.return_value = {
             "results": {},
@@ -209,6 +230,8 @@ def test_run_all_command_executes():
         }
         result = runner.invoke(app, ["run-all", "--countries", "BG"])
         assert result.exit_code == 0
+        assert "Run-All Results" in result.output
+        assert "Countries processed" in result.output
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -217,7 +240,7 @@ def test_run_all_command_executes():
 
 
 def test_qc_run_action():
-    """qc --action run invokes run_qc_checks."""
+    """qc --action run invokes run_qc_checks and prints results table."""
     with patch("agency_audit.loop.qc.run_qc_checks") as mock_qc:
         mock_qc.return_value = {
             "suspicious_scores": 2,
@@ -226,18 +249,22 @@ def test_qc_run_action():
         }
         result = runner.invoke(app, ["qc", "--action", "run"])
         assert result.exit_code == 0
+        assert "QC Check Results" in result.output
+        assert "Suspicious scores" in result.output
+        assert "3" in result.output
 
 
 def test_qc_list_review_action():
-    """qc --action list-review invokes get_websites_needing_review."""
+    """qc --action list-review invokes get_websites_needing_review and prints result."""
     with patch("agency_audit.loop.qc.get_websites_needing_review") as mock_review:
         mock_review.return_value = []
         result = runner.invoke(app, ["qc", "--action", "list-review"])
         assert result.exit_code == 0
+        assert "No websites flagged" in result.output
 
 
 def test_qc_mark_review_action():
-    """qc --action mark-review invokes mark_for_manual_review."""
+    """qc --action mark-review invokes mark_for_manual_review and prints confirmation."""
     with patch("agency_audit.loop.qc.mark_for_manual_review"):
         result = runner.invoke(
             app,
@@ -252,13 +279,15 @@ def test_qc_mark_review_action():
             ],
         )
         assert result.exit_code == 0
+        assert "Flagged website 42 for manual review: suspicious" in result.output
 
 
 def test_qc_mark_review_missing_args():
-    """qc --action mark-review without required args exits with error."""
+    """qc --action mark-review without required args exits with error and message."""
     with patch("agency_audit.loop.qc.mark_for_manual_review"):
         result = runner.invoke(app, ["qc", "--action", "mark-review"])
         assert result.exit_code == 1
+        assert "--website-id and --reason are required" in result.output
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -267,19 +296,23 @@ def test_qc_mark_review_missing_args():
 
 
 def test_reaudit_trigger_action():
-    """reaudit --action trigger invokes schedule_reaudits."""
+    """reaudit --action trigger invokes schedule_reaudits and prints result."""
     with patch("agency_audit.loop.reaudit.schedule_reaudits") as mock_sched:
         mock_sched.return_value = {"queued": 10, "oldest_age_days": 45}
         result = runner.invoke(app, ["reaudit", "--action", "trigger"])
         assert result.exit_code == 0
+        assert "10 websites queued" in result.output
+        assert "oldest: 45d" in result.output
 
 
 def test_reaudit_trigger_with_country():
-    """reaudit --action trigger filters by country."""
+    """reaudit --action trigger filters by country and prints result."""
     with patch("agency_audit.loop.reaudit.schedule_reaudits") as mock_sched:
         mock_sched.return_value = {"queued": 3, "oldest_age_days": 30}
         result = runner.invoke(app, ["reaudit", "--action", "trigger", "--country", "BG"])
         assert result.exit_code == 0
+        assert "3 websites queued" in result.output
+        assert "oldest: 30d" in result.output
 
 
 def test_reaudit_queue_action_empty():
@@ -288,6 +321,7 @@ def test_reaudit_queue_action_empty():
         mock_queue.return_value = []
         result = runner.invoke(app, ["reaudit", "--action", "queue"])
         assert result.exit_code == 0
+        assert "No websites overdue" in result.output
 
 
 def test_reaudit_queue_action_with_data():
@@ -306,6 +340,9 @@ def test_reaudit_queue_action_with_data():
         ]
         result = runner.invoke(app, ["reaudit", "--action", "queue"])
         assert result.exit_code == 0
+        assert "Re-Audit Queue" in result.output
+        assert "example.com" in result.output
+        assert "170d" in result.output
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -314,7 +351,7 @@ def test_reaudit_queue_action_with_data():
 
 
 def test_progress_command_with_data():
-    """progress command displays progress table."""
+    """progress command displays progress tables with data."""
     with patch("agency_audit.loop.tracking.get_progress") as mock_prog:
         mock_prog.return_value = {
             "overview": {
@@ -356,6 +393,11 @@ def test_progress_command_with_data():
         }
         result = runner.invoke(app, ["progress"])
         assert result.exit_code == 0
+        assert "Agency Audit — Pipeline" in result.output
+        assert "44" in result.output
+        assert "50" in result.output
+        assert "150" in result.output
+        assert "Bulgaria" in result.output
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -364,7 +406,7 @@ def test_progress_command_with_data():
 
 
 def test_discover_command():
-    """discover command invokes run_discovery."""
+    """discover command invokes run_discovery and prints results table."""
     with patch("agency_audit.discovery.run_discovery") as mock_disc:
         mock_disc.return_value = {
             "countries_processed": 1,
@@ -374,6 +416,9 @@ def test_discover_command():
         }
         result = runner.invoke(app, ["discover", "--country", "BG", "--max-cities", "3"])
         assert result.exit_code == 0
+        assert "Discovery Pipeline Results" in result.output
+        assert "BG" in result.output
+        assert "15" in result.output
 
 
 def test_discover_command_no_results():
@@ -387,6 +432,7 @@ def test_discover_command_no_results():
         }
         result = runner.invoke(app, ["discover", "--country", "XX"])
         assert result.exit_code == 0
+        assert "No pending cities" in result.output
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -395,8 +441,9 @@ def test_discover_command_no_results():
 
 
 def test_serve_command_executes():
-    """serve command invokes uvicorn.run (mocked to not block)."""
+    """serve command invokes uvicorn.run (mocked to not block) and prints status."""
     with patch("uvicorn.run") as mock_run:
         result = runner.invoke(app, ["serve", "--host", "127.0.0.1", "--port", "9999"])
         assert result.exit_code == 0
+        assert "Starting Agency Audit dashboard" in result.output
         mock_run.assert_called_once()
