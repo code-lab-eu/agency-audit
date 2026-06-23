@@ -18,6 +18,7 @@ from agency_audit.audit.anti_scraping import (
     _check_cloudflare_headers,
     _check_js_only_rendering,
     _check_recaptcha,
+    detect_anti_scraping,
 )
 from agency_audit.audit.api_detection import (
     _check_jsonld_structured_data,
@@ -163,6 +164,192 @@ class TestAntiScraping:
     def test_no_body_is_js_only(self):
         html = "<html></html>"
         assert _check_js_only_rendering(html) is True
+
+
+# ---------------------------------------------------------------------------
+# anti-scraping integration (detect_anti_scraping via httpx.MockTransport)
+# ---------------------------------------------------------------------------
+
+
+class TestAntiScrapingIntegration:
+    """Integration tests for detect_anti_scraping using mocked httpx responses."""
+
+    # -- helpers --
+
+    @staticmethod
+    def _make_response(html: str, url: str = "https://example.com", **headers) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=html,
+            headers=headers,
+            request=httpx.Request("GET", url),
+        )
+
+    @staticmethod
+    async def _run(url: str, html: str = "<html><body>OK</body></html>", **headers):
+        response = TestAntiScrapingIntegration._make_response(html, url, **headers)
+        return await detect_anti_scraping(url, response=response)
+
+    # -- Cloudflare tests --
+
+    async def test_cloudflare_via_server_header(self):
+        result = await self._run("https://example.com", server="cloudflare")
+        assert result.cloudflare is True
+        assert result.detected is True
+        assert "cloudflare" in result.details
+
+    async def test_cloudflare_via_cf_ray_header(self):
+        result = await self._run("https://example.com", **{"cf-ray": "abc123"})
+        assert result.cloudflare is True
+        assert result.detected is True
+        assert "cloudflare" in result.details
+
+    async def test_cloudflare_via_challenge_body(self):
+        html = "<html><body>__cf_bm=test; Just a moment...</body></html>"
+        result = await self._run("https://example.com", html=html)
+        assert result.cloudflare is True
+        assert result.detected is True
+        assert "cloudflare" in result.details
+
+    async def test_no_cloudflare_integration(self):
+        result = await self._run("https://example.com", server="nginx")
+        assert result.cloudflare is False
+
+    # -- reCAPTCHA tests --
+
+    async def test_recaptcha_detected_integration(self):
+        html = '<script src="https://www.google.com/recaptcha/api.js"></script>'
+        result = await self._run("https://example.com", html=html)
+        assert result.recaptcha is True
+        assert result.detected is True
+        assert "recaptcha" in result.details
+
+    async def test_recaptcha_via_grecaptcha(self):
+        html = '<script>grecaptcha.render("captcha")</script>'
+        result = await self._run("https://example.com", html=html)
+        assert result.recaptcha is True
+        assert result.detected is True
+        assert "recaptcha" in result.details
+
+    async def test_no_recaptcha_integration(self):
+        result = await self._run("https://example.com")
+        assert result.recaptcha is False
+
+    # -- Bot detection header tests --
+
+    async def test_bot_detection_headers_found_integration(self):
+        result = await self._run("https://example.com", **{"x-sucuri-id": "12345"})
+        assert result.bot_detection_headers is True
+        assert result.detected is True
+        assert any("sucuri" in d for d in result.details)
+
+    async def test_no_bot_detection_headers_integration(self):
+        result = await self._run("https://example.com")
+        assert result.bot_detection_headers is False
+
+    # -- JS-only rendering tests --
+
+    async def test_js_only_rendering_detected_integration(self):
+        html = (
+            "<html><body><noscript>Please enable JavaScript</noscript>"
+            '<script src="app.js"></script></body></html>'
+        )
+        result = await self._run("https://example.com", html=html)
+        assert result.js_only_rendering is True
+        assert result.detected is True
+        assert "js_only_rendering" in result.details
+
+    async def test_normal_page_not_js_only(self):
+        html = "<html><body>" + "x" * 500 + "</body></html>"
+        result = await self._run("https://example.com", html=html)
+        assert result.js_only_rendering is False
+
+    # -- Combined detection --
+
+    async def test_combined_detection(self):
+        html = "<html><body>Just a moment... __cf_bm=test</body></html>"
+        result = await self._run(
+            "https://example.com",
+            html=html,
+            server="cloudflare",
+            **{"cf-ray": "abc123", "x-sucuri-id": "12345"}
+        )
+        assert result.cloudflare is True
+        assert result.recaptcha is False  # no recaptcha in html
+        assert result.bot_detection_headers is True
+        assert result.detected is True
+        assert "cloudflare" in result.details
+        assert any("sucuri" in d for d in result.details)
+
+    async def test_combined_cloudflare_recaptcha_bot(self):
+        html = (
+            '<script src="https://www.google.com/recaptcha/api.js"></script>'
+            "<body>Just a moment... __cf_bm=test</body>"
+        )
+        result = await self._run(
+            "https://example.com",
+            html=html,
+            server="cloudflare",
+            **{"x-sucuri-id": "12345"}
+        )
+        assert result.cloudflare is True
+        assert result.recaptcha is True
+        assert result.bot_detection_headers is True
+        assert result.detected is True
+
+    # -- Error handling --
+
+    async def test_connect_error_graceful_degradation(self):
+        """Connection errors should produce a result with error detail, not crash."""
+
+        def error_handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("Connection refused")
+
+        transport = httpx.MockTransport(error_handler)
+        client = httpx.AsyncClient(transport=transport)
+        try:
+            result = await detect_anti_scraping(
+                "https://unreachable.test", client=client
+            )
+            assert result.detected is False
+            assert any("error" in d for d in result.details)
+        finally:
+            await client.aclose()
+
+    # -- Pre-fetched response --
+
+    async def test_pre_fetched_response_no_second_call(self):
+        """Passing response= should use it without making a second HTTP call."""
+        html = '<script src="https://www.google.com/recaptcha/api.js"></script>'
+        response = httpx.Response(
+            200,
+            text=html,
+            headers={"server": "cloudflare"},
+            request=httpx.Request("GET", "https://example.com"),
+        )
+        result = await detect_anti_scraping(
+            "https://example.com", response=response
+        )
+        assert result.cloudflare is True
+        assert result.recaptcha is True
+        assert result.detected is True
+
+    # -- Normal page: nothing detected --
+
+    async def test_normal_page_nothing_detected(self):
+        html = (
+            "<html><head><title>Real Estate Agency</title></head>"
+            "<body><p>Welcome to our agency.</p></body></html>"
+        )
+        result = await self._run(
+            "https://example.com", html=html, server="nginx"
+        )
+        assert result.detected is False
+        assert result.cloudflare is False
+        assert result.recaptcha is False
+        assert result.bot_detection_headers is False
+        assert result.js_only_rendering is False
+        assert result.details == []
 
 
 # ---------------------------------------------------------------------------
