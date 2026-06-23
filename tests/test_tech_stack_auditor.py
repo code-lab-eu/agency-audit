@@ -204,7 +204,7 @@ class TestFrameworkFromHtml:
             ('<div data-reactroot="true">', "React"),
             ('<script src="vue.js"></script>', "Vue.js"),
             ("vue.min.js", "Vue.js"),
-            ('<div data-v-abc123>', "Vue.js"),
+            ("<div data-v-abc123>", "Vue.js"),
             ("angular.js", "Angular"),
             ("ng-app", "Angular"),
             ("ng-controller", "Angular"),
@@ -224,9 +224,7 @@ class TestFrameworkFromHtml:
     def test_case_insensitive(self):
         """HTML framework detection is case-insensitive."""
         html = (
-            '<html><head>'
-            '<script src="/WP-CONTENT/themes/t.js"></script>'
-            "</head><body></body></html>"
+            '<html><head><script src="/WP-CONTENT/themes/t.js"></script></head><body></body></html>'
         )
         assert _detect_framework_from_html(html) == "WordPress"
 
@@ -266,9 +264,7 @@ class TestCdnDetection:
 
     def test_priority_order(self):
         """First matching CDN header wins."""
-        headers = httpx.Headers(
-            {"cf-ray": "abc", "x-fastly-request-id": "xyz"}
-        )
+        headers = httpx.Headers({"cf-ray": "abc", "x-fastly-request-id": "xyz"})
         # cf-ray appears first in CDN_HEADERS dict iteration order
         result = _detect_cdn(headers)
         assert result == "Cloudflare"
@@ -586,9 +582,7 @@ class TestResponseTime:
         def handler(req: httpx.Request) -> httpx.Response:
             url = str(req.url)
             if "/robots.txt" in url:
-                return httpx.Response(
-                    200, text="User-agent: *\nAllow: /\n", request=req
-                )
+                return httpx.Response(200, text="User-agent: *\nAllow: /\n", request=req)
             return httpx.Response(
                 200,
                 text="<html><body>Hello</body></html>",
@@ -597,9 +591,7 @@ class TestResponseTime:
             )
 
         transport = httpx.MockTransport(handler)
-        async with httpx.AsyncClient(
-            transport=transport, follow_redirects=True
-        ) as client:
+        async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
             result = await audit_website("https://example.com", client=client)
         assert isinstance(result.response_time_ms, float)
         assert result.response_time_ms >= 0
@@ -609,9 +601,7 @@ class TestResponseTime:
 
         def handler(req: httpx.Request) -> httpx.Response:
             if "/robots.txt" in str(req.url):
-                return httpx.Response(
-                    200, text="User-agent: *\nAllow: /\n", request=req
-                )
+                return httpx.Response(200, text="User-agent: *\nAllow: /\n", request=req)
             return httpx.Response(
                 200,
                 text="<html><body>Hello</body></html>",
@@ -620,9 +610,7 @@ class TestResponseTime:
             )
 
         transport = httpx.MockTransport(handler)
-        async with httpx.AsyncClient(
-            transport=transport, follow_redirects=True
-        ) as client:
+        async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
             result = await audit_website("https://example.com", client=client)
         assert isinstance(result.response_time_ms, float)
 
@@ -633,9 +621,7 @@ class TestResponseTime:
             raise httpx.ConnectError("Connection refused")
 
         transport = httpx.MockTransport(handler)
-        async with httpx.AsyncClient(
-            transport=transport, follow_redirects=True
-        ) as client:
+        async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
             result = await audit_website("https://example.com", client=client)
         # response_time_ms is not set on error path
         assert result.response_time_ms is None
@@ -704,9 +690,7 @@ class TestDetectTechStack:
                 **kwargs,
             )
 
-        with patch(
-            "agency_audit.audit.tech_stack.httpx.AsyncClient", side_effect=mock_client
-        ):
+        with patch("agency_audit.audit.tech_stack.httpx.AsyncClient", side_effect=mock_client):
             result = await detect_tech_stack("https://example.com")
         assert result.framework == "WordPress"
         assert result.cdn == "Cloudflare"
@@ -736,9 +720,7 @@ class TestDetectTechStack:
                 **kwargs,
             )
 
-        with patch(
-            "agency_audit.audit.tech_stack.httpx.AsyncClient", side_effect=mock_client
-        ):
+        with patch("agency_audit.audit.tech_stack.httpx.AsyncClient", side_effect=mock_client):
             result = await detect_tech_stack("https://example.com")
         assert result.framework == "WordPress"
 
@@ -748,9 +730,7 @@ class TestDetectTechStack:
         def error_handler(req: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("Connection failed")
 
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(error_handler)
-        ) as client:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(error_handler)) as client:
             result = await detect_tech_stack("https://example.com", client=client)
         # Should return default TechStackResult with no data
         assert result.framework is None
@@ -795,7 +775,7 @@ class TestDetectTechStack:
     async def test_technologies_includes_framework(self):
         """Framework is prepended to the technologies list."""
         html = (
-            '<html><head>'
+            "<html><head>"
             '<script src="/wp-content/themes/t/app.js"></script>'
             '<script src="jquery.min.js"></script>'
             "</head><body></body></html>"
@@ -826,9 +806,7 @@ class TestAuditorLanguageAndSsl:
         def handler(req: httpx.Request) -> httpx.Response:
             url = str(req.url)
             if "/robots.txt" in url:
-                return httpx.Response(
-                    200, text="User-agent: *\nAllow: /\n", request=req
-                )
+                return httpx.Response(200, text="User-agent: *\nAllow: /\n", request=req)
             return httpx.Response(
                 200,
                 text='<html lang="fr"><body>Bienvenue</body></html>',
@@ -837,9 +815,7 @@ class TestAuditorLanguageAndSsl:
             )
 
         transport = httpx.MockTransport(handler)
-        async with httpx.AsyncClient(
-            transport=transport, follow_redirects=True
-        ) as client:
+        async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
             result = await audit_website("https://example.com", client=client)
         assert result.language == "fr"
 
@@ -849,9 +825,7 @@ class TestAuditorLanguageAndSsl:
         def handler(req: httpx.Request) -> httpx.Response:
             url = str(req.url)
             if "/robots.txt" in url:
-                return httpx.Response(
-                    200, text="User-agent: *\nAllow: /\n", request=req
-                )
+                return httpx.Response(200, text="User-agent: *\nAllow: /\n", request=req)
             return httpx.Response(
                 200,
                 text="<html><body>Test</body></html>",
@@ -860,9 +834,7 @@ class TestAuditorLanguageAndSsl:
             )
 
         transport = httpx.MockTransport(handler)
-        async with httpx.AsyncClient(
-            transport=transport, follow_redirects=True
-        ) as client:
+        async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
             result = await audit_website("https://example.com", client=client)
         assert result.language == "de"
 
@@ -893,9 +865,7 @@ class TestAuditorLanguageAndSsl:
             patch("socket.create_connection", return_value=mock_socket),
             patch("ssl.create_default_context", return_value=mock_ctx),
         ):
-            async with httpx.AsyncClient(
-                transport=transport, follow_redirects=True
-            ) as client:
+            async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
                 result = await audit_website("https://example.com", client=client)
         assert result.ssl_valid is True
 
@@ -904,9 +874,7 @@ class TestAuditorLanguageAndSsl:
 
         def handler(req: httpx.Request) -> httpx.Response:
             if "/robots.txt" in str(req.url):
-                return httpx.Response(
-                    200, text="User-agent: *\nAllow: /\n", request=req
-                )
+                return httpx.Response(200, text="User-agent: *\nAllow: /\n", request=req)
             return httpx.Response(
                 200,
                 text="<html><body>Hello</body></html>",
@@ -915,9 +883,7 @@ class TestAuditorLanguageAndSsl:
             )
 
         transport = httpx.MockTransport(handler)
-        async with httpx.AsyncClient(
-            transport=transport, follow_redirects=True
-        ) as client:
+        async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
             result = await audit_website("http://example.com", client=client)
         # HTTP URL → _check_ssl_valid returns False immediately
         assert result.ssl_valid is False
@@ -927,9 +893,7 @@ class TestAuditorLanguageAndSsl:
 
         def handler(req: httpx.Request) -> httpx.Response:
             if "/robots.txt" in str(req.url):
-                return httpx.Response(
-                    200, text="User-agent: *\nAllow: /\n", request=req
-                )
+                return httpx.Response(200, text="User-agent: *\nAllow: /\n", request=req)
             return httpx.Response(
                 200,
                 text="<html><body>Hello</body></html>",
@@ -938,9 +902,7 @@ class TestAuditorLanguageAndSsl:
             )
 
         transport = httpx.MockTransport(handler)
-        async with httpx.AsyncClient(
-            transport=transport, follow_redirects=True
-        ) as client:
+        async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
             result = await audit_website("https://example.com", client=client)
         assert result.response_time_ms is not None
         assert result.response_time_ms >= 0
