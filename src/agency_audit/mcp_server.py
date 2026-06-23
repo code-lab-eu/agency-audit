@@ -76,22 +76,20 @@ async def get_next_city(country: str | None = None) -> dict[str, Any]:
     row = await _fetchone(
         pool,
         f"""
-        SELECT id, country, label, slug, population, latitude, longitude
-        FROM cities
-        WHERE {where}
-        ORDER BY population DESC
-        LIMIT 1
+        UPDATE cities SET discovery_status = 'in_progress'
+        WHERE id = (
+            SELECT id FROM cities
+            WHERE {where}
+            ORDER BY population DESC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        RETURNING id, country, label, slug, population, latitude, longitude
         """,
         *params,
     )
     if row is None:
         return {"error": "no pending cities"}
-
-    await _execute(
-        pool,
-        "UPDATE cities SET discovery_status = 'in_progress' WHERE id = $1",
-        row["id"],
-    )
 
     return dict(row)
 
@@ -207,20 +205,19 @@ async def get_unaudited_website() -> dict[str, Any]:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT w.id, w.url, w.label, w.maps_place_id, w.address, w.phone
-            FROM websites w
-            WHERE w.audit_status = 'pending'
-            ORDER BY w.created_at
-            LIMIT 1
+            UPDATE websites SET audit_status = 'auditing'
+            WHERE id = (
+                SELECT id FROM websites
+                WHERE audit_status = 'pending'
+                ORDER BY created_at
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, url, label, maps_place_id, address, phone
             """,
         )
         if row is None:
             return {"error": "no pending websites"}
-
-        await conn.execute(
-            "UPDATE websites SET audit_status = 'auditing' WHERE id = $1",
-            row["id"],
-        )
 
         # Attach city info
         cities = await conn.fetch(
