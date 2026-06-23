@@ -184,15 +184,27 @@ agency-audit/
 
 ## Contribution workflow
 
-1. Create a feature branch off `master`:
-   `git checkout master && git pull && git checkout -b feat/<slug>` or
-   `git checkout -b fix/<slug>`
+Multiple agents work in parallel, so every branch must start from — and stay
+current with — the latest remote `master`. Stale branches are the main source of
+merge conflicts.
+
+1. Fetch first, then branch off the **latest remote** `master`:
+   `git fetch origin && git checkout -b feat/<slug> origin/master`
+   (use `fix/<slug>` for fixes). In a worktree:
+   `git fetch origin && git worktree add -b feat/<slug> <path> origin/master`.
 2. Make changes, write tests, run the full suite
 3. Commit with [conventional commit](https://www.conventionalcommits.org/)
    prefixes (`feat:`, `fix:`, `test:`, `refactor:`)
-4. Push your branch and open a PR against `master` — CI runs ruff lint,
+4. **Re-sync before pushing.** `master` may have moved while you worked:
+   `git fetch origin && git rebase origin/master`, resolve any conflicts, then
+   re-run `uv run --extra dev pytest` and `uvx ruff check .` before continuing.
+5. Push your branch and open a PR against `master` — CI runs ruff lint,
    ruff format check, and mypy.  A human reviews before merge
-5. Never push directly to `master`
+6. **If the PR reports conflicts with `master`**, rebase onto the latest and
+   force-push the branch:
+   `git fetch origin && git rebase origin/master` (fix conflicts, re-run the
+   suite) then `git push --force-with-lease`
+7. Never push directly to `master`
 
 ## Additional context
 
