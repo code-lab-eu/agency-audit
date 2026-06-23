@@ -15,7 +15,7 @@ description: >-
 A **triage task** for the Hermes Kanban board: a short **title** and a **body**.
 You drop it into the board's `triage` column (via `hermes kanban create`, the
 dashboard's inline-create, or `/kanban`), and the Hermes **decomposer** turns it
-into a small graph of child tasks that AI workers pick up and implement.
+into a graph of child tasks that AI workers pick up and implement.
 
 The body is the prompt. This skill is about writing a body the decomposer can
 split well. Read `AGENTS.md` at the repo root first — it is the source of truth
@@ -41,12 +41,23 @@ It returns one of two outcomes:
 - **Single task** — when the work is genuinely one unit, it tightens your title
   and body and assigns it, with no fan-out.
 
-The decomposer aims for a **small graph, roughly 2–6 child tasks** — cohesive
-units, neither one giant task nor a swarm of tiny ones. It assigns each child to
-the **profile whose description best fits** that unit of work, falling back to the
-default assignee when nothing fits well. It reads the body as prose and decides
-the split from the content, so clear structure and explicit dependencies in the
-body are what shape a good graph.
+It assigns each child to the **profile whose description best fits** that unit of
+work, falling back to the default assignee when nothing fits well. It reads the
+body as prose and decides the split from the content, so clear structure and
+explicit dependencies in the body are what shape a good graph.
+
+**You set the granularity by how explicitly you split the work.** Enumerate
+discrete units in the body — each with its own location and acceptance bar — and
+the decomposer emits one child per unit. State a goal in broader strokes and it
+groups the work into cohesive chunks and finds the seams itself. Write at the
+level you want the cards to land.
+
+**Decomposition is iterative.** The original triage task stays alive as the parent
+of every child. When the first wave of children completes, the orchestrator
+profile that owns the root wakes back up, re-reads the full plan, and adds more
+tasks if the work isn't finished. So a large plan is worked in waves — a first
+batch of children, then more as each batch lands — and never has to emerge from a
+single pass. Order your body so the units that should run first come first.
 
 Two facts about the workers downstream shape how you write:
 
@@ -55,13 +66,14 @@ Two facts about the workers downstream shape how you write:
   Whatever a unit needs to be done correctly must live in that unit's description,
   so the orientation and constraints you write need to be propagatable into every
   child.
-- **The body is truncated to about 4000 characters** before the decomposer sees
-  it (title to about 400). Be complete but tight.
+- **Keep the body tight and front-load it.** A single decompose pass reads only
+  the front of a long body, while the orchestrator picks up the rest across later
+  waves. Lead with the highest-priority units and keep each unit's spec concise.
 
 ## How to write the body
 
-Aim for a body a careful reader could split into 2–6 units, each independent where
-possible, each with a clear goal and a checkable bar.
+Write a body where each unit of work has a clear goal and a checkable bar, kept
+independent of the other units wherever possible.
 
 1. **Lead with orientation (a few sentences).** What agency-audit is, the stack
    (Python 3.12, asyncpg/PostgreSQL, Typer CLI, FastMCP server, FastAPI/Jinja2
@@ -85,14 +97,50 @@ possible, each with a clear goal and a checkable bar.
    into `parents`. Describe genuinely independent units as independent so they fan
    out in parallel.
 
-5. **Right-size to the 2–6 graph.** If the work has more atomic pieces than that,
-   group them into cohesive child-sized chunks (e.g. "cover the audit pipeline
-   modules" as one unit rather than one per module), or split the effort across
-   several triage tasks and let each decompose on its own.
+5. **Write at the granularity you want cards to land.** Enumerate discrete,
+   fully-specified units for a card each; state a goal in broader strokes to let
+   the decomposer find the seams. Keep every unit independent and self-contained,
+   since a large plan is worked in waves.
 
 6. **Match work to a describable specialty.** Phrase each unit so its nature is
    obvious — "Python + pytest implementation", "SQL migration", "FastAPI route
    tests" — so the decomposer can route it by the kind of work involved.
+
+## Example
+
+A triage task whose body enumerates discrete units, names a dependency, and gives
+each unit a checkable bar.
+
+> **Title:** Trustworthy test gate + audit-pipeline coverage
+>
+> **Body:**
+>
+> `agency-audit` ("Real Estate Radar") discovers and audits real estate agency
+> sites: Python 3.12, asyncpg/PostgreSQL, a Typer CLI, a FastMCP server, a
+> FastAPI/Jinja2 web app, and an orchestration `loop`. Checkout is the repo root;
+> see `AGENTS.md` for layout and conventions. Every change is one small,
+> single-pass PR on its own `fix/<slug>` or `feat/<slug>` branch off `master`,
+> with unit tests riding along. The gate each PR must pass: `uv run --extra dev
+> pytest` and `uvx ruff check .` both clean, and tests never require a live
+> database — mock the pool as `tests/test_loop.py` does.
+>
+> Do the gate fix first; the coverage work depends on it:
+>
+> - **Green pytest with no Postgres.** `tests/test_mcp_server.py` opens a real
+>   `asyncpg.connect(...)` in setup/teardown, so its cases error when no database
+>   is up. Rebuild it on the mocked-pool pattern, or gate it behind a fixture that
+>   skips when the DB is unreachable. Done when `uv run --extra dev pytest` is
+>   fully green with no Postgres running. (Python + pytest.)
+>
+> Once the gate is green, these run in parallel:
+>
+> - **Cover `audit/robots.py`.** Fixture-driven unit tests for fetch/parse,
+>   crawl-delay, sitemap extraction, and default-allow-when-absent; mock httpx, no
+>   live network. Done when each branch is asserted and `ruff` is clean for the
+>   file. (Python + pytest.)
+> - **Cover `audit/scoring.py`.** Unit tests for `compute_score` and its breakdown
+>   arithmetic against fixture inputs. Done when the score and each breakdown
+>   component are asserted. (Python + pytest.)
 
 ## Checklist before you submit
 
@@ -100,6 +148,6 @@ possible, each with a clear goal and a checkable bar.
 - [ ] Standing constraints (one small change, own branch, tests ride along) appear once.
 - [ ] Each unit has a concrete location and a single-unit-testable acceptance bar.
 - [ ] Dependencies are stated in prose; independent units read as independent.
-- [ ] The work groups into roughly 2–6 cohesive units (or is split across triage tasks).
+- [ ] Each unit is genuinely independent and self-contained.
+- [ ] Highest-priority units come first, so they decompose in the first wave.
 - [ ] Each unit is described by the specialty it needs.
-- [ ] Body stays well under ~4000 characters.
