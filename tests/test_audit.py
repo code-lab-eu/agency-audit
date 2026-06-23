@@ -276,10 +276,7 @@ class TestRobotsHelpers:
     def test_robots_url_with_path(self):
         from agency_audit.audit.robots import _robots_url
 
-        assert (
-            _robots_url("https://example.com/some/path")
-            == "https://example.com/robots.txt"
-        )
+        assert _robots_url("https://example.com/some/path") == "https://example.com/robots.txt"
 
     def test_robots_url_http(self):
         from agency_audit.audit.robots import _robots_url
@@ -552,8 +549,7 @@ class TestTechStack:
 
     def test_framework_from_html_nextjs(self):
         html = (
-            '<html><head><script id="__NEXT_DATA__"'
-            ' type="application/json"></script></head></html>'
+            '<html><head><script id="__NEXT_DATA__" type="application/json"></script></head></html>'
         )
         assert _detect_framework_from_html(html) == "Next.js"
 
