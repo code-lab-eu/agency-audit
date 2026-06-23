@@ -244,6 +244,7 @@ class TestQC:
             findings = await detect_duplicates()
             assert findings == []
 
+
 # ──────────────────────────────────────────────────────────────────────
 # Re-audit tests
 # ──────────────────────────────────────────────────────────────────────
@@ -423,10 +424,12 @@ class TestAuditAttemptsCounter:
                 @staticmethod
                 def to_dict():
                     return {"score": 85}
+
                 score = 85
 
-            with patch("agency_audit.loop.orchestrator.retry",
-                       new_callable=AsyncMock) as mock_retry:
+            with patch(
+                "agency_audit.loop.orchestrator.retry", new_callable=AsyncMock
+            ) as mock_retry:
                 mock_retry.return_value = FakeAuditResult()
 
                 result = await _audit_country_websites("BG", concurrency=1)
@@ -436,15 +439,15 @@ class TestAuditAttemptsCounter:
 
             # Collect all UPDATE calls on the mock connection
             update_calls = [
-                call for call in mock_conn.execute.call_args_list
+                call
+                for call in mock_conn.execute.call_args_list
                 if "UPDATE websites" in str(call.args[0])
             ]
             assert len(update_calls) >= 1, "Expected at least one UPDATE call"
 
             success_update = str(update_calls[0].args[0])
             assert "audit_attempts = 0" in success_update, (
-                "successful audit should reset audit_attempts to 0, got: "
-                + success_update
+                "successful audit should reset audit_attempts to 0, got: " + success_update
             )
             assert "audit_attempts = audit_attempts + 1" not in success_update, (
                 "successful audit should NOT increment audit_attempts"
@@ -467,8 +470,9 @@ class TestAuditAttemptsCounter:
             mock_conn.fetch.return_value = [{"id": 1, "url": "https://example.com"}]
 
             # Mock retry to fail
-            with patch("agency_audit.loop.orchestrator.retry",
-                       new_callable=AsyncMock) as mock_retry:
+            with patch(
+                "agency_audit.loop.orchestrator.retry", new_callable=AsyncMock
+            ) as mock_retry:
                 mock_retry.side_effect = RuntimeError("audit failed after retries")
 
                 result = await _audit_country_websites("BG", concurrency=1)
@@ -478,15 +482,15 @@ class TestAuditAttemptsCounter:
 
             # Find the failure UPDATE
             update_calls = [
-                call for call in mock_conn.execute.call_args_list
+                call
+                for call in mock_conn.execute.call_args_list
                 if "UPDATE websites" in str(call.args[0])
             ]
             assert len(update_calls) >= 1
 
             failure_update = str(update_calls[0].args[0])
             assert "audit_attempts = audit_attempts + 1" in failure_update, (
-                "failed audit should increment audit_attempts, got: "
-                + failure_update
+                "failed audit should increment audit_attempts, got: " + failure_update
             )
             assert "audit_attempts = 0" not in failure_update, (
                 "failed audit should NOT reset audit_attempts to 0"
@@ -508,8 +512,7 @@ class TestAuditAttemptsCounter:
 
             # Return one overdue website
             mock_conn.fetch.return_value = [
-                {"id": 42, "url": "https://example.com", "score": 75,
-                 "age_days": 45},
+                {"id": 42, "url": "https://example.com", "score": 75, "age_days": 45},
             ]
 
             result = await schedule_reaudits(interval_days=30, limit=10)
@@ -519,7 +522,8 @@ class TestAuditAttemptsCounter:
             # The UPDATE that sets status back to 'pending' should reset
             # audit_attempts to 0, not increment
             update_calls = [
-                call for call in mock_conn.execute.call_args_list
+                call
+                for call in mock_conn.execute.call_args_list
                 if "UPDATE websites" in str(call.args[0])
                 and "SET audit_status = 'pending'" in str(call.args[0])
             ]
@@ -529,8 +533,7 @@ class TestAuditAttemptsCounter:
 
             reaudit_update = str(update_calls[0].args[0])
             assert "audit_attempts = 0" in reaudit_update, (
-                "re-audit scheduling should reset audit_attempts to 0, got: "
-                + reaudit_update
+                "re-audit scheduling should reset audit_attempts to 0, got: " + reaudit_update
             )
             assert "audit_attempts = audit_attempts + 1" not in reaudit_update, (
                 "re-audit scheduling should NOT increment audit_attempts"
