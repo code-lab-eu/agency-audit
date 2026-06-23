@@ -10,6 +10,7 @@ Flags issues on the websites table via needs_review / review_reason / qc_checks 
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -79,7 +80,7 @@ async def flag_suspicious_scores() -> list[QCFinding]:
                        qc_checks = qc_checks || $2::jsonb
                    WHERE id = $3""",
                 reason,
-                f'[{{"check": "suspicious_score", "finding": "{reason}"}}]',
+                json.dumps([{"check": "suspicious_score", "finding": reason}]),
                 wid,
             )
 
@@ -157,7 +158,7 @@ async def detect_duplicates() -> list[QCFinding]:
                            qc_checks = qc_checks || $2::jsonb
                        WHERE id = $3""",
                     reason,
-                    f'[{{"check": "duplicate_domain", "finding": "{reason}"}}]',
+                    json.dumps([{"check": "duplicate_domain", "finding": reason}]),
                     wid,
                 )
 
@@ -187,7 +188,7 @@ async def mark_for_manual_review(website_id: int, reason: str, severity: str = "
                    qc_checks = qc_checks || $2::jsonb
                WHERE id = $3""",
             reason,
-            f'[{{"check": "manual_review", "severity": "{severity}", "finding": "{reason}"}}]',
+            json.dumps([{"check": "manual_review", "severity": severity, "finding": reason}]),
             website_id,
         )
     logger.info("QC: flagged website %d for manual review: %s", website_id, reason)
