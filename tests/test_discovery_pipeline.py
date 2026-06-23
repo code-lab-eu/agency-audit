@@ -125,15 +125,15 @@ class TestRunForCountriesBasic:
 
         # Contract: discovery_status set to 'done'
         done_calls = [
-            c for c in conn_mock.execute.call_args_list
+            c
+            for c in conn_mock.execute.call_args_list
             if "discovery_status = 'done'" in str(c.args[0])
         ]
         assert len(done_calls) == 1
 
         # Contract: INSERT INTO discovery_log (searched)
         searched_calls = [
-            c for c in conn_mock.execute.call_args_list
-            if "'searched'" in str(c.args[0])
+            c for c in conn_mock.execute.call_args_list if "'searched'" in str(c.args[0])
         ]
         assert len(searched_calls) == 1
 
@@ -191,7 +191,8 @@ class TestRunForCountriesBasic:
 
         # discovery_status should still be set to 'done'
         done_calls = [
-            c for c in conn_mock.execute.call_args_list
+            c
+            for c in conn_mock.execute.call_args_list
             if "discovery_status = 'done'" in str(c.args[0])
         ]
         assert len(done_calls) == 1
@@ -369,8 +370,10 @@ class TestDynamicCountryDetection:
         mock_conn = pool_mock.acquire.return_value.__aenter__.return_value
         city_ro = _make_city_row(3, "Bucuresti", "bucuresti", "RO")
         mock_conn.fetchrow.side_effect = [
-            city_row, None,   # BG: city, website None (new)
-            city_ro, None,    # RO: city, website None (new)
+            city_row,
+            None,  # BG: city, website None (new)
+            city_ro,
+            None,  # RO: city, website None (new)
         ]
 
         place = _make_place()
@@ -424,7 +427,8 @@ class TestPlacesUnavailable:
         mock_places.search_text.assert_not_called()
 
         done_calls = [
-            c for c in conn_mock.execute.call_args_list
+            c
+            for c in conn_mock.execute.call_args_list
             if "discovery_status = 'done'" in str(c.args[0])
         ]
         assert len(done_calls) == 1
@@ -464,8 +468,7 @@ class TestDBWrites:
 
         # INSERT INTO websites should have been called via fetchval
         website_inserts = [
-            c for c in conn_mock.fetchval.call_args_list
-            if "INSERT INTO websites" in str(c.args[0])
+            c for c in conn_mock.fetchval.call_args_list if "INSERT INTO websites" in str(c.args[0])
         ]
         assert len(website_inserts) == 1
 
@@ -493,7 +496,8 @@ class TestDBWrites:
             )
 
         website_city_inserts = [
-            c for c in conn_mock.execute.call_args_list
+            c
+            for c in conn_mock.execute.call_args_list
             if "INSERT INTO website_cities" in str(c.args[0])
         ]
         assert len(website_city_inserts) == 2
@@ -522,7 +526,8 @@ class TestDBWrites:
             )
 
         discovery_inserts = [
-            c for c in conn_mock.execute.call_args_list
+            c
+            for c in conn_mock.execute.call_args_list
             if "INSERT INTO discovery_log" in str(c.args[0])
         ]
         # 2 'found' + 1 'searched' = 3
@@ -555,8 +560,7 @@ class TestDBWrites:
         assert result["agencies_found"] == 1
         # fetchval (INSERT INTO websites) should NOT have been called
         website_inserts = [
-            c for c in conn_mock.fetchval.call_args_list
-            if "INSERT INTO websites" in str(c.args[0])
+            c for c in conn_mock.fetchval.call_args_list if "INSERT INTO websites" in str(c.args[0])
         ]
         assert len(website_inserts) == 0
 
@@ -644,7 +648,8 @@ class TestEdgeCases:
             )
 
         in_progress_calls = [
-            c for c in conn_mock.execute.call_args_list
+            c
+            for c in conn_mock.execute.call_args_list
             if "discovery_status = 'in_progress'" in str(c.args[0])
         ]
         assert len(in_progress_calls) == 1
@@ -722,9 +727,7 @@ class TestEdgeCases:
         mock_places = MagicMock(spec=PlacesAPIClient)
         mock_places.available = True
         # First query raises RuntimeError, second returns empty
-        mock_places.search_text = AsyncMock(
-            side_effect=[RuntimeError("API error"), []]
-        )
+        mock_places.search_text = AsyncMock(side_effect=[RuntimeError("API error"), []])
         mock_places.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=mock_places)
@@ -738,7 +741,8 @@ class TestEdgeCases:
         # Should not crash; city still marked done
         assert result["cities_processed"] == 1
         done_calls = [
-            c for c in conn_mock.execute.call_args_list
+            c
+            for c in conn_mock.execute.call_args_list
             if "discovery_status = 'done'" in str(c.args[0])
         ]
         assert len(done_calls) == 1

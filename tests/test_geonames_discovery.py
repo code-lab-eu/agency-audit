@@ -606,8 +606,7 @@ class TestDiscoveryPipelineRunForCountries:
 
             # INSERT INTO websites goes through fetchval (uses RETURNING id)
             website_inserts = [
-                c for c in conn.fetchval.call_args_list
-                if "INSERT INTO websites" in str(c.args[0])
+                c for c in conn.fetchval.call_args_list if "INSERT INTO websites" in str(c.args[0])
             ]
             assert len(website_inserts) == 1
 
@@ -620,7 +619,7 @@ class TestDiscoveryPipelineRunForCountries:
     @pytest.mark.asyncio
     async def test_run_for_countries_sets_discovery_status_done(self):
         """After discover_city, discovery_status should be set to 'done'."""
-        from agency_audit.discovery import DiscoveryPipeline, PlaceResult, PlacesAPIClient
+        from agency_audit.discovery import DiscoveryPipeline, PlacesAPIClient
 
         with patch("agency_audit.discovery.get_pool") as mock_get_pool:
             pool, conn = self._make_mock_pool()
@@ -659,7 +658,7 @@ class TestDiscoveryPipelineRunForCountries:
     @pytest.mark.asyncio
     async def test_run_for_countries_honors_max_cities_per_country(self):
         """Only max_cities_per_country cities should be processed per country."""
-        from agency_audit.discovery import DiscoveryPipeline, PlaceResult, PlacesAPIClient
+        from agency_audit.discovery import DiscoveryPipeline, PlacesAPIClient
 
         with patch("agency_audit.discovery.get_pool") as mock_get_pool:
             pool, conn = self._make_mock_pool()
@@ -698,7 +697,7 @@ class TestDiscoveryPipelineRunForCountries:
     @pytest.mark.asyncio
     async def test_run_for_countries_no_country_codes_auto_discovers(self):
         """When country_codes is None, discovers from DB via SELECT DISTINCT."""
-        from agency_audit.discovery import DiscoveryPipeline, PlaceResult, PlacesAPIClient
+        from agency_audit.discovery import DiscoveryPipeline, PlacesAPIClient
 
         with patch("agency_audit.discovery.get_pool") as mock_get_pool:
             pool, conn = self._make_mock_pool()
@@ -712,9 +711,6 @@ class TestDiscoveryPipelineRunForCountries:
 
             async def fetchrow_side_effect(*args, **kwargs):
                 call_count[0] += 1
-                has_country = kwargs.get("country") or (
-                    args and "$1" not in str(args[0])
-                )
                 # Give each country 1 city, then None
                 if call_count[0] <= 2:
                     return {
@@ -899,7 +895,7 @@ class TestDiscoveryPipelineRunForCountries:
     @pytest.mark.asyncio
     async def test_run_for_countries_places_error_handled_gracefully(self):
         """When places.search_text raises, discover_city continues without crashing."""
-        from agency_audit.discovery import DiscoveryPipeline, PlaceResult, PlacesAPIClient
+        from agency_audit.discovery import DiscoveryPipeline, PlacesAPIClient
 
         with patch("agency_audit.discovery.get_pool") as mock_get_pool:
             pool, conn = self._make_mock_pool()
@@ -935,7 +931,7 @@ class TestDiscoveryPipelineRunForCountries:
     @pytest.mark.asyncio
     async def test_run_for_countries_places_not_available_breaks(self):
         """When places.available is False, discover_city stops and reports 0."""
-        from agency_audit.discovery import DiscoveryPipeline, PlaceResult, PlacesAPIClient
+        from agency_audit.discovery import DiscoveryPipeline, PlacesAPIClient
 
         with patch("agency_audit.discovery.get_pool") as mock_get_pool:
             pool, conn = self._make_mock_pool()
