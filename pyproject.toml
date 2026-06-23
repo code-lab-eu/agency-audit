@@ -26,6 +26,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.25",
+    "pytest-cov>=7.1",
     "hypothesis>=6.0",
     "ruff>=0.8",
     "mypy>=1.0",
@@ -59,3 +60,21 @@ explicit_package_bases = true
 ignore_missing_imports = true
 warn_return_any = true
 warn_unused_configs = true
+
+[tool.coverage.run]
+source = ["src/agency_audit"]
+omit = [
+    "src/agency_audit/tests/*",
+    "src/agency_audit/scripts/*",
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = false
+
+[dependency-groups]
+dev = [
+    "pytest-cov>=7.1.0",
+]
