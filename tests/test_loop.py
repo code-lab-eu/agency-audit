@@ -390,3 +390,107 @@ class TestCLICommands:
             "discover",
         ]:
             assert cmd in commands, f"{cmd} should be registered"
+
+
+# Audit attempts counter tests
+
+
+class TestAuditAttemptsCounter:
+    """Verify audit_attempts resets to 0 on success/re-audit, increments on failure."""
+
+    @pytest.mark.asyncio
+    async def test_successful_audit_resets_attempts_to_zero(self):
+        """Successful audit UPDATE must set audit_attempts = 0."""
+        from agency_audit.loop.orchestrator import _audit_country_websites
+
+        executed_sqls: list[str] = []
+
+        async def capture_execute(sql, *args, **kwargs):
+            executed_sqls.append(sql)
+
+        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool, patch(
+            "agency_audit.loop.orchestrator.retry"
+        ) as mock_retry:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_conn.fetch.return_value = [{"id": 1, "url": "https://example.com"}]
+            mock_conn.execute = AsyncMock(side_effect=capture_execute)
+
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            mock_audit = MagicMock()
+            mock_audit.to_dict.return_value = {}
+            mock_audit.score = 85
+            mock_retry.return_value = mock_audit
+
+            await _audit_country_websites("BG")
+
+            success_updates = [s for s in executed_sqls if "audit_attempts" in s]
+            assert len(success_updates) >= 1
+            assert "audit_attempts = 0" in success_updates[-1]
+
+    @pytest.mark.asyncio
+    async def test_failed_audit_increments_attempts(self):
+        """Failed audit UPDATE must keep audit_attempts = audit_attempts + 1."""
+        from agency_audit.loop.orchestrator import _audit_country_websites
+
+        executed_sqls: list[str] = []
+
+        async def capture_execute(sql, *args, **kwargs):
+            executed_sqls.append(sql)
+
+        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool, patch(
+            "agency_audit.loop.orchestrator.retry"
+        ) as mock_retry:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_conn.fetch.return_value = [{"id": 2, "url": "https://fail.example.com"}]
+            mock_conn.execute = AsyncMock(side_effect=capture_execute)
+
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            mock_retry.side_effect = RuntimeError("audit failure")
+
+            await _audit_country_websites("BG")
+
+            failure_updates = [s for s in executed_sqls if "audit_attempts" in s]
+            assert len(failure_updates) >= 1
+            assert "audit_attempts = audit_attempts + 1" in failure_updates[-1]
+
+    @pytest.mark.asyncio
+    async def test_reaudit_scheduling_resets_attempts_to_zero(self):
+        """Re-audit UPDATE must set audit_attempts = 0."""
+        from agency_audit.loop.reaudit import schedule_reaudits
+
+        executed_sqls: list[str] = []
+
+        async def capture_execute(sql, *args, **kwargs):
+            executed_sqls.append(sql)
+
+        with patch("agency_audit.loop.reaudit.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_conn.fetch.return_value = [
+                {"id": 3, "url": "https://old.example.com", "score": 70, "age_days": 45}
+            ]
+            mock_conn.execute = AsyncMock(side_effect=capture_execute)
+
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            await schedule_reaudits(interval_days=30, limit=10)
+
+            reaudit_updates = [s for s in executed_sqls if "audit_attempts" in s]
+            assert len(reaudit_updates) >= 1
+            assert "audit_attempts = 0" in reaudit_updates[-1]

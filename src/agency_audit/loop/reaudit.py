@@ -138,7 +138,7 @@ async def schedule_reaudits(
         await conn.execute(
             """UPDATE websites
                SET audit_status = 'pending',
-                   audit_attempts = audit_attempts + 1,
+                   audit_attempts = 0,
                    last_audited_at = NULL
                WHERE id = ANY($1)""",
             website_ids,
