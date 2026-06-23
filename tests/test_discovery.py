@@ -693,10 +693,12 @@ class TestDiscoveryPipelineIntegration:
         with patch("agency_audit.discovery.get_pool") as mock_get_pool:
             mock_pool = MagicMock()
             mock_get_pool.return_value = mock_pool
-            mock_pool.fetch = AsyncMock(return_value=[
-                {"country": "BG"},
-                {"country": "DE"},
-            ])
+            mock_pool.fetch = AsyncMock(
+                return_value=[
+                    {"country": "BG"},
+                    {"country": "DE"},
+                ]
+            )
 
             # No pending cities in either country
             mock_conn = AsyncMock()
