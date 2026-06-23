@@ -64,9 +64,7 @@ class TestPlacesAPIClientInit:
 
     def test_no_key_loads_from_settings(self):
         """Without an explicit key, _load_api_key reads from config."""
-        with patch(
-            "agency_audit.config.settings.google_maps_api_key", "config-key-456"
-        ):
+        with patch("agency_audit.config.settings.google_maps_api_key", "config-key-456"):
             client = PlacesAPIClient()
             assert client.api_key == "config-key-456"
 
@@ -83,9 +81,7 @@ class TestPlacesAPIClientInit:
 
     def test_explicit_none_falls_back_to_config(self):
         """Passing None explicitly falls back to config (same as default)."""
-        with patch(
-            "agency_audit.config.settings.google_maps_api_key", "from-config-789"
-        ):
+        with patch("agency_audit.config.settings.google_maps_api_key", "from-config-789"):
             client = PlacesAPIClient(api_key=None)
             assert client.api_key == "from-config-789"
 
@@ -164,17 +160,11 @@ class TestPlacesAPIClientRequestConstruction:
 
         # The client itself should have been created with proper headers.
         # We can verify by checking __init__ helpers.
-        with patch(
-            "agency_audit.discovery.asyncio.sleep", new_callable=AsyncMock
-        ):
+        with patch("agency_audit.discovery.asyncio.sleep", new_callable=AsyncMock):
             client2 = PlacesAPIClient(api_key="header-test-key")
             await client2._ensure_client()
-            assert (
-                client2._client.headers["X-Goog-Api-Key"] == "header-test-key"
-            )
-            assert (
-                client2._client.headers["Content-Type"] == "application/json"
-            )
+            assert client2._client.headers["X-Goog-Api-Key"] == "header-test-key"
+            assert client2._client.headers["Content-Type"] == "application/json"
             assert "X-Goog-FieldMask" in client2._client.headers
             await client2.close()
 
@@ -381,7 +371,11 @@ class TestPlacesAPIClientResponseMapping:
         assert len(results) == 5
         assert all(isinstance(p, PlaceResult) for p in results)
         assert [p.place_id for p in results] == [
-            "id-0", "id-1", "id-2", "id-3", "id-4",
+            "id-0",
+            "id-1",
+            "id-2",
+            "id-3",
+            "id-4",
         ]
 
 
@@ -398,9 +392,7 @@ class TestPlacesAPIClientRateLimit:
         """When called quickly back-to-back, it sleeps to enforce min interval."""
         client = PlacesAPIClient(api_key="test-key")
 
-        with patch(
-            "agency_audit.discovery.asyncio.sleep", new_callable=AsyncMock
-        ) as mock_sleep:
+        with patch("agency_audit.discovery.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             # Simulate a call that finishes, then wait 0.05s, then call again
             client._last_request_time = 100.0
             # time.monotonic() returns 100.05 for the second call
@@ -416,9 +408,7 @@ class TestPlacesAPIClientRateLimit:
         """When the interval already exceeds the min, no sleep is called."""
         client = PlacesAPIClient(api_key="test-key")
 
-        with patch(
-            "agency_audit.discovery.asyncio.sleep", new_callable=AsyncMock
-        ) as mock_sleep:
+        with patch("agency_audit.discovery.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             client._last_request_time = 100.0
             # Enough time has passed (1.0s > 0.2s min)
             with patch("agency_audit.discovery.time.monotonic", return_value=101.0):
