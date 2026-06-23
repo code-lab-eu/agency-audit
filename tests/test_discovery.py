@@ -534,3 +534,212 @@ class TestPlacesAPIClientLifecycle:
         assert client._client is not None
         await client.close()
         assert client._client is None
+
+
+# =========================================================================
+# run_discovery wrapper, DiscoveryPipeline, and CLI help text tests
+# =========================================================================
+
+
+class TestRunDiscovery:
+    """Tests for the run_discovery wrapper function."""
+
+    async def test_no_api_key_raises_runtime_error(self):
+        """run_discovery raises RuntimeError when GOOGLE_MAPS_API_KEY is unset."""
+        from agency_audit.discovery import run_discovery
+
+        with patch("agency_audit.discovery.PlacesAPIClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.available = False
+            mock_client.close = AsyncMock()
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(RuntimeError, match="No Google Maps API key found"):
+                await run_discovery(countries=["BG"], max_cities=1)
+
+    async def test_available_api_key_runs_pipeline(self):
+        """run_discovery runs the pipeline when API key is set."""
+        from agency_audit.discovery import run_discovery
+
+        with (
+            patch("agency_audit.discovery.PlacesAPIClient") as mock_client_cls,
+            patch("agency_audit.discovery.get_pool") as mock_get_pool,
+        ):
+            mock_client = MagicMock()
+            mock_client.available = True
+            mock_client.close = AsyncMock()
+            mock_client_cls.return_value = mock_client
+
+            # Mock pool: no pending cities -> fetchrow returns None -> loop breaks
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+            mock_conn.fetchrow = AsyncMock(return_value=None)
+
+            summary = await run_discovery(countries=["BG"], max_cities=1)
+            assert summary["countries_processed"] == 0
+            assert summary["cities_processed"] == 0
+            assert summary["agencies_found"] == 0
+
+    async def test_closes_pipeline_on_error(self):
+        """run_discovery closes the pipeline even when an error occurs."""
+        from agency_audit.discovery import run_discovery
+
+        with (
+            patch("agency_audit.discovery.PlacesAPIClient") as mock_client_cls,
+            patch("agency_audit.discovery.get_pool") as mock_get_pool,
+        ):
+            mock_client = MagicMock()
+            mock_client.available = True
+            mock_client.close = AsyncMock()
+            mock_client_cls.return_value = mock_client
+
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+            # Raise on pool.fetch() -- pass no countries so fetch() is called
+            mock_pool.fetch = AsyncMock(side_effect=RuntimeError("DB failure"))
+
+            with pytest.raises(RuntimeError, match="DB failure"):
+                await run_discovery(max_cities=1)
+
+            # Pipeline.close should have been called (via finally)
+            mock_client.close.assert_called_once()
+
+
+class TestDiscoveryPipelineIntegration:
+    """Tests for the DiscoveryPipeline orchestrator integration."""
+
+    async def test_query_for_country_known(self):
+        """query_for_country returns the correct queries for a known country."""
+        from agency_audit.discovery import DiscoveryPipeline
+
+        pipeline = DiscoveryPipeline()
+        queries = await pipeline.query_for_country("BG")
+        assert len(queries) >= 2
+        assert "имоти" in queries[0].lower()
+
+    async def test_query_for_country_unknown(self):
+        """query_for_country returns a fallback for unknown countries."""
+        from agency_audit.discovery import DiscoveryPipeline
+
+        pipeline = DiscoveryPipeline()
+        queries = await pipeline.query_for_country("XX")
+        assert queries == ["real estate agent"]
+
+    async def test_discover_city_no_api_key_logs_warning(self):
+        """discover_city logs a warning and returns 0 when API is unavailable."""
+        from agency_audit.discovery import DiscoveryPipeline
+
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+            mock_conn.fetchrow = AsyncMock(return_value=None)
+
+            pipeline = DiscoveryPipeline()
+            with (
+                patch.object(
+                    type(pipeline.places),
+                    "available",
+                    new_callable=lambda: property(lambda self: False),
+                ),
+                patch("agency_audit.discovery.logger") as mock_logger,
+            ):
+                result = await pipeline.discover_city(
+                    city_id=1,
+                    city_label="Sofia",
+                    city_slug="sofia",
+                    country_iso="BG",
+                    latitude=42.7,
+                    longitude=23.3,
+                )
+                assert result == 0
+                mock_logger.warning.assert_called_once()
+
+    async def test_run_for_countries_no_cities(self):
+        """run_for_countries returns empty summary when no pending cities."""
+        from agency_audit.discovery import DiscoveryPipeline
+
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+            # Set up pool.acquire() as async context manager with fetchrow -> None
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+            mock_conn.fetchrow = AsyncMock(return_value=None)
+
+            pipeline = DiscoveryPipeline()
+            summary = await pipeline.run_for_countries(
+                country_codes=["BG"],
+                max_cities_per_country=1,
+            )
+            assert summary["countries_processed"] == 0
+            assert summary["cities_processed"] == 0
+            assert summary["results"]["BG"]["cities"] == 0
+            assert summary["results"]["BG"]["agencies"] == 0
+
+    async def test_run_for_countries_all_countries(self):
+        """run_for_countries fetches all pending countries when none specified."""
+        from agency_audit.discovery import DiscoveryPipeline
+
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+            mock_pool.fetch = AsyncMock(return_value=[
+                {"country": "BG"},
+                {"country": "DE"},
+            ])
+
+            # No pending cities in either country
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+            mock_conn.fetchrow = AsyncMock(return_value=None)  # no city
+
+            pipeline = DiscoveryPipeline()
+            summary = await pipeline.run_for_countries(max_cities_per_country=1)
+            assert "BG" in summary["results"]
+            assert "DE" in summary["results"]
+
+
+class TestDiscoverCLI:
+    """Tests for the 'discover' CLI command and its help text."""
+
+    def test_discover_command_registered(self):
+        """'discover' command should be registered in the Typer app."""
+        from agency_audit.cli import app
+
+        commands = [c.name for c in app.registered_commands]
+        assert "discover" in commands
+
+    def test_discover_help_does_not_promise_browser_fallback(self):
+        """The discover help text should NOT mention browser fallback.
+
+        Browser-fallback discovery is not implemented -- the only path
+        uses the Google Maps Places API, which requires an API key.
+        """
+        from typer.testing import CliRunner
+
+        from agency_audit.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["discover", "--help"])
+        assert result.exit_code == 0
+        help_text = result.output.lower()
+        assert "browser" not in help_text, (
+            "Discover CLI help text must not advertise browser fallback "
+            "(not implemented). Help text: " + result.output
+        )
+        assert "api key" in help_text, (
+            "Discover CLI help text must mention that an API key is required. "
+            "Help text: " + result.output
+        )
