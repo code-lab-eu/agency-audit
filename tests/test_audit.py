@@ -37,7 +37,7 @@ from agency_audit.audit.models import (
     RobotsResult,
     TechStackResult,
 )
-from agency_audit.audit.robots import parse_robots_txt, _extract_sitemaps, _extract_crawl_delay
+from agency_audit.audit.robots import _extract_crawl_delay, _extract_sitemaps, parse_robots_txt
 from agency_audit.audit.scoring import compute_score, load_scoring_config
 from agency_audit.audit.tech_stack import (
     _detect_cdn,
@@ -46,7 +46,6 @@ from agency_audit.audit.tech_stack import (
     _detect_hosting,
     _detect_technologies,
 )
-
 
 # ---------------------------------------------------------------------------
 # robots.txt
@@ -108,6 +107,196 @@ class TestRobotsTxt:
         result = parse_robots_txt(content, "https://example.com")
         # The base URL should still be allowed
         assert result.allows_scraping is True
+
+
+class TestRobotsFetch:
+    """Tests for fetch_robots_txt with mocked httpx — covers 404, 200,
+    crawl-delay, sitemaps, and default-allow-when-absent."""
+
+    async def test_fetch_200_disallow(self):
+        """Fetch a robots.txt that disallows everything."""
+        from agency_audit.audit.robots import fetch_robots_txt
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                text="User-agent: *\nDisallow: /\n",
+                request=request,
+            )
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+        try:
+            result = await fetch_robots_txt("https://example.com", client=client)
+            assert result.fetched is True
+            assert result.allows_scraping is False
+            assert result.raw_content == "User-agent: *\nDisallow: /\n"
+        finally:
+            await client.aclose()
+
+    async def test_fetch_200_allow(self):
+        """Fetch a robots.txt that allows everything."""
+        from agency_audit.audit.robots import fetch_robots_txt
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                text="User-agent: *\nAllow: /\n",
+                request=request,
+            )
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+        try:
+            result = await fetch_robots_txt("https://example.com", client=client)
+            assert result.fetched is True
+            assert result.allows_scraping is True
+        finally:
+            await client.aclose()
+
+    async def test_fetch_404_default_allow(self):
+        """404/missing robots.txt → default allow, not fetched."""
+        from agency_audit.audit.robots import fetch_robots_txt
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, request=request)
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+        try:
+            result = await fetch_robots_txt("https://example.com", client=client)
+            assert result.fetched is False
+            assert result.allows_scraping is True
+            assert result.error is None  # 404 is not an error, just missing
+        finally:
+            await client.aclose()
+
+    async def test_fetch_500_error_default_allow(self):
+        """Non-404 HTTP error → default allow with error string."""
+        from agency_audit.audit.robots import fetch_robots_txt
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, request=request)
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+        try:
+            result = await fetch_robots_txt("https://example.com", client=client)
+            assert result.fetched is False
+            assert result.allows_scraping is True
+            assert result.error is not None
+            assert "HTTP 503" in result.error
+        finally:
+            await client.aclose()
+
+    async def test_fetch_connect_error_default_allow(self):
+        """httpx.ConnectError → default allow with error message."""
+        from agency_audit.audit.robots import fetch_robots_txt
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("Connection refused")
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+        try:
+            result = await fetch_robots_txt("https://example.com", client=client)
+            assert result.fetched is False
+            assert result.allows_scraping is True
+            assert result.error is not None
+            assert "Connection refused" in result.error
+        finally:
+            await client.aclose()
+
+    async def test_fetch_crawl_delay(self):
+        """Fetch robots.txt with crawl-delay."""
+        from agency_audit.audit.robots import fetch_robots_txt
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                text="User-agent: *\nCrawl-delay: 5\n",
+                request=request,
+            )
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+        try:
+            result = await fetch_robots_txt("https://example.com", client=client)
+            assert result.crawl_delay == 5.0
+        finally:
+            await client.aclose()
+
+    async def test_fetch_sitemap_urls(self):
+        """Fetch robots.txt with multiple sitemap declarations."""
+        from agency_audit.audit.robots import fetch_robots_txt
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                text=(
+                    "User-agent: *\nAllow: /\n"
+                    "Sitemap: https://example.com/sitemap.xml\n"
+                    "Sitemap: https://example.com/sitemap2.xml\n"
+                ),
+                request=request,
+            )
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+        try:
+            result = await fetch_robots_txt("https://example.com", client=client)
+            assert len(result.sitemap_urls) == 2
+            assert "https://example.com/sitemap.xml" in result.sitemap_urls
+            assert "https://example.com/sitemap2.xml" in result.sitemap_urls
+        finally:
+            await client.aclose()
+
+    async def test_fetch_empty_content(self):
+        """Empty robots.txt should be allowed by default."""
+        from agency_audit.audit.robots import fetch_robots_txt
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text="", request=request)
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+        try:
+            result = await fetch_robots_txt("https://example.com", client=client)
+            assert result.fetched is True
+            assert result.allows_scraping is True
+        finally:
+            await client.aclose()
+
+
+class TestRobotsHelpers:
+    """Tests for robots.py helper functions."""
+
+    def test_robots_url_https(self):
+        from agency_audit.audit.robots import _robots_url
+
+        assert _robots_url("https://example.com") == "https://example.com/robots.txt"
+
+    def test_robots_url_with_path(self):
+        from agency_audit.audit.robots import _robots_url
+
+        assert (
+            _robots_url("https://example.com/some/path")
+            == "https://example.com/robots.txt"
+        )
+
+    def test_robots_url_http(self):
+        from agency_audit.audit.robots import _robots_url
+
+        assert _robots_url("http://example.com") == "http://example.com/robots.txt"
+
+    def test_parse_robots_sync(self):
+        from agency_audit.audit.robots import parse_robots_sync
+
+        content = "User-agent: *\nDisallow: /\nCrawl-delay: 3\n"
+        result = parse_robots_sync(content, "https://example.com")
+        assert result.fetched is True
+        assert result.allows_scraping is False
+        assert result.crawl_delay == 3.0
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +578,10 @@ class TestTechStack:
         assert _detect_framework_from_html(html) == "WordPress"
 
     def test_framework_from_html_nextjs(self):
-        html = '<html><head><script id="__NEXT_DATA__" type="application/json"></script></head></html>'
+        html = (
+            '<html><head><script id="__NEXT_DATA__"'
+            ' type="application/json"></script></head></html>'
+        )
         assert _detect_framework_from_html(html) == "Next.js"
 
     def test_framework_from_html_react(self):
