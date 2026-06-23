@@ -785,6 +785,71 @@ class TestTechStack:
 
 
 class TestScoring:
+    # ------------------------------------------------------------------
+    # pytest fixtures — reusable AuditData scenarios
+    # ------------------------------------------------------------------
+
+    @pytest.fixture
+    def default_config(self) -> dict:
+        """Load default scoring config once per test."""
+        return load_scoring_config()
+
+    @pytest.fixture
+    def base_audit(self) -> AuditData:
+        """Minimal AuditData with neutral defaults (robots allows, SSL valid)."""
+        return AuditData(
+            url="https://example.com",
+            robots=RobotsResult(fetched=True, allows_scraping=True),
+            ssl_valid=True,
+        )
+
+    @pytest.fixture
+    def perfect_audit(self) -> AuditData:
+        """AuditData with every positive trait — maxes out the scoring config."""
+        return AuditData(
+            url="https://perfect.example.com",
+            robots=RobotsResult(fetched=True, allows_scraping=True),
+            anti_scraping=AntiScrapingResult(detected=False),
+            api_detection=ApiDetectionResult(detected=True, api_type="graphql"),
+            property_count=PropertyCountResult(count=2000, confidence=0.9),
+            listing_quality=ListingQualityResult(
+                has_structured_data=True,
+                has_images=True,
+                has_descriptions=True,
+                has_prices=True,
+                has_locations=True,
+                has_property_map=True,
+                quality_score=1.0,
+            ),
+            tech_stack=TechStackResult(framework="WordPress"),
+            response_time_ms=200,
+            ssl_valid=True,
+        )
+
+    @pytest.fixture
+    def negative_audit(self) -> AuditData:
+        """AuditData with every negative trait — worst possible scoring."""
+        return AuditData(
+            url="https://bad.example.com",
+            robots=RobotsResult(fetched=True, allows_scraping=False),
+            anti_scraping=AntiScrapingResult(detected=True, cloudflare=True),
+            api_detection=ApiDetectionResult(detected=False),
+            property_count=PropertyCountResult(count=0),
+            listing_quality=ListingQualityResult(quality_score=0.0),
+            tech_stack=TechStackResult(),
+            response_time_ms=5000,
+            ssl_valid=False,
+        )
+
+    @pytest.fixture
+    def empty_audit(self) -> AuditData:
+        """AuditData with all defaults — simulates pre-check state."""
+        return AuditData()
+
+    # ------------------------------------------------------------------
+    # existing tests
+    # ------------------------------------------------------------------
+
     def test_default_config_loaded(self):
         config = load_scoring_config()
         assert "robots_allows" in config
@@ -927,6 +992,197 @@ class TestScoring:
         )
         score, breakdown = compute_score(audit)
         assert sum(breakdown.values()) == score or score == 100  # might be clamped
+
+    # ------------------------------------------------------------------
+    # fixture-driven tests — perfect score, zero score, partial data,
+    # breakdown→to_dict integration, response time boundaries, tier
+    # boundaries
+    # ------------------------------------------------------------------
+
+    def test_perfect_score_is_100(self, perfect_audit, default_config):
+        """A site with every positive trait should score 100 (clamped)."""
+        score, breakdown = compute_score(perfect_audit, default_config)
+        assert score == 100, f"Expected 100, got {score}"
+        # All positive breakdown keys should be present
+        assert "robots_allows" in breakdown
+        assert "has_graphql_api" in breakdown
+        assert "property_count_1000+" in breakdown
+        assert "has_structured_data" in breakdown
+        assert "listings_have_prices" in breakdown
+        assert "listings_have_locations" in breakdown
+        assert "listings_have_images" in breakdown
+        assert "listings_have_descriptions" in breakdown
+        assert "has_property_map" in breakdown
+        assert "response_time_fast" in breakdown
+        assert "ssl_valid" in breakdown
+
+    def test_zero_score_with_neutral_config(self, base_audit, default_config):
+        """With all config weights zeroed, any audit should score 0."""
+        zero_config = {k: 0 for k in default_config}
+        zero_config["property_count_tiers"] = []
+        zero_config["min_score"] = -100
+        zero_config["max_score"] = 100
+        score, breakdown = compute_score(base_audit, zero_config)
+        assert score == 0, f"Expected 0, got {score}"
+
+    def test_empty_audit_scores_positive(self, empty_audit, default_config):
+        """Default AuditData (robots allows + SSL valid) scores 25."""
+        score, breakdown = compute_score(empty_audit, default_config)
+        assert score == 25, f"Expected 25, got {score} (breakdown={breakdown})"
+        assert "robots_allows" in breakdown
+        assert "ssl_valid" in breakdown
+
+    def test_breakdown_propagates_to_to_dict(self, perfect_audit, default_config):
+        """score_breakdown in AuditData.to_dict() matches compute_score output."""
+        score, breakdown = compute_score(perfect_audit, default_config)
+        perfect_audit.score = score
+        perfect_audit.score_breakdown = breakdown
+        data = perfect_audit.to_dict()
+        assert data["score"] == score
+        assert data["score_breakdown"] == breakdown
+        # Verify breakdown is JSON-serializable
+        import json
+
+        json.dumps(data)
+
+    def test_breakdown_keys_are_stable(self, default_config):
+        """Breakdown keys should match the config keys they draw from."""
+        valid_keys = {
+            "robots_allows",
+            "robots_disallows",
+            "has_anti_scraping",
+            "has_api",
+            "has_graphql_api",
+            "has_structured_data",
+            "listings_have_prices",
+            "listings_have_locations",
+            "listings_have_images",
+            "listings_have_descriptions",
+            "has_property_map",
+            "response_time_fast",
+            "response_time_slow",
+            "ssl_valid",
+            "ssl_invalid",
+        }
+        # property_count_tiers produce dynamic keys like "property_count_1000+"
+        audit = AuditData(
+            robots=RobotsResult(allows_scraping=True),
+            anti_scraping=AntiScrapingResult(detected=True),
+            api_detection=ApiDetectionResult(detected=True, api_type="rest"),
+            property_count=PropertyCountResult(count=1000),
+            listing_quality=ListingQualityResult(
+                has_structured_data=True,
+                has_prices=True,
+                has_locations=True,
+                has_images=True,
+                has_descriptions=True,
+                has_property_map=True,
+            ),
+            response_time_ms=200,
+            ssl_valid=True,
+        )
+        _, breakdown = compute_score(audit, default_config)
+        for key in breakdown:
+            if not key.startswith("property_count_"):
+                assert key in valid_keys, f"Unexpected breakdown key: {key}"
+
+    def test_response_time_fast_boundary(self, base_audit, default_config):
+        """Response times strictly under 500ms earn 'fast' points."""
+        # 499ms — fast
+        audit_fast = AuditData(**{**base_audit.__dict__, "response_time_ms": 499})
+        _, bd = compute_score(audit_fast, default_config)
+        assert "response_time_fast" in bd
+
+        # 500ms — neutral (not fast, not slow)
+        audit_neutral = AuditData(**{**base_audit.__dict__, "response_time_ms": 500})
+        _, bd = compute_score(audit_neutral, default_config)
+        assert "response_time_fast" not in bd
+        assert "response_time_slow" not in bd
+
+    def test_response_time_slow_boundary(self, base_audit, default_config):
+        """Response times strictly over 3000ms earn 'slow' penalty."""
+        # 3000ms — neutral (not slow)
+        audit_neutral = AuditData(**{**base_audit.__dict__, "response_time_ms": 3000})
+        _, bd = compute_score(audit_neutral, default_config)
+        assert "response_time_slow" not in bd
+
+        # 3001ms — slow
+        audit_slow = AuditData(**{**base_audit.__dict__, "response_time_ms": 3001})
+        _, bd = compute_score(audit_slow, default_config)
+        assert "response_time_slow" in bd
+
+    def test_response_time_none_no_effect(self, base_audit, default_config):
+        """None response_time_ms should produce no performance points."""
+        audit = AuditData(**{**base_audit.__dict__, "response_time_ms": None})
+        _, breakdown = compute_score(audit, default_config)
+        assert "response_time_fast" not in breakdown
+        assert "response_time_slow" not in breakdown
+
+    def test_property_count_tier_boundaries(self, base_audit, default_config):
+        """Property counts exactly at tier minimums should earn those points."""
+
+        def score_for_count(count):
+            a = AuditData(
+                **{**base_audit.__dict__, "property_count": PropertyCountResult(count=count)},
+            )
+            s, bd = compute_score(a, default_config)
+            return s, bd
+
+        # 1000+ tier
+        _, bd = score_for_count(1000)
+        assert "property_count_1000+" in bd
+        assert bd["property_count_1000+"] == default_config["property_count_tiers"][0]["points"]
+
+        # 500+ tier
+        _, bd = score_for_count(500)
+        assert "property_count_500+" in bd
+
+        # 100+ tier
+        _, bd = score_for_count(100)
+        assert "property_count_100+" in bd
+
+        # 10+ tier
+        _, bd = score_for_count(10)
+        assert "property_count_10+" in bd
+
+        # Below lowest tier — no property_count key
+        _, bd = score_for_count(5)
+        pc_keys = [k for k in bd if k.startswith("property_count_")]
+        assert pc_keys == [], f"Unexpected property_count keys: {pc_keys}"
+
+    def test_ssl_invalid_penalty(self, base_audit, default_config):
+        """Invalid SSL should apply the ssl_invalid penalty."""
+        audit = AuditData(**{**base_audit.__dict__, "ssl_valid": False})
+        _, breakdown = compute_score(audit, default_config)
+        assert "ssl_invalid" in breakdown
+        assert "ssl_valid" not in breakdown
+
+    def test_robots_default_allow(self, default_config):
+        """Default RobotsResult (allows_scraping=True) earns robots_allows."""
+        audit = AuditData(robots=RobotsResult())  # default allow
+        _, breakdown = compute_score(audit, default_config)
+        assert "robots_allows" in breakdown
+        assert "robots_disallows" not in breakdown
+
+    def test_partial_data_only_api(self, default_config):
+        """When only API detection is populated, see API keys in breakdown."""
+        audit = AuditData(
+            api_detection=ApiDetectionResult(detected=True, api_type="rest"),
+        )
+        score, breakdown = compute_score(audit, default_config)
+        assert "has_api" in breakdown
+        # Default AuditData also has robots_allows (20) + ssl_valid (5) = 45
+        assert score == 45, f"Expected 45, got {score} (breakdown={breakdown})"
+
+    def test_partial_data_only_property_count(self, base_audit, default_config):
+        """Only property_count populated — only tier key appears."""
+        audit = AuditData(
+            **{**base_audit.__dict__, "property_count": PropertyCountResult(count=800)},
+        )
+        _, breakdown = compute_score(audit, default_config)
+        pc_keys = [k for k in breakdown if k.startswith("property_count_")]
+        assert len(pc_keys) == 1
+        assert pc_keys[0] == "property_count_500+"
 
 
 # ---------------------------------------------------------------------------
