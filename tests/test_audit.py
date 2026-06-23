@@ -459,7 +459,7 @@ class TestAntiScrapingIntegration:
             "https://example.com",
             html=html,
             server="cloudflare",
-            **{"cf-ray": "abc123", "x-sucuri-id": "12345"}
+            **{"cf-ray": "abc123", "x-sucuri-id": "12345"},
         )
         assert result.cloudflare is True
         assert result.recaptcha is False  # no recaptcha in html
@@ -474,10 +474,7 @@ class TestAntiScrapingIntegration:
             "<body>Just a moment... __cf_bm=test</body>"
         )
         result = await self._run(
-            "https://example.com",
-            html=html,
-            server="cloudflare",
-            **{"x-sucuri-id": "12345"}
+            "https://example.com", html=html, server="cloudflare", **{"x-sucuri-id": "12345"}
         )
         assert result.cloudflare is True
         assert result.recaptcha is True
@@ -495,9 +492,7 @@ class TestAntiScrapingIntegration:
         transport = httpx.MockTransport(error_handler)
         client = httpx.AsyncClient(transport=transport)
         try:
-            result = await detect_anti_scraping(
-                "https://unreachable.test", client=client
-            )
+            result = await detect_anti_scraping("https://unreachable.test", client=client)
             assert result.detected is False
             assert any("error" in d for d in result.details)
         finally:
@@ -514,9 +509,7 @@ class TestAntiScrapingIntegration:
             headers={"server": "cloudflare"},
             request=httpx.Request("GET", "https://example.com"),
         )
-        result = await detect_anti_scraping(
-            "https://example.com", response=response
-        )
+        result = await detect_anti_scraping("https://example.com", response=response)
         assert result.cloudflare is True
         assert result.recaptcha is True
         assert result.detected is True
@@ -528,9 +521,7 @@ class TestAntiScrapingIntegration:
             "<html><head><title>Real Estate Agency</title></head>"
             "<body><p>Welcome to our agency.</p></body></html>"
         )
-        result = await self._run(
-            "https://example.com", html=html, server="nginx"
-        )
+        result = await self._run("https://example.com", html=html, server="nginx")
         assert result.detected is False
         assert result.cloudflare is False
         assert result.recaptcha is False
