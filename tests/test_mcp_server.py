@@ -1,11 +1,12 @@
 """Tests for the agency-audit MCP server tools.
 
-These tests run against the live PostgreSQL database (agency_audit).
-They use the shared connection pool from agency_audit.db and clean up
-after themselves.
+Integration tests (fixtures section) run against a live PostgreSQL database.
+Mocked-connection unit tests (TestGetNextCityAtomic, TestGetUnauditedWebsiteAtomic)
+verify atomic claiming with FOR UPDATE SKIP LOCKED without requiring a live DB.
 """
 
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
 import pytest
@@ -391,3 +392,168 @@ async def test_full_pipeline(db_conn):
     stats = await get_stats()
     assert stats["websites_discovered"] >= 1
     assert stats["websites_audited"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Atomic claim unit tests (no live DB required)
+# ---------------------------------------------------------------------------
+
+
+class TestGetNextCityAtomic:
+    """Mock-based tests verifying atomic UPDATE ... FOR UPDATE SKIP LOCKED."""
+
+    @pytest.mark.asyncio
+    async def test_uses_for_update_skip_locked(self):
+        """Assert the SQL query sent to the database contains FOR UPDATE SKIP LOCKED."""
+        from agency_audit.mcp_server import get_next_city
+
+        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            mock_conn.fetchrow.return_value = {
+                "id": 1,
+                "country": "BG",
+                "label": "Sofia",
+                "slug": "sofia",
+                "population": 1200000,
+                "latitude": 42.7,
+                "longitude": 23.3,
+            }
+
+            result = await get_next_city()
+
+            # Get the query text sent to fetchrow
+            query = mock_conn.fetchrow.call_args[0][0]
+            assert "FOR UPDATE SKIP LOCKED" in query, (
+                f"Query did not contain FOR UPDATE SKIP LOCKED: {query}"
+            )
+            assert "UPDATE cities" in query
+            assert "RETURNING" in query
+            assert result["country"] == "BG"
+            assert result["slug"] == "sofia"
+
+    @pytest.mark.asyncio
+    async def test_returns_error_when_no_pending(self):
+        """When no rows match, the UPDATE ... RETURNING yields None."""
+        from agency_audit.mcp_server import get_next_city
+
+        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            # No pending cities — fetchrow returns None
+            mock_conn.fetchrow.return_value = None
+
+            result = await get_next_city()
+            assert result == {"error": "no pending cities"}
+
+            query = mock_conn.fetchrow.call_args[0][0]
+            assert "FOR UPDATE SKIP LOCKED" in query
+
+    @pytest.mark.asyncio
+    async def test_country_filter_passed_to_query(self):
+        """Country filter should appear in the subquery WHERE clause."""
+        from agency_audit.mcp_server import get_next_city
+
+        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            mock_conn.fetchrow.return_value = {
+                "id": 5,
+                "country": "DE",
+                "label": "Berlin",
+                "slug": "berlin",
+                "population": 3645000,
+                "latitude": 52.52,
+                "longitude": 13.40,
+            }
+
+            result = await get_next_city(country="DE")
+
+            query = mock_conn.fetchrow.call_args[0][0]
+            assert "FOR UPDATE SKIP LOCKED" in query
+            assert "AND country" in query
+            assert result["country"] == "DE"
+
+
+class TestGetUnauditedWebsiteAtomic:
+    """Mock-based tests verifying atomic UPDATE ... FOR UPDATE SKIP LOCKED."""
+
+    @pytest.mark.asyncio
+    async def test_uses_for_update_skip_locked(self):
+        """Assert the SQL query sent to the database contains FOR UPDATE SKIP LOCKED."""
+        from agency_audit.mcp_server import get_unaudited_website
+
+        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            mock_conn.fetchrow.return_value = {
+                "id": 42,
+                "url": "https://example-agency.com",
+                "label": "Example Agency",
+                "maps_place_id": "ChIJ123",
+                "address": "123 Main St",
+                "phone": "+359****3456",
+            }
+            mock_conn.fetch.return_value = [
+                {"id": 1, "label": "Sofia", "slug": "sofia", "country": "BG"}
+            ]
+
+            result = await get_unaudited_website()
+
+            # Verify the atomic UPDATE query
+            query = mock_conn.fetchrow.call_args[0][0]
+            assert "FOR UPDATE SKIP LOCKED" in query, (
+                f"Query did not contain FOR UPDATE SKIP LOCKED: {query}"
+            )
+            assert "UPDATE websites" in query
+            assert "RETURNING" in query
+            assert result["url"] == "https://example-agency.com"
+            assert result["id"] == 42
+            assert len(result["cities"]) == 1
+            assert result["cities"][0]["slug"] == "sofia"
+
+    @pytest.mark.asyncio
+    async def test_returns_error_when_no_pending(self):
+        """When no rows match, the UPDATE ... RETURNING yields None."""
+        from agency_audit.mcp_server import get_unaudited_website
+
+        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            mock_conn.fetchrow.return_value = None
+
+            result = await get_unaudited_website()
+            assert result == {"error": "no pending websites"}
+
+            query = mock_conn.fetchrow.call_args[0][0]
+            assert "FOR UPDATE SKIP LOCKED" in query
