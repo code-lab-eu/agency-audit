@@ -81,9 +81,7 @@ class TestStructuredData:
     def test_jsonld_empty_string(self):
         """Empty script text skipped."""
         html = (
-            "<html><head>"
-            '<script type="application/ld+json">   </script>'
-            "</head><body></body></html>"
+            '<html><head><script type="application/ld+json">   </script></head><body></body></html>'
         )
         assert _check_structured_data(html) is False
 
@@ -237,9 +235,7 @@ class TestAssessListingQuality:
 
         client = _make_client(handler)
         try:
-            result = await assess_listing_quality(
-                "https://example.com", client=client
-            )
+            result = await assess_listing_quality("https://example.com", client=client)
             assert result.has_structured_data is True
             assert result.has_prices is True
             assert result.has_locations is True
@@ -260,9 +256,7 @@ class TestAssessListingQuality:
 
         client = _make_client(handler)
         try:
-            result = await assess_listing_quality(
-                "https://example.com", client=client
-            )
+            result = await assess_listing_quality("https://example.com", client=client)
             assert result.has_structured_data is False
             assert result.has_prices is False
             assert result.has_locations is False
@@ -291,9 +285,7 @@ class TestAssessListingQuality:
 
         client = _make_client(handler)
         try:
-            result = await assess_listing_quality(
-                "https://example.com", client=client
-            )
+            result = await assess_listing_quality("https://example.com", client=client)
             assert result.has_prices is True
             assert result.has_locations is True
             assert result.has_images is True
@@ -314,12 +306,11 @@ class TestAssessListingQuality:
             "</body></html>"
         )
         response = httpx.Response(
-            200, text=html,
+            200,
+            text=html,
             request=httpx.Request("GET", "https://example.com"),
         )
-        result = await assess_listing_quality(
-            "https://example.com", homepage_response=response
-        )
+        result = await assess_listing_quality("https://example.com", homepage_response=response)
         assert result.has_prices is True
         assert result.has_locations is True
         assert result.quality_score == pytest.approx(2.0 / 6.0)
@@ -389,14 +380,13 @@ class TestAssessListingQuality:
     @pytest.mark.asyncio
     async def test_error_handling(self):
         """Connection errors caught, default result returned."""
+
         def error_handler(request):
             raise httpx.ConnectError("Connection refused")
 
         client = _make_client(error_handler)
         try:
-            result = await assess_listing_quality(
-                "https://down.test", client=client
-            )
+            result = await assess_listing_quality("https://down.test", client=client)
             assert result.has_structured_data is False
             assert result.quality_score == 0.0
         finally:
@@ -417,12 +407,8 @@ class TestAssessListingQuality:
 
         client = _make_client(handler)
         try:
-            lq_result = await assess_listing_quality(
-                "https://example.com", client=client
-            )
-            audit = AuditData(
-                url="https://example.com", listing_quality=lq_result
-            )
+            lq_result = await assess_listing_quality("https://example.com", client=client)
+            audit = AuditData(url="https://example.com", listing_quality=lq_result)
             data = audit.to_dict()
             assert data["listings_have_prices"] is True
             assert data["listings_have_locations"] is True
@@ -471,9 +457,7 @@ class TestAssessListingQuality:
 
         client = _make_client(handler)
         try:
-            result = await assess_listing_quality(
-                "https://example.com", client=client
-            )
+            result = await assess_listing_quality("https://example.com", client=client)
             assert result.has_descriptions is True
         finally:
             await client.aclose()
