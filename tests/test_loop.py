@@ -99,6 +99,69 @@ class TestRetry:
         # With base_delay=0.05, backoff=2x: delays = 0.05, 0.10 = 0.15s minimum
         assert elapsed >= 0.10  # at least two delays
 
+    @pytest.mark.asyncio
+    async def test_mark_failed_website_updates_status(self):
+        """mark_failed_website should update website status to 'failed'."""
+        from agency_audit.loop.retry import mark_failed_website
+
+        with patch("agency_audit.loop.retry.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            await mark_failed_website(42, "test error message")
+
+            assert mock_conn.execute.call_count == 2
+
+            # First call: UPDATE websites
+            update_call = mock_conn.execute.call_args_list[0]
+            update_sql = update_call.args[0]
+            assert "UPDATE websites" in update_sql
+            assert "audit_status = 'failed'" in update_sql
+            assert update_call.args[1] == "test error message"
+            assert update_call.args[2] == 42
+
+    @pytest.mark.asyncio
+    async def test_mark_failed_website_audit_log_joins_cities(self):
+        """audit_log INSERT must resolve country via cities JOIN, not website_cities."""
+        from agency_audit.loop.retry import mark_failed_website
+
+        with patch("agency_audit.loop.retry.get_pool") as mock_get_pool:
+            mock_pool = MagicMock()
+            mock_get_pool.return_value = mock_pool
+
+            mock_conn = AsyncMock()
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__.return_value = mock_conn
+            mock_pool.acquire.return_value = mock_ctx
+
+            await mark_failed_website(7, "network timeout")
+
+            assert mock_conn.execute.call_count == 2
+
+            # Second call: INSERT INTO audit_log via SELECT … JOIN
+            insert_call = mock_conn.execute.call_args_list[1]
+            insert_sql = insert_call.args[0]
+
+            # The query must JOIN through cities to get the country
+            assert "JOIN cities c ON wc.city_id = c.id" in insert_sql, (
+                "Expected JOIN through cities table, got: " + insert_sql
+            )
+
+            # The SELECT must reference c.country, NOT wc.country
+            assert "c.country" in insert_sql, "Expected c.country (from cities), got: " + insert_sql
+            assert "wc.country" not in insert_sql, (
+                "website_cities has no country column — must use c.country from cities JOIN"
+            )
+
+            # Verify the parameters
+            assert insert_call.args[1] == "network timeout"
+            assert insert_call.args[2] == 7
+
 
 # ──────────────────────────────────────────────────────────────────────
 # QC tests
