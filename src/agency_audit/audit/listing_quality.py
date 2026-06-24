@@ -18,6 +18,7 @@ import re
 import httpx
 
 from agency_audit.audit.models import ListingQualityResult
+from agency_audit.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +206,7 @@ async def assess_listing_quality(
     result = ListingQualityResult()
     own_client = client is None and homepage_response is None
     if own_client:
-        client = httpx.AsyncClient(timeout=15, follow_redirects=True)
+        client = httpx.AsyncClient(timeout=settings.audit_http_timeout, follow_redirects=True)
 
     try:
         from selectolax.parser import HTMLParser
@@ -241,7 +242,7 @@ async def assess_listing_quality(
         # Also check listing page if provided
         if listing_url and client:
             try:
-                listing_resp = await client.get(listing_url, timeout=15)
+                listing_resp = await client.get(listing_url, timeout=settings.audit_http_timeout)
                 if listing_resp.status_code < 400:
                     listing_tree = HTMLParser(listing_resp.text)
                     if not result.has_prices:

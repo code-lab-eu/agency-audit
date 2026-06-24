@@ -8,19 +8,26 @@ from __future__ import annotations
 
 import logging
 
+from agency_audit.config import settings
+
 logger = logging.getLogger(__name__)
 
 
-async def fetch_with_playwright(url: str, wait_seconds: float = 3.0) -> tuple[str | None, int]:
+async def fetch_with_playwright(
+    url: str, wait_seconds: float | None = None
+) -> tuple[str | None, int]:
     """Fetch a URL using Playwright (headless Chromium).
 
     Args:
         url: URL to fetch.
         wait_seconds: Extra seconds to wait for JS rendering after load.
+            Defaults to settings.playwright_wait_seconds if None.
 
     Returns:
         (html_content, status_code). On error returns (None, 0).
     """
+    if wait_seconds is None:
+        wait_seconds = settings.playwright_wait_seconds
     try:
         from playwright.async_api import async_playwright
 
@@ -28,7 +35,11 @@ async def fetch_with_playwright(url: str, wait_seconds: float = 3.0) -> tuple[st
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
             try:
-                response = await page.goto(url, wait_until="networkidle", timeout=30000)
+                response = await page.goto(
+                    url,
+                    wait_until="networkidle",
+                    timeout=settings.playwright_timeout_ms,
+                )
                 if response is None:
                     return None, 0
                 status = response.status
