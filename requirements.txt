@@ -166,6 +166,8 @@ python-dotenv==1.2.2
     # via
     #   fastmcp-slim
     #   pydantic-settings
+python-json-logger==4.1.0
+    # via agency-audit (pyproject.toml)
 python-multipart==0.0.32
     # via
     #   fastmcp-slim

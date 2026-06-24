@@ -4,7 +4,33 @@ Real Estate Radar — Website Discovery & Audit System.
 
 Discovers, audits, and ranks real estate agency websites across 44 European countries for inclusion in the [Real Estate Radar](https://www.realestateradar.eu/) index.
 
-## Quick Start
+## Quick Start (Docker Compose — full stack)
+
+The easiest way to run the entire stack: PostgreSQL + agency-audit dashboard.
+
+```bash
+# Build and start both services (PostgreSQL + app)
+docker compose up -d --build
+
+# The dashboard is available at http://localhost:8000
+
+# Initialize the database
+docker compose exec app agency-audit db-init
+
+# Seed 44 European countries
+docker compose exec app agency-audit seed-countries
+
+# Import cities from Geonames
+docker compose exec app agency-audit import-geonames
+
+# Check health
+curl http://localhost:8000/health
+
+# View stats
+docker compose exec app agency-audit stats
+```
+
+## Quick Start (local development)
 
 ```bash
 # Install dependencies
@@ -27,6 +53,9 @@ uv run agency-audit import-geonames
 
 # View stats
 uv run agency-audit stats
+
+# Run the web frontend
+uv run agency-audit serve
 ```
 
 ## Project Structure

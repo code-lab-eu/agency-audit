@@ -1,6 +1,6 @@
 # Multi-stage Docker build for agency-audit
 # Stage 1: builder — installs Python deps + packages the project, then discarded
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 # Install uv for fast, deterministic installs
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -19,7 +19,7 @@ RUN uv venv /opt/venv \
     && uv pip install --no-cache .
 
 # Stage 2: minimal runtime image
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Create non-root app user
 RUN groupadd --system app && useradd --system --gid app --create-home app
@@ -28,9 +28,10 @@ RUN groupadd --system app && useradd --system --gid app --create-home app
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder --chown=app:app /build/scoring_config.yaml /app/scoring_config.yaml
 
-# Install system libraries required by Playwright Chromium
+# Install system libraries required by Playwright Chromium, plus curl for healthcheck
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        curl \
         libglib2.0-0 \
         libnss3 \
         libnspr4 \
