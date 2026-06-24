@@ -27,6 +27,9 @@ uv run agency-audit import-geonames
 
 # View stats
 uv run agency-audit stats
+
+# Run the web frontend
+uv run agency-audit serve
 ```
 
 ## Project Structure
