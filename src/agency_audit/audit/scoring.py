@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agency_audit.audit.models import AuditData
+from agency_audit.config import settings
 
 # Default scoring config — used if no YAML config file is found
 DEFAULT_CONFIG: dict = {
@@ -59,11 +60,22 @@ CONFIG_FILE_PATHS = [
 def load_scoring_config() -> dict:
     """Load scoring config from YAML file, or fall back to defaults.
 
-    Searches standard paths for scoring_config.yaml.
+    Checks AGENCY_AUDIT_SCORING_CONFIG_PATH first (if configured),
+    then searches standard paths for scoring_config.yaml.
     """
-    # Try to load YAML config
     try:
         import yaml  # type: ignore[import-untyped]
+
+        # If an explicit path is configured, try it first
+        if settings.scoring_config_path:
+            explicit = Path(settings.scoring_config_path)
+            if explicit.exists():
+                with open(explicit) as f:
+                    user_config = yaml.safe_load(f)
+                if user_config:
+                    merged = DEFAULT_CONFIG.copy()
+                    merged.update(user_config)
+                    return merged
 
         for path in CONFIG_FILE_PATHS:
             if path.exists():
