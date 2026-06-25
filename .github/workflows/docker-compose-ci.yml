@@ -111,6 +111,7 @@ jobs:
 
           docker compose exec -T app pytest \
             --asyncio-mode=auto \
+            --cov=/workspace/src/agency_audit \
             --cov-config=/workspace/.coveragerc \
             --cov-report=xml \
             --cov-report=term-missing \
