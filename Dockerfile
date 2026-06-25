@@ -60,9 +60,13 @@ RUN apt-get update \
         libatspi2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Playwright Chromium browser (must run as root)
-RUN /opt/venv/bin/playwright install chromium \
-    && /opt/venv/bin/playwright install-deps chromium
+# Install Playwright Chromium browser.  System deps are installed as root;
+# the browser binary is installed as root but to a shared location so the
+# non-root app user can launch it at runtime.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+RUN /opt/venv/bin/playwright install-deps chromium \
+    && /opt/venv/bin/playwright install chromium \
+    && chown -R app:app /opt/playwright-browsers
 
 # Set up environment
 ENV PATH="/opt/venv/bin:$PATH"
