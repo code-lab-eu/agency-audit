@@ -471,9 +471,13 @@ def test_discover_command_no_results():
 
 
 def test_serve_command_executes():
-    """serve command invokes uvicorn.run (mocked to not block) and prints status."""
-    with patch("uvicorn.run") as mock_run:
-        result = runner.invoke(app, ["serve", "--host", "127.0.0.1", "--port", "9999"])
-        assert result.exit_code == 0
-        assert "Starting Agency Audit dashboard" in result.output
-        mock_run.assert_called_once()
+    """serve command creates a uvicorn.Server and prints status."""
+    with patch("uvicorn.Server") as mock_server_cls:
+        mock_server = mock_server_cls.return_value
+        mock_server.run = MagicMock()  # prevent actual server start
+
+        with patch("agency_audit.cli.asyncio.run"):
+            result = runner.invoke(app, ["serve", "--host", "127.0.0.1", "--port", "9999"])
+            assert result.exit_code == 0
+            assert "Starting Agency Audit dashboard" in result.output
+            mock_server.run.assert_called_once()

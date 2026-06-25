@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # Google Maps Places API key, used by the discovery pipeline
     google_maps_api_key: str = ""
 
+    # Structured JSON logging
+    log_level: str = "INFO"
+    log_format: str = "json"  # "json" or "console"
+
     @property
     def dsn(self) -> str:
         """Asyncpg connection DSN."""

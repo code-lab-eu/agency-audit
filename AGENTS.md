@@ -14,6 +14,18 @@ audit each site with 7 checks → score 0–100 → queue re-audits for stale
 entries.  The full loop (`discover → audit → QC → reaudit`) runs
 country-by-country through the orchestrator.
 
+## Branch and PR discipline (non-negotiable)
+
+- ALWAYS create a feature branch off master before touching any code:
+  `git checkout master && git pull && git checkout -b fix/<slug>` or `feat/<slug>`.
+- NEVER push directly to master. Not for small fixes, not for typos, not ever.
+- When your work is complete, push your branch and open a pull request against
+  master. Do NOT merge the PR yourself — the gate runs, a human reviews.
+- A task is NOT complete until the corresponding pull request has been created
+  and all required CI checks pass. Work committed to a branch with no PR is
+  lost work — it will never be reviewed or merged.
+- Use the `gh` CLI for PR creation: `gh pr create --title "..." --body "..."`.
+
 ## Prerequisites
 
 - Python **3.14+**
@@ -204,15 +216,38 @@ merge conflicts.
 3. Commit with [conventional commit](https://www.conventionalcommits.org/)
    prefixes (`feat:`, `fix:`, `test:`, `refactor:`)
 4. **Re-sync before pushing.** `master` may have moved while you worked:
-   `git fetch origin && git rebase origin/master`, resolve any conflicts, then
+   `git fetch origin && git merge origin/master`, resolve any conflicts, then
    re-run `scripts/qa.sh` before continuing.
 5. Push your branch and open a PR against `master` — CI runs ruff lint,
    ruff format check, and mypy.  A human reviews before merge
-6. **If the PR reports conflicts with `master`**, rebase onto the latest and
-   force-push the branch:
-   `git fetch origin && git rebase origin/master` (fix conflicts, re-run the
-   suite) then `git push --force-with-lease`
+6. **If the PR reports conflicts with `master`**, merge master into your branch:
+   `git fetch origin && git merge origin/master` (resolve conflicts, re-run the
+   suite) then `git push origin <branch-name>`. Do NOT rebase and force-push.
 7. Never push directly to `master`
+
+## Force-push avoidance
+
+**Never rebase, squash, amend, or otherwise rewrite pushed commits on a
+shared branch.** Force-pushes (`git push --force`, `git push --force-with-lease`,
+`git push --force-if-includes`) require manual approval on this repository and
+block progress until a human reviews and grants permission.
+
+Use these alternatives instead:
+
+- **Merge conflicts:** Pull the latest `master` and merge it into your branch
+  (`git fetch origin && git merge origin/master`). Resolve conflicts, re-run
+  the full test suite, and push normally with `git push origin <branch-name>`.
+- **Fixing a mistake in the latest commit:** Make a new commit rather than
+  amending the pushed one. Use `git commit --fixup <sha>` and squash during
+  merge at PR time.
+- **Accidentally committed to the wrong branch:** Create a new branch from the
+  current HEAD (`git checkout -b <correct-branch>`), then push the new branch.
+  The old branch will be cleaned up at PR merge.
+
+If you inadvertently create a situation that would require force-push (e.g. a
+sensitive key in a pushed commit, a large file that should not be in the repo),
+do not proceed — seek human help or abandon the current branch and recreate
+the changes on a fresh branch without rewriting history on the shared one.
 
 ## Additional context
 
