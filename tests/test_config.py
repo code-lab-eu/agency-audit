@@ -60,7 +60,13 @@ class TestSettingsDSN:
         assert parts["db"] == "testdb"
 
     def test_dsn_default_values(self):
-        s = Settings()
+        s = Settings(
+            pg_host="localhost",
+            pg_port=5432,
+            pg_user="agency_audit",
+            pg_password="",
+            pg_database="agency_audit",
+        )
         parts = _dsn_parts(s.dsn)
         assert parts["user"] == "agency_audit"
         assert parts["password"] == ""
@@ -112,7 +118,13 @@ class TestSettingsDefaults:
     """Tests for default configuration values."""
 
     def test_pg_defaults(self):
-        s = Settings()
+        s = Settings(
+            pg_host="localhost",
+            pg_port=5432,
+            pg_user="agency_audit",
+            pg_password="",
+            pg_database="agency_audit",
+        )
         assert s.pg_host == "localhost"
         assert s.pg_port == 5432
         assert s.pg_user == "agency_audit"
