@@ -21,9 +21,9 @@ country-by-country through the orchestrator.
 - NEVER push directly to master. Not for small fixes, not for typos, not ever.
 - When your work is complete, push your branch and open a pull request against
   master. Do NOT merge the PR yourself — the gate runs, a human reviews.
-- A task or feature is NOT considered complete until the corresponding pull
-  request has been created and all required CI checks pass. No work is done
-  until it is merged with approval.
+- A task is NOT complete until the corresponding pull request has been created
+  and all required CI checks pass. Work committed to a branch with no PR is
+  lost work — it will never be reviewed or merged.
 - Use the `gh` CLI for PR creation: `gh pr create --title "..." --body "..."`.
 
 ## Prerequisites
