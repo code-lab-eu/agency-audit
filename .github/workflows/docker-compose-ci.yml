@@ -94,9 +94,10 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          docker compose exec -T -w /workspace app pytest \
+          docker compose exec -T app pytest \
             --asyncio-mode=auto \
-            --cov=src/agency_audit \
+            --cov=/workspace/src/agency_audit \
+            --cov-config=/workspace/pyproject.toml \
             --cov-fail-under=80 \
             --cov-report=xml \
             --cov-report=term-missing \
