@@ -94,11 +94,24 @@ jobs:
 
       - name: Run tests with coverage
         run: |
+          # Create Docker-specific .coveragerc with absolute paths.
+          # The repo's pyproject.toml uses relative paths that don't resolve
+          # when coverage measures /workspace/src/agency_audit.
+          cat > .coveragerc <<'EOF'
+          [run]
+          source = /workspace/src/agency_audit
+          omit =
+              */scripts/*
+              */tests/*
+
+          [report]
+          fail_under = 80
+          show_missing = true
+          EOF
+
           docker compose exec -T app pytest \
             --asyncio-mode=auto \
-            --cov=/workspace/src/agency_audit \
-            --cov-config=/workspace/pyproject.toml \
-            --cov-fail-under=80 \
+            --cov-config=/workspace/.coveragerc \
             --cov-report=xml \
             --cov-report=term-missing \
             --junitxml=junit.xml \
