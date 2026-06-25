@@ -170,3 +170,17 @@ class TestSettingsDefaults:
 
     def test_google_maps_api_key_default(self):
         assert Settings().google_maps_api_key == ""
+
+    def test_pg_pool_min_size_warns_on_invalid(self, caplog):
+        """Settings with pg_pool_min_size < 1 should log a warning."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+        Settings(pg_pool_min_size=0)
+        assert "PG_POOL_MIN_SIZE" in caplog.text
+
+    def test_ensure_ready_db_fails_with_empty_host(self):
+        """ensure_ready_for('db') should fail when pg_host is empty."""
+        s = Settings(pg_host="")
+        with pytest.raises(RuntimeError, match="pg_host"):
+            s.ensure_ready_for("db")
