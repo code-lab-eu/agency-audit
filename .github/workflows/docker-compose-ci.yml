@@ -81,7 +81,7 @@ jobs:
 
       - name: Install project in editable mode (for source-level coverage)
         run: |
-          docker compose exec -T --user root app /opt/venv/bin/pip install -e /workspace
+          docker compose exec -T --user root app /opt/venv/bin/pip install --no-build-isolation -e /workspace
 
       - name: Install test dependencies
         run: |

@@ -2,18 +2,13 @@
 # Stage 1: builder — installs Python deps + packages the project, then discarded
 FROM python:3.14-slim AS builder
 
-# Install uv for fast, deterministic installs
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-
 WORKDIR /build
 
 # Install build tools: some packages may not have pre-built wheels
 # for Python 3.14 yet and need compilation from source (selectolax,
 # cryptography, greenlet, asyncpg, pydantic-core, etc.).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
-        python3-dev \
+    && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy project files needed for installation
@@ -23,12 +18,14 @@ COPY src/ ./src/
 COPY scoring_config.yaml ./
 
 # Create a virtualenv and install the project with pinned dependencies.
-# Install hatchling first so we can use --no-build-isolation — avoids uv
-# creating a separate build venv that may fail on slim base images.
-RUN uv venv /opt/venv \
-    && uv pip install --no-cache hatchling \
-    && uv pip install --no-cache -r requirements.txt \
-    && uv pip install --no-cache --no-build-isolation .
+# Install hatchling first so we can use --no-build-isolation, avoiding
+# pip creating a separate build venv that may fail on slim base images.
+# Use explicit /opt/venv/bin/pip paths so packages land in the venv
+# (not system Python) and the venv has pip available for CI steps.
+RUN python3 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir hatchling \
+    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt \
+    && /opt/venv/bin/pip install --no-cache-dir --no-build-isolation .
 
 # Stage 2: minimal runtime image
 FROM python:3.14-slim
