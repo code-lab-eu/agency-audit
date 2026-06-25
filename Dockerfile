@@ -35,7 +35,6 @@ RUN groupadd --system app && useradd --system --gid app --create-home app
 
 # Copy virtualenv from builder (includes agency-audit + all deps)
 COPY --from=builder /opt/venv /opt/venv
-COPY --from=builder --chown=app:app /build/scoring_config.yaml /app/scoring_config.yaml
 
 # Install system libraries required by Playwright Chromium, plus curl for healthcheck
 RUN apt-get update \
@@ -61,7 +60,7 @@ RUN apt-get update \
         libatspi2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Playwright Chromium browser
+# Install Playwright Chromium browser (must run as root)
 RUN /opt/venv/bin/playwright install chromium \
     && /opt/venv/bin/playwright install-deps chromium
 
@@ -69,7 +68,12 @@ RUN /opt/venv/bin/playwright install chromium \
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
+# Create app directory and install scoring config.  Ownership is set to app
+# so the non-root user can write pytest output files (.coverage, junit.xml,
+# coverage.xml) and the /health endpoint can read scoring_config.yaml.
 WORKDIR /app
+COPY --from=builder --chown=app:app /build/scoring_config.yaml /app/scoring_config.yaml
+RUN chown app:app /app
 
 # Switch to non-root user
 USER app
