@@ -1,0 +1,7 @@
+# CI override: mounts the repository source for testing inside the app container.
+# Use alongside docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+services:
+  app:
+    volumes:
+      - .:/workspace:ro
