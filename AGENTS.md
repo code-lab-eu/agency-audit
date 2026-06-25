@@ -14,6 +14,18 @@ audit each site with 7 checks → score 0–100 → queue re-audits for stale
 entries.  The full loop (`discover → audit → QC → reaudit`) runs
 country-by-country through the orchestrator.
 
+## Branch and PR discipline (non-negotiable)
+
+- ALWAYS create a feature branch off master before touching any code:
+  `git checkout master && git pull && git checkout -b fix/<slug>` or `feat/<slug>`.
+- NEVER push directly to master. Not for small fixes, not for typos, not ever.
+- When your work is complete, push your branch and open a pull request against
+  master. Do NOT merge the PR yourself — the gate runs, a human reviews.
+- A task or feature is NOT considered complete until the corresponding pull
+  request has been created and all required CI checks pass. No work is done
+  until it is merged with approval.
+- Use the `gh` CLI for PR creation: `gh pr create --title "..." --body "..."`.
+
 ## Prerequisites
 
 - Python **3.14+**
