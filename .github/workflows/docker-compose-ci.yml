@@ -97,7 +97,8 @@ jobs:
           docker compose exec -T app pytest \
             --asyncio-mode=auto \
             --cov=/workspace/src/agency_audit \
-            --cov-config=/workspace/pyproject.toml \
+            --cov-omit="*/scripts/*" \
+            --cov-omit="*/tests/*" \
             --cov-report=xml \
             --cov-report=term-missing \
             --junitxml=junit.xml \
