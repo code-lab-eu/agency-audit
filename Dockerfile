@@ -36,37 +36,16 @@ RUN groupadd --system app && useradd --system --gid app --create-home app
 # Copy virtualenv from builder (includes agency-audit + all deps)
 COPY --from=builder /opt/venv /opt/venv
 
-# Install system libraries required by Playwright Chromium, plus curl for healthcheck
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        curl \
-        libglib2.0-0 \
-        libnss3 \
-        libnspr4 \
-        libatk1.0-0 \
-        libatk-bridge2.0-0 \
-        libcups2 \
-        libdrm2 \
-        libdbus-1-3 \
-        libxkbcommon0 \
-        libxcomposite1 \
-        libxdamage1 \
-        libxfixes3 \
-        libxrandr2 \
-        libgbm1 \
-        libpango-1.0-0 \
-        libcairo2 \
-        libasound2 \
-        libatspi2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Playwright Chromium browser.  System deps are installed as root;
-# the browser binary is installed as root but to a shared location so the
-# non-root app user can launch it at runtime.
+# Install curl for healthcheck and Playwright browsers with system deps.
+# playwright install-deps auto-detects the OS and installs all required
+# Chromium libraries via apt-get, then we install Chromium itself.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-RUN /opt/venv/bin/playwright install-deps chromium \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && /opt/venv/bin/playwright install-deps chromium \
     && /opt/venv/bin/playwright install chromium \
-    && chown -R app:app /opt/playwright-browsers
+    && chown -R app:app /opt/playwright-browsers \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set up environment
 ENV PATH="/opt/venv/bin:$PATH"

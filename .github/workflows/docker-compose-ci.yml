@@ -81,7 +81,7 @@ jobs:
 
       - name: Install project in editable mode (for source-level coverage)
         run: |
-          docker compose exec -T --user root app /opt/venv/bin/pip install --no-build-isolation -e /workspace
+          docker compose exec -T --user root app /opt/venv/bin/pip install --no-deps --no-build-isolation -e /workspace
 
       - name: Install test dependencies
         run: |
@@ -96,7 +96,7 @@ jobs:
         run: |
           docker compose exec -T app pytest \
             --asyncio-mode=auto \
-            --cov=agency_audit \
+            --cov=/workspace/src/agency_audit \
             --cov-report=xml \
             --cov-report=term-missing \
             --junitxml=junit.xml \
