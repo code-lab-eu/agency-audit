@@ -92,42 +92,23 @@ jobs:
             coverage \
             hypothesis
 
+      # Run from the mounted source at /workspace so coverage resolves the
+      # relative paths in pyproject.toml's [tool.coverage] config.
       - name: Run tests with coverage
         run: |
-          # Create Docker-specific .coveragerc with absolute paths.
-          # The repo's pyproject.toml uses relative paths that don't resolve
-          # when coverage measures /workspace/src/agency_audit.
-          cat > .coveragerc <<'EOF'
-          [run]
-          source = /workspace/src/agency_audit
-          omit =
-              */scripts/*
-              */tests/*
-
-          [report]
-          fail_under = 80
-          show_missing = true
-          EOF
-
-          docker compose exec -T app pytest \
-            --asyncio-mode=auto \
-            --cov=/workspace/src/agency_audit \
-            --cov-config=/workspace/.coveragerc \
-            --cov-report=xml \
+          docker compose exec -T --workdir /workspace app pytest \
+            --cov=src/agency_audit \
             --cov-report=term-missing \
+            --cov-report=xml \
             --junitxml=junit.xml \
-            /workspace/tests/
-
-      - name: Coverage threshold check
-        run: |
-          docker compose exec -T app coverage report --fail-under=80
+            tests/
 
       - name: Coverage summary
         if: always()
         run: |
           echo "## Docker Compose Coverage Report" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          docker compose exec -T app coverage report 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          docker compose exec -T --workdir /workspace app coverage report 2>&1 | tee -a $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Docker logs on failure

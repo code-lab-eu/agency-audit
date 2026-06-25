@@ -76,20 +76,25 @@ src/agency_audit/
 
 ## Quality Assurance
 
-Install the dev dependencies (ruff, pytest) into the project environment first:
+Install the dev dependencies:
 
 ```bash
 uv sync --extra dev
 ```
 
-The CI `quality` job runs the following checks. Run them locally before pushing —
-they must all pass for the build to go green:
+Run all checks (lint, format, type-check, tests):
+
+```bash
+./scripts/qa.sh
+```
+
+Or run them individually:
 
 ```bash
 # Lint
 uv run ruff check src/ tests/
 
-# Format check (use `ruff format` without --check to auto-apply)
+# Format check
 uv run ruff format --check src/ tests/
 
 # Type check
@@ -97,9 +102,15 @@ uv run mypy src/
 
 # Tests
 uv run pytest
+
+# A single test
+uv run pytest tests/test_foo.py::test_bar
+
+# Tests with coverage
+uv run pytest --cov=src/agency_audit --cov-report=term-missing
 ```
 
-To auto-fix most lint and all formatting issues:
+To auto-fix lint and formatting:
 
 ```bash
 uv run ruff check --fix src/ tests/
