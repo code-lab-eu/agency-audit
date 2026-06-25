@@ -93,14 +93,15 @@ jobs:
             hypothesis
 
       # Run from the mounted source at /workspace so coverage resolves the
-      # relative paths in pyproject.toml's [tool.coverage] config.
+      # relative paths in pyproject.toml's [tool.coverage] config. The non-root
+      # user can't write to the /workspace bind mount, so the .coverage data
+      # file is redirected to the writable /app via COVERAGE_FILE.
       - name: Run tests with coverage
         run: |
-          docker compose exec -T --workdir /workspace app pytest \
+          docker compose exec -T --workdir /workspace -e COVERAGE_FILE=/app/.coverage app pytest \
+            -p no:cacheprovider \
             --cov=src/agency_audit \
             --cov-report=term-missing \
-            --cov-report=xml \
-            --junitxml=junit.xml \
             tests/
 
       - name: Coverage summary
@@ -108,7 +109,7 @@ jobs:
         run: |
           echo "## Docker Compose Coverage Report" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          docker compose exec -T --workdir /workspace app coverage report 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          docker compose exec -T --workdir /workspace -e COVERAGE_FILE=/app/.coverage app coverage report 2>&1 | tee -a $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Docker logs on failure
