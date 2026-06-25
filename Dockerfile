@@ -56,6 +56,7 @@ ENV PYTHONUNBUFFERED=1
 # coverage.xml) and the /health endpoint can read scoring_config.yaml.
 WORKDIR /app
 COPY --from=builder --chown=app:app /build/scoring_config.yaml /app/scoring_config.yaml
+COPY --from=builder --chown=app:app /build/pyproject.toml /app/pyproject.toml
 RUN chown app:app /app
 
 # Switch to non-root user
