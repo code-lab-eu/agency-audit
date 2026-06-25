@@ -23,7 +23,7 @@ COPY scoring_config.yaml ./
 # Use explicit /opt/venv/bin/pip paths so packages land in the venv
 # (not system Python) and the venv has pip available for CI steps.
 RUN python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir hatchling \
+    && /opt/venv/bin/pip install --no-cache-dir hatchling editables \
     && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt \
     && /opt/venv/bin/pip install --no-cache-dir --no-build-isolation .
 
