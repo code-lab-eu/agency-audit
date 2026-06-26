@@ -73,7 +73,7 @@ jobs:
           AGENCY_AUDIT_PG_USER: testuser
           AGENCY_AUDIT_PG_PASSWORD: testpass
           AGENCY_AUDIT_PG_DATABASE: testdb
-        run: python .github/scripts/ci-db-setup.py
+        run: python scripts/seed-test-db.py
 
       - name: Run tests with coverage
         env:
