@@ -82,6 +82,12 @@ Install the dev dependencies:
 uv sync --extra dev
 ```
 
+The integration tests run against a live PostgreSQL database. Seed one with:
+
+```bash
+uv run scripts/seed-test-db.py
+```
+
 Run all checks (lint, format, type-check, tests):
 
 ```bash
