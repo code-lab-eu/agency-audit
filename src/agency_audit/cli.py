@@ -123,8 +123,8 @@ def import_geonames_cmd(
 
 @app.command("serve")
 def serve(
-    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Bind address"),
-    port: int = typer.Option(8000, "--port", "-p", help="Port number"),
+    host: str = typer.Option(settings.serve_host, "--host", "-h", help="Bind address"),
+    port: int = typer.Option(settings.serve_port, "--port", "-p", help="Port number"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload"),
     log_level: str = typer.Option(
         None,
@@ -476,6 +476,9 @@ def discover(
     website_cities. All operations are logged in discovery_log.
     """
 
+    # Fail fast if no API key is configured
+    settings.ensure_ready_for("discovery")
+
     async def _run():
         from agency_audit.discovery import run_discovery
 
@@ -537,6 +540,12 @@ def run_cmd(
     skip_reaudit: bool = typer.Option(False, "--skip-reaudit", help="Skip re-audit scheduling"),
 ):
     """Execute full operational loop for one country: discover → audit → QC → re-audit."""
+    # Fail fast if critical configuration is missing
+    if skip_discovery:
+        settings.ensure_ready_for("db")
+    else:
+        settings.ensure_ready_for("all")
+
     from agency_audit.loop.orchestrator import run_country
 
     async def _run():

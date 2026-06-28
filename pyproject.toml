@@ -19,6 +19,7 @@ dependencies = [
     "rich>=13.9",
     "fastmcp>=0.1",
     "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
     "pyyaml>=6.0",
     "python-json-logger>=3.0",
 ]

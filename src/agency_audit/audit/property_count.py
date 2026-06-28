@@ -16,6 +16,7 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 
 from agency_audit.audit.models import PropertyCountResult
+from agency_audit.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +163,7 @@ async def _count_from_sitemap(
         (count, confidence)
     """
     try:
-        resp = await client.get(sitemap_url, timeout=20)
+        resp = await client.get(sitemap_url, timeout=settings.sitemap_timeout)
         if resp.status_code >= 400:
             return 0, 0.0
 
@@ -226,7 +227,7 @@ async def count_properties(
     result = PropertyCountResult()
     own_client = client is None and homepage_response is None
     if own_client:
-        client = httpx.AsyncClient(timeout=15, follow_redirects=True)
+        client = httpx.AsyncClient(timeout=settings.audit_http_timeout, follow_redirects=True)
 
     try:
         if homepage_response is None:
@@ -246,7 +247,7 @@ async def count_properties(
         listing_url = _find_listing_page_url(base_url, homepage_response.text)
         if listing_url and client:
             try:
-                listing_resp = await client.get(listing_url, timeout=15)
+                listing_resp = await client.get(listing_url, timeout=settings.audit_http_timeout)
                 if listing_resp.status_code < 400:
                     count, conf = _count_from_html(listing_resp.text)
                     if count > 0:
