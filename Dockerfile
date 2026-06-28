@@ -15,7 +15,6 @@ RUN apt-get update \
 COPY pyproject.toml ./
 COPY requirements.txt ./
 COPY src/ ./src/
-COPY scoring_config.yaml ./
 
 # Create a virtualenv and install the project with pinned dependencies.
 # Install hatchling first so we can use --no-build-isolation, avoiding
@@ -51,11 +50,11 @@ RUN apt-get update \
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
-# Create app directory and install scoring config.  Ownership is set to app
-# so the non-root user can write pytest output files (.coverage, junit.xml,
-# coverage.xml) and the /health endpoint can read scoring_config.yaml.
+# Create app directory.  Ownership is set to app so the non-root user can
+# write pytest output files (.coverage, junit.xml, coverage.xml).
+# Scoring config ships inside the installed package and does not need a
+# separate COPY.
 WORKDIR /app
-COPY --from=builder --chown=app:app /build/scoring_config.yaml /app/scoring_config.yaml
 COPY --from=builder --chown=app:app /build/pyproject.toml /app/pyproject.toml
 RUN chown app:app /app
 
