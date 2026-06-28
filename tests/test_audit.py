@@ -8,6 +8,8 @@ The scoring and full-pipeline tests can run offline.
 from __future__ import annotations
 
 import json
+import logging
+from pathlib import Path
 
 import httpx
 import pytest
@@ -750,10 +752,68 @@ class TestScoring:
         score, breakdown = compute_score(audit)
         assert sum(breakdown.values()) == score or score == 100  # might be clamped
 
+    def test_load_config_from_package_file(self, tmp_path, monkeypatch):
+        """load_scoring_config loads a YAML file found in the audit package dir."""
+        import yaml
 
-# ---------------------------------------------------------------------------
-# AuditData serialization
-# ---------------------------------------------------------------------------
+        config_path = tmp_path / "scoring_config.yaml"
+        custom = {"robots_allows": 99, "has_api": 15, "min_score": -10, "max_score": 50}
+        config_path.write_text(yaml.dump(custom))
+
+        # Make the package-dir path (Path(__file__).parent / ...) resolve to tmp_path
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [config_path],
+        )
+
+        result = load_scoring_config()
+        assert result["robots_allows"] == 99
+        assert result["has_api"] == 15
+        assert result["min_score"] == -10
+        # Unspecified keys fall back to defaults
+        assert result["robots_disallows"] == -50
+
+    def test_load_config_missing_file_falls_back(self, monkeypatch):
+        """load_scoring_config returns defaults when no config file exists."""
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [Path("/nonexistent/scoring_config.yaml")],
+        )
+
+        result = load_scoring_config()
+        assert result["robots_allows"] == 20  # default
+        assert result["robots_disallows"] == -50  # default
+
+    def test_load_config_malformed_yaml_logs_warning(self, tmp_path, monkeypatch, caplog):
+        """load_scoring_config logs a warning and falls back on malformed YAML."""
+        config_path = tmp_path / "scoring_config.yaml"
+        config_path.write_text(":: not valid yaml :::")
+
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [config_path],
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = load_scoring_config()
+
+        assert result["robots_allows"] == 20  # fell back to defaults
+        assert "Failed to parse" in caplog.text
+
+    def test_load_config_non_dict_content_falls_back(self, tmp_path, monkeypatch):
+        """load_scoring_config returns defaults when YAML is valid but not a dict."""
+        import yaml
+
+        config_path = tmp_path / "scoring_config.yaml"
+        config_path.write_text(yaml.dump([1, 2, 3]))  # valid YAML, but a list
+
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [config_path],
+        )
+
+        result = load_scoring_config()
+        assert result["robots_allows"] == 20  # fell back to defaults
 
 
 class TestAuditDataSerialization:

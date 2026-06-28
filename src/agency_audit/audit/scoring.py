@@ -3,14 +3,25 @@
 The scoring config is externalized in a YAML file (scoring_config.yaml)
 so weights can be adjusted without code changes.
 
+The primary config file ships inside the package at
+``src/agency_audit/audit/scoring_config.yaml``.  At runtime the loader
+also checks the current working directory and the repo root so that
+developers can drop a custom ``scoring_config.yaml`` alongside the
+checkout for local overrides.
+
 Score is a signed integer (0-100 typical, negative possible for unsuitable sites).
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+import yaml
+
 from agency_audit.audit.models import AuditData
+
+logger = logging.getLogger(__name__)
 
 # Default scoring config — used if no YAML config file is found
 DEFAULT_CONFIG: dict = {
@@ -47,37 +58,42 @@ DEFAULT_CONFIG: dict = {
     "max_score": 100,
 }
 
-# Path to the externalized config file
+# Paths tried in order — first match wins.
+# 1. Package dir (ships with the wheel — primary location)
+# 2. CWD (convenience override during dev)
+# 3. CWD/config/
+# 4. Repo root  (five levels up from src/agency_audit/audit/scoring.py)
 CONFIG_FILE_PATHS = [
+    Path(__file__).parent / "scoring_config.yaml",
     Path("scoring_config.yaml"),
     Path("config/scoring_config.yaml"),
-    Path(__file__).parent / "scoring_config.yaml",
-    Path(__file__).parent.parent.parent / "scoring_config.yaml",
+    Path(__file__).parent.parent.parent.parent / "scoring_config.yaml",
 ]
 
 
 def load_scoring_config() -> dict:
     """Load scoring config from YAML file, or fall back to defaults.
 
-    Searches standard paths for scoring_config.yaml.
+    Searches standard paths for scoring_config.yaml.  If no file is found,
+    returns the hard-coded defaults without an error.  If a file is found
+    but is unparseable YAML, logs a warning and falls back to defaults.
     """
-    # Try to load YAML config
-    try:
-        import yaml  # type: ignore[import-untyped]
-
-        for path in CONFIG_FILE_PATHS:
-            if path.exists():
+    for path in CONFIG_FILE_PATHS:
+        if path.exists():
+            try:
                 with open(path) as f:
                     user_config = yaml.safe_load(f)
-                if user_config:
-                    # Merge with defaults — user config overrides
+                if user_config and isinstance(user_config, dict):
                     merged = DEFAULT_CONFIG.copy()
                     merged.update(user_config)
                     return merged
-    except ImportError:
-        pass
-    except Exception:
-        pass
+            except Exception:
+                logger.warning(
+                    "Failed to parse %s — falling back to default scoring config",
+                    path,
+                    exc_info=True,
+                )
+                return DEFAULT_CONFIG.copy()
 
     return DEFAULT_CONFIG.copy()
 
