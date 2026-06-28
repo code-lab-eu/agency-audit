@@ -557,3 +557,66 @@ class TestGetUnauditedWebsiteAtomic:
 
             query = mock_conn.fetchrow.call_args[0][0]
             assert "FOR UPDATE SKIP LOCKED" in query
+
+
+# ---------------------------------------------------------------------------
+# MCP tool registration tests (no live DB required)
+# ---------------------------------------------------------------------------
+
+
+class TestMCPToolRegistration:
+    """Verify that all expected tools are registered on the FastMCP server.
+
+    These tests import the module-level ``mcp`` instance and check that
+    all 5 tools declared in the MCP server are present.  No database
+    connection is required — the decorators register tools at import time.
+    """
+
+    EXPECTED_TOOLS = {
+        "get_next_city",
+        "report_website",
+        "get_unaudited_website",
+        "submit_audit",
+        "get_stats",
+    }
+
+    @pytest.mark.asyncio
+    async def test_all_five_tools_registered(self) -> None:
+        """Importing mcp_server registers all 5 tools on the FastMCP instance."""
+        from agency_audit.mcp_server import mcp
+
+        tools = await mcp.list_tools()
+        registered = {t.name for t in tools}
+
+        missing = self.EXPECTED_TOOLS - registered
+        extra = registered - self.EXPECTED_TOOLS
+
+        assert not missing, f"Missing tools: {missing}"
+        assert not extra, f"Unexpected extra tools: {extra}"
+        assert len(tools) == 5, f"Expected 5 tools, got {len(tools)}"
+
+    def test_tool_functions_are_callable(self) -> None:
+        """Each tool function is importable and callable (async function)."""
+        import inspect
+
+        from agency_audit.mcp_server import (
+            get_next_city,
+            get_stats,
+            get_unaudited_website,
+            report_website,
+            submit_audit,
+        )
+
+        funcs = {
+            "get_next_city": get_next_city,
+            "report_website": report_website,
+            "get_unaudited_website": get_unaudited_website,
+            "submit_audit": submit_audit,
+            "get_stats": get_stats,
+        }
+
+        for name, fn in funcs.items():
+            assert callable(fn), f"{name} is not callable"
+            assert inspect.iscoroutinefunction(fn), (
+                f"{name} is not an async function"
+            )
