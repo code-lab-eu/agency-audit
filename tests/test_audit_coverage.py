@@ -662,6 +662,143 @@ class TestApiDetectionCoverage:
             result = await detect_api("https://example.com", client=client)
         assert result.detected is True
 
+    # ── Uncovered paths: lines 90, 146-147, 169, 212-213, 216 ──
+    # NB: line 174 is dead code — own_client path always creates a client.
+
+    def test_jsonld_non_dict_item(self):
+        """_check_jsonld_structured_data skips non-dict items in arrays (line 90)."""
+        html = (
+            "<html><head>"
+            '<script type="application/ld+json">'
+            '[{"@type": "Product"}, "plain string", {"@type": "Place"}]'
+            "</script>"
+            "</head><body></body></html>"
+        )
+        found, types = _check_jsonld_structured_data(html)
+        assert found is True
+        assert "Product" in types
+        assert "Place" in types
+
+    async def test_probe_graphql_transport_exception(self):
+        """_probe_graphql handles transport-level exceptions (lines 146-147)."""
+        from unittest.mock import AsyncMock
+
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = OSError("Connection refused")
+
+        url = await _probe_graphql("https://example.com", mock_client)
+        assert url is None
+        assert mock_client.post.call_count == 3  # all 3 graphql paths tried
+
+    async def test_detect_api_own_client_creation_and_cleanup(self):
+        """detect_api creates + closes own client when called without args (lines 169, 216)."""
+        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import patch as mock_patch
+
+        mock_response = MagicMock()
+        mock_response.text = "<html><body>No API here</body></html>"
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.aclose = AsyncMock()
+
+        with mock_patch(
+            "agency_audit.audit.api_detection.httpx.AsyncClient",
+            return_value=mock_client,
+        ) as mock_async_client:
+            result = await detect_api("https://example.com")
+
+        mock_async_client.assert_called_once_with(timeout=15, follow_redirects=True)
+        mock_client.aclose.assert_called_once()
+        assert result.detected is False
+
+    async def test_detect_api_handles_fetch_error(self):
+        """detect_api catches exception during fetch, returns defaults (lines 212-213)."""
+        from unittest.mock import AsyncMock
+
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = OSError("Connection refused")
+        mock_client.aclose = AsyncMock()
+
+        result = await detect_api("https://example.com", client=mock_client)
+        assert result.detected is False
+        assert result.api_type is None
+        assert result.endpoints_found == []
+
+    # ── Absence scenarios: no JSON-LD, no REST, no GraphQL ──
+
+    @pytest.fixture
+    def no_api_html(self):
+        """Fixture: HTML page with no API indicators whatsoever."""
+        return (
+            "<html><head><title>Real Estate Agency</title></head>"
+            "<body><h1>Welcome</h1><p>We sell houses.</p></body>"
+            "</html>"
+        )
+
+    async def test_detect_api_all_absent(self, no_api_html):
+        """detect_api: no JSON-LD, no REST, no GraphQL → not detected."""
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=no_api_html, request=req)
+            )
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+        assert result.detected is False
+        assert result.api_type is None
+        assert result.endpoints_found == []
+
+    async def test_detect_api_no_jsonld(self):
+        """detect_api: REST + GraphQL present, JSON-LD absent."""
+        html = (
+            "<html><script>fetch('/api/v1/listings')</script>"
+            "<script>query { properties { id } }</script></html>"
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+        assert result.detected is True
+        assert result.api_type == "graphql"  # GraphQL overrides REST
+
+    async def test_detect_api_no_rest(self):
+        """detect_api: JSON-LD + GraphQL present, no REST endpoints."""
+        html = (
+            "<html><head>"
+            '<script type="application/ld+json">{"@type": "Product"}</script>'
+            "</head><body>"
+            "<script>query { properties { id } }</script>"
+            "</body></html>"
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+        assert result.detected is True
+        assert result.api_type == "graphql"  # GraphQL overrides JSON-LD
+
+    async def test_detect_api_no_graphql(self):
+        """detect_api: JSON-LD + REST present, no GraphQL pattern or probe."""
+        html = (
+            "<html><head>"
+            '<script type="application/ld+json">{"@type": "Place"}</script>'
+            "</head><body>"
+            "<script>fetch('/api/v1/listings')</script>"
+            "</body></html>"
+        )
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            if req.method == "POST":
+                return httpx.Response(404, text="Not Found", request=req)
+            return httpx.Response(200, text=html, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await detect_api("https://example.com", client=client)
+        assert result.detected is True
+        assert result.api_type == "json-ld"
+        assert "Place" in result.endpoints_found
+        assert "/api/v1/" in result.endpoints_found
+
 
 # ============================================================================
 # anti_scraping — uncovered paths

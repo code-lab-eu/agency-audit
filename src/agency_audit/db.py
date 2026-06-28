@@ -14,9 +14,9 @@ async def get_pool() -> Pool:
     if _pool is None or _pool._closed:
         _pool = await asyncpg.create_pool(
             dsn=settings.dsn,
-            min_size=2,
-            max_size=10,
-            command_timeout=30,
+            min_size=settings.pg_pool_min_size,
+            max_size=settings.pg_pool_max_size,
+            command_timeout=settings.pg_pool_command_timeout,
         )
     return _pool
 

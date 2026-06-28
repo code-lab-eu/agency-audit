@@ -600,3 +600,41 @@ async def test_recent_activity_with_data():
         result = await _recent_activity(mock_pool, limit=5)
         assert len(result) == 1
         assert result[0]["agent"] == "google_maps"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Health endpoint
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_health_healthy():
+    """Health endpoint returns 200 when database is reachable."""
+    with patch("agency_audit.web.app.get_pool") as mock_get_pool:
+        mock_pool = MagicMock()
+        mock_get_pool.return_value = mock_pool
+
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_pool.acquire.return_value = mock_ctx
+
+        mock_conn.fetchval = AsyncMock(return_value=1)
+
+        response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert data["db"] == "connected"
+
+
+def test_health_unhealthy():
+    """Health endpoint returns 503 when database is unreachable."""
+    with patch("agency_audit.web.app.get_pool") as mock_get_pool:
+        mock_get_pool.side_effect = RuntimeError("connection refused")
+
+        response = client.get("/health")
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "unhealthy"
+        assert data["db"] == "disconnected"
+        assert "connection refused" in data["detail"]

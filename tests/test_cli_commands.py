@@ -177,6 +177,8 @@ def test_run_command_executes():
 
 def test_run_command_with_result_phases():
     """run command prints results for each phase."""
+    from agency_audit.config import settings
+
     with patch("agency_audit.loop.orchestrator.run_country") as mock_run:
         mock_run.return_value = {
             "country": "BG",
@@ -189,7 +191,8 @@ def test_run_command_with_result_phases():
             "errors": [],
             "duration_seconds": 5.5,
         }
-        result = runner.invoke(app, ["run", "--country", "BG"])
+        with patch.object(settings, "google_maps_api_key", "test-key"):
+            result = runner.invoke(app, ["run", "--country", "BG"])
         assert result.exit_code == 0
         assert "Loop Results" in result.output
         assert "BG" in result.output
@@ -435,8 +438,11 @@ def test_progress_command_with_data():
 # ──────────────────────────────────────────────────────────────────────
 
 
-def test_discover_command():
+def test_discover_command(monkeypatch):
     """discover command invokes run_discovery and prints results table."""
+    from agency_audit.config import settings
+
+    monkeypatch.setattr(settings, "google_maps_api_key", "test-key")
     with patch("agency_audit.discovery.run_discovery") as mock_disc:
         mock_disc.return_value = {
             "countries_processed": 1,
@@ -451,8 +457,11 @@ def test_discover_command():
         assert "15" in result.output
 
 
-def test_discover_command_no_results():
+def test_discover_command_no_results(monkeypatch):
     """discover command with no results shows warning message."""
+    from agency_audit.config import settings
+
+    monkeypatch.setattr(settings, "google_maps_api_key", "test-key")
     with patch("agency_audit.discovery.run_discovery") as mock_disc:
         mock_disc.return_value = {
             "countries_processed": 0,
@@ -471,9 +480,13 @@ def test_discover_command_no_results():
 
 
 def test_serve_command_executes():
-    """serve command invokes uvicorn.run (mocked to not block) and prints status."""
-    with patch("uvicorn.run") as mock_run:
-        result = runner.invoke(app, ["serve", "--host", "127.0.0.1", "--port", "9999"])
-        assert result.exit_code == 0
-        assert "Starting Agency Audit dashboard" in result.output
-        mock_run.assert_called_once()
+    """serve command creates a uvicorn.Server and prints status."""
+    with patch("uvicorn.Server") as mock_server_cls:
+        mock_server = mock_server_cls.return_value
+        mock_server.run = MagicMock()  # prevent actual server start
+
+        with patch("agency_audit.cli.asyncio.run"):
+            result = runner.invoke(app, ["serve", "--host", "127.0.0.1", "--port", "9999"])
+            assert result.exit_code == 0
+            assert "Starting Agency Audit dashboard" in result.output
+            mock_server.run.assert_called_once()

@@ -29,13 +29,12 @@ from agency_audit.audit.api_detection import detect_api
 from agency_audit.audit.listing_quality import assess_listing_quality
 from agency_audit.audit.models import AuditData
 from agency_audit.audit.property_count import _find_listing_page_url, count_properties
-from agency_audit.audit.robots import DEFAULT_USER_AGENT, fetch_robots_txt
+from agency_audit.audit.robots import fetch_robots_txt
 from agency_audit.audit.scoring import compute_score, load_scoring_config
 from agency_audit.audit.tech_stack import detect_tech_stack
+from agency_audit.config import settings
 
 logger = logging.getLogger(__name__)
-
-AUDIT_TIMEOUT = 30
 
 
 def _check_ssl_valid(url: str) -> bool:
@@ -50,7 +49,7 @@ def _check_ssl_valid(url: str) -> bool:
     try:
         ctx = ssl.create_default_context()
         with (
-            socket.create_connection((host, port), timeout=10) as sock,
+            socket.create_connection((host, port), timeout=settings.socket_connect_timeout) as sock,
             ctx.wrap_socket(sock, server_hostname=host) as ssock,
         ):
             ssock.getpeercert()
@@ -104,9 +103,9 @@ async def audit_website(
     own_client = client is None
     if own_client:
         client = httpx.AsyncClient(
-            timeout=AUDIT_TIMEOUT,
+            timeout=settings.audit_timeout,
             follow_redirects=True,
-            headers={"User-Agent": DEFAULT_USER_AGENT},
+            headers={"User-Agent": settings.user_agent},
         )
     assert client is not None
 
@@ -203,7 +202,7 @@ async def audit_website(
 
 async def audit_websites(
     urls: list[str],
-    concurrency: int = 5,
+    concurrency: int = settings.audit_concurrency,
     scoring_config: dict | None = None,
 ) -> list[AuditData]:
     """Audit multiple websites concurrently.

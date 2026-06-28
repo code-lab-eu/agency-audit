@@ -16,11 +16,9 @@ from urllib.robotparser import RobotFileParser
 import httpx
 
 from agency_audit.audit.models import RobotsResult
+from agency_audit.config import settings
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_USER_AGENT = "AgencyAuditBot/1.0"
-ROBOTS_TIMEOUT = 10
 
 
 def _robots_url(base_url: str) -> str:
@@ -115,9 +113,9 @@ async def fetch_robots_txt(
     own_client = client is None
     if own_client:
         client = httpx.AsyncClient(
-            timeout=ROBOTS_TIMEOUT,
+            timeout=settings.robots_timeout,
             follow_redirects=True,
-            headers={"User-Agent": DEFAULT_USER_AGENT},
+            headers={"User-Agent": settings.user_agent},
         )
     assert client is not None
 
@@ -149,7 +147,7 @@ async def fetch_robots_txt(
 
 async def check_robots_allows(
     base_url: str,
-    user_agent: str = DEFAULT_USER_AGENT,
+    user_agent: str = settings.user_agent,
 ) -> bool:
     """Quick check whether robots.txt allows scraping for a URL."""
     result = await fetch_robots_txt(base_url)

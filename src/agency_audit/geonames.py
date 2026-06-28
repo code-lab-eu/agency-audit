@@ -102,7 +102,9 @@ async def download_geonames(url: str | None = None) -> bytes:
     """Download and return the contents of the geonames cities15000.zip file."""
     url = url or settings.geonames_url
     console.print(f"[cyan]Downloading geonames data from {url}...[/]")
-    async with httpx.AsyncClient(follow_redirects=True, timeout=120) as client:
+    async with httpx.AsyncClient(
+        follow_redirects=True, timeout=settings.geonames_download_timeout
+    ) as client:
         resp = await client.get(url)
         resp.raise_for_status()
         return resp.content

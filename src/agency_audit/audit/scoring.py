@@ -5,9 +5,9 @@ so weights can be adjusted without code changes.
 
 The primary config file ships inside the package at
 ``src/agency_audit/audit/scoring_config.yaml``.  At runtime the loader
-also checks the current working directory and the repo root so that
-developers can drop a custom ``scoring_config.yaml`` alongside the
-checkout for local overrides.
+also checks ``AGENCY_AUDIT_SCORING_CONFIG_PATH`` (for explicit overrides),
+the current working directory, and the repo root so that developers can
+drop a custom ``scoring_config.yaml`` alongside the checkout.
 
 Score is a signed integer (0-100 typical, negative possible for unsuitable sites).
 """
@@ -20,6 +20,7 @@ from pathlib import Path
 import yaml
 
 from agency_audit.audit.models import AuditData
+from agency_audit.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ DEFAULT_CONFIG: dict = {
 # 1. Package dir (ships with the wheel — primary location)
 # 2. CWD (convenience override during dev)
 # 3. CWD/config/
-# 4. Repo root  (five levels up from src/agency_audit/audit/scoring.py)
+# 4. Repo root  (four levels up from src/agency_audit/audit/scoring.py)
 CONFIG_FILE_PATHS = [
     Path(__file__).parent / "scoring_config.yaml",
     Path("scoring_config.yaml"),
@@ -71,29 +72,64 @@ CONFIG_FILE_PATHS = [
 ]
 
 
+def _try_load_config(path: Path) -> dict | None:
+    """Try to load a scoring config dict from a YAML file at *path*.
+
+    Returns the merged config on success, ``None`` if the file cannot
+    be parsed as a dict.  Malformed YAML and non-dict content both
+    produce a warning and return ``None``.
+    """
+    try:
+        with open(path) as f:
+            user_config = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError):
+        logger.warning(
+            "Failed to parse %s — skipping", path, exc_info=True,
+        )
+        return None
+
+    if not isinstance(user_config, dict):
+        logger.warning(
+            "Scoring config at %s is not a dict (got %s) — skipping",
+            path, type(user_config).__name__,
+        )
+        return None
+
+    merged = DEFAULT_CONFIG.copy()
+    merged.update(user_config)
+    return merged
+
+
 def load_scoring_config() -> dict:
     """Load scoring config from YAML file, or fall back to defaults.
 
-    Searches standard paths for scoring_config.yaml.  If no file is found,
-    returns the hard-coded defaults without an error.  If a file is found
-    but is unparseable YAML, logs a warning and falls back to defaults.
+    Checks ``AGENCY_AUDIT_SCORING_CONFIG_PATH`` first (if configured),
+    then searches standard paths for ``scoring_config.yaml``.  If no
+    usable file is found, returns the hard-coded defaults without an
+    error.  Unparseable YAML or non-dict content in any candidate file
+    produces a warning but does not stop the search — the next path is
+    tried.
     """
+    # 1. Explicit path via env var
+    if settings.scoring_config_path:
+        explicit = Path(settings.scoring_config_path)
+        if explicit.exists():
+            config = _try_load_config(explicit)
+            if config is not None:
+                return config
+        else:
+            logger.warning(
+                "AGENCY_AUDIT_SCORING_CONFIG_PATH is set to %s but "
+                "the file does not exist",
+                settings.scoring_config_path,
+            )
+
+    # 2. Standard search paths
     for path in CONFIG_FILE_PATHS:
         if path.exists():
-            try:
-                with open(path) as f:
-                    user_config = yaml.safe_load(f)
-                if user_config and isinstance(user_config, dict):
-                    merged = DEFAULT_CONFIG.copy()
-                    merged.update(user_config)
-                    return merged
-            except Exception:
-                logger.warning(
-                    "Failed to parse %s — falling back to default scoring config",
-                    path,
-                    exc_info=True,
-                )
-                return DEFAULT_CONFIG.copy()
+            config = _try_load_config(path)
+            if config is not None:
+                return config
 
     return DEFAULT_CONFIG.copy()
 
