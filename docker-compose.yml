@@ -2,9 +2,11 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: agency_audit
-      POSTGRES_PASSWORD: agency_audit
-      POSTGRES_DB: agency_audit
+      POSTGRES_USER: ${POSTGRES_USER:-agency_audit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agency_audit}
+      POSTGRES_DB: ${POSTGRES_DB:-agency_audit}
+    # Port mapping exposes PostgreSQL to the host for development convenience.
+    # In production, this should be removed or restricted to a private network.
     ports:
       - "5432:5432"
     volumes:

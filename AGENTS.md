@@ -100,7 +100,7 @@ uv run --extra dev mypy src/                       # Type check
 uv run --extra dev ruff check --fix src/ tests/
 uv run --extra dev ruff format src/ tests/
 
-# Start the web dashboard (FastAPI + HTMX, http://0.0.0.0:8000)
+# Start the web dashboard (FastAPI + HTMX, binds 127.0.0.1:8000 by default)
 uv run agency-audit serve
 
 # Audit a single URL with the full 7-module pipeline
