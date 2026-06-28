@@ -76,10 +76,13 @@ if [ "$FIX" -eq 1 ]; then
 fi
 
 # --- CHECKS -----------------------------------------------------------------
+# The test run enables coverage so the `fail_under` gate in pyproject.toml is
+# enforced here exactly as in CI. (A bare `pytest` for single-test dev iteration
+# deliberately skips coverage — the gate lives in this script and in CI.)
 run "Lint (ruff check)"          uv run --extra dev ruff check src/ tests/
 run "Format check (ruff format)" uv run --extra dev ruff format --check src/ tests/
 run "Type check (mypy)"          uv run --extra dev mypy src/
-run "Tests (pytest)"             uv run --extra dev pytest
+run "Tests + coverage (pytest)"  uv run --extra dev pytest --cov=src/agency_audit --cov-report=term-missing
 
 # --- Summary ----------------------------------------------------------------
 echo
