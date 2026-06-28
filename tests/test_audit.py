@@ -1646,8 +1646,10 @@ class TestScoring:
             [fallback],
         )
 
-        with patch("agency_audit.audit.scoring.settings", new_settings), \
-                caplog.at_level(logging.WARNING):
+        with (
+            patch("agency_audit.audit.scoring.settings", new_settings),
+            caplog.at_level(logging.WARNING),
+        ):
             result = load_scoring_config()
 
         assert result["robots_allows"] == 42

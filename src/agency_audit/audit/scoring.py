@@ -82,16 +82,19 @@ def _try_load_config(path: Path) -> dict | None:
     try:
         with open(path) as f:
             user_config = yaml.safe_load(f)
-    except (yaml.YAMLError, OSError):
+    except yaml.YAMLError, OSError:
         logger.warning(
-            "Failed to parse %s — skipping", path, exc_info=True,
+            "Failed to parse %s — skipping",
+            path,
+            exc_info=True,
         )
         return None
 
     if not isinstance(user_config, dict):
         logger.warning(
             "Scoring config at %s is not a dict (got %s) — skipping",
-            path, type(user_config).__name__,
+            path,
+            type(user_config).__name__,
         )
         return None
 
@@ -119,8 +122,7 @@ def load_scoring_config() -> dict:
                 return config
         else:
             logger.warning(
-                "AGENCY_AUDIT_SCORING_CONFIG_PATH is set to %s but "
-                "the file does not exist",
+                "AGENCY_AUDIT_SCORING_CONFIG_PATH is set to %s but the file does not exist",
                 settings.scoring_config_path,
             )
 
