@@ -7,9 +7,7 @@ import asyncpg
 from asyncpg.exceptions import UndefinedTableError
 
 
-async def run_migrations(
-    conn: asyncpg.Connection, migrations_dir: Path | None = None
-) -> list[str]:
+async def run_migrations(conn: asyncpg.Connection, migrations_dir: Path | None = None) -> list[str]:
     """Apply all unapplied SQL migration files in order.
 
     Skips files already recorded in the ``schema_migrations`` ledger.

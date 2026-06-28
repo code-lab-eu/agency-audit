@@ -120,9 +120,7 @@ class TestMigrationSkip:
             # After 000 creates the table, remaining checks succeed
             return False
 
-        mock_conn, _mock_tx = _make_connection(
-            fetchval_side_effect=_check_version
-        )
+        mock_conn, _mock_tx = _make_connection(fetchval_side_effect=_check_version)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             (Path(tmpdir) / "000_schema_migrations.sql").write_text(
