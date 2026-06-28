@@ -10,6 +10,34 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agency_audit"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      AGENCY_AUDIT_PG_HOST: postgres
+      AGENCY_AUDIT_PG_PORT: "5432"
+      AGENCY_AUDIT_PG_USER: agency_audit
+      AGENCY_AUDIT_PG_PASSWORD: agency_audit
+      AGENCY_AUDIT_PG_DATABASE: agency_audit
+      AGENCY_AUDIT_GOOGLE_MAPS_API_KEY: ""
+      AGENCY_AUDIT_GEONAMES_MIN_POPULATION: "50000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
 
 volumes:
   pgdata:

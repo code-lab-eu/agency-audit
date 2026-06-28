@@ -4,7 +4,33 @@ Real Estate Radar — Website Discovery & Audit System.
 
 Discovers, audits, and ranks real estate agency websites across 44 European countries for inclusion in the [Real Estate Radar](https://www.realestateradar.eu/) index.
 
-## Quick Start
+## Quick Start (Docker Compose — full stack)
+
+The easiest way to run the entire stack: PostgreSQL + agency-audit dashboard.
+
+```bash
+# Build and start both services (PostgreSQL + app)
+docker compose up -d --build
+
+# The dashboard is available at http://localhost:8000
+
+# Initialize the database
+docker compose exec app agency-audit db-init
+
+# Seed 44 European countries
+docker compose exec app agency-audit seed-countries
+
+# Import cities from Geonames
+docker compose exec app agency-audit import-geonames
+
+# Check health
+curl http://localhost:8000/health
+
+# View stats
+docker compose exec app agency-audit stats
+```
+
+## Quick Start (local development)
 
 ```bash
 # Install dependencies
@@ -50,20 +76,31 @@ src/agency_audit/
 
 ## Quality Assurance
 
-Install the dev dependencies (ruff, pytest) into the project environment first:
+Install the dev dependencies:
 
 ```bash
 uv sync --extra dev
 ```
 
-The CI `quality` job runs the following checks. Run them locally before pushing —
-they must all pass for the build to go green:
+The integration tests run against a live PostgreSQL database. Seed one with:
+
+```bash
+uv run scripts/seed-test-db.py
+```
+
+Run all checks (lint, format, type-check, tests):
+
+```bash
+./scripts/qa.sh
+```
+
+Or run them individually:
 
 ```bash
 # Lint
 uv run ruff check src/ tests/
 
-# Format check (use `ruff format` without --check to auto-apply)
+# Format check
 uv run ruff format --check src/ tests/
 
 # Type check
@@ -71,9 +108,15 @@ uv run mypy src/
 
 # Tests
 uv run pytest
+
+# A single test
+uv run pytest tests/test_foo.py::test_bar
+
+# Tests with coverage
+uv run pytest --cov=src/agency_audit --cov-report=term-missing
 ```
 
-To auto-fix most lint and all formatting issues:
+To auto-fix lint and formatting:
 
 ```bash
 uv run ruff check --fix src/ tests/

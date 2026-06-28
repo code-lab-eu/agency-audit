@@ -1,0 +1,92 @@
+name: CI — Docker Compose
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'docker-compose.ci.yml'
+      - 'requirements.txt'
+      - '.dockerignore'
+      - 'src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/docker-compose-ci.yml'
+
+jobs:
+  test-docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml build
+
+      - name: Start services
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+          # Wait for app to be healthy (up to 60s)
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health; then
+              echo "App is healthy"
+              break
+            fi
+            echo "Waiting for app to be healthy... ($i/30)"
+            sleep 2
+          done
+          # Final health check
+          curl -f http://localhost:8000/health || {
+            echo "App failed to become healthy"
+            docker compose logs
+            exit 1
+          }
+
+      - name: Seed test database
+        run: docker compose exec -T app python /workspace/scripts/seed-test-db.py
+
+      - name: Install project in editable mode (for source-level coverage)
+        run: |
+          docker compose exec -T --user root app /opt/venv/bin/pip install --no-deps --no-build-isolation -e /workspace
+
+      - name: Install test dependencies
+        run: |
+          docker compose exec -T --user root app /opt/venv/bin/pip install \
+            pytest \
+            pytest-asyncio \
+            pytest-cov \
+            coverage \
+            hypothesis
+
+      # Run from the mounted source at /workspace so coverage resolves the
+      # relative paths in pyproject.toml's [tool.coverage] config. The non-root
+      # user can't write to the /workspace bind mount, so the .coverage data
+      # file is redirected to the writable /app via COVERAGE_FILE.
+      - name: Run tests with coverage
+        run: |
+          docker compose exec -T --workdir /workspace -e COVERAGE_FILE=/app/.coverage app pytest \
+            -p no:cacheprovider \
+            --cov=src/agency_audit \
+            --cov-report=term-missing \
+            tests/
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          echo "## Docker Compose Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          docker compose exec -T --workdir /workspace -e COVERAGE_FILE=/app/.coverage app coverage report 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Docker logs on failure
+        if: failure()
+        run: |
+          echo "## Docker Compose Logs" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          docker compose logs 2>&1 | tail -100 | tee -a $GITHUB_STEP_SUMMARY
+          echo '```'
