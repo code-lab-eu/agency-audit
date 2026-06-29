@@ -52,6 +52,7 @@ class TestPlacesAPIClientSearchTextRequest:
             nonlocal captured_body
             captured_body = request.read().decode("utf-8")
             import json
+
             captured_body = json.loads(captured_body)
             return httpx.Response(200, json=build_place_response([]), request=request)
 
@@ -71,6 +72,7 @@ class TestPlacesAPIClientSearchTextRequest:
         def handler(request: httpx.Request) -> httpx.Response:
             nonlocal captured_body
             import json
+
             captured_body = json.loads(request.read().decode("utf-8"))
             return httpx.Response(200, json=build_place_response([]), request=request)
 
@@ -95,6 +97,7 @@ class TestPlacesAPIClientSearchTextRequest:
 
         def handler(request: httpx.Request) -> httpx.Response:
             import json
+
             body = json.loads(request.read().decode("utf-8"))
             captured_sizes.append(body["pageSize"])
             # Return no places so search_text exits immediately
@@ -129,9 +132,7 @@ class TestPlacesAPIClientSearchTextResponse:
         }
 
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200, json=build_place_response([place_json]), request=request
-            )
+            return httpx.Response(200, json=build_place_response([place_json]), request=request)
 
         client = make_mock_client(handler)
         results = await client.search_text("test query", max_results=20)
@@ -157,9 +158,7 @@ class TestPlacesAPIClientSearchTextResponse:
         }
 
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200, json=build_place_response([place_json]), request=request
-            )
+            return httpx.Response(200, json=build_place_response([place_json]), request=request)
 
         client = make_mock_client(handler)
         results = await client.search_text("test", max_results=20)
@@ -185,9 +184,7 @@ class TestPlacesAPIClientSearchTextResponse:
         }
 
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200, json=build_place_response([place_json]), request=request
-            )
+            return httpx.Response(200, json=build_place_response([place_json]), request=request)
 
         client = make_mock_client(handler)
         results = await client.search_text("test", max_results=20)
@@ -205,9 +202,7 @@ class TestPlacesAPIClientSearchTextResponse:
         }
 
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200, json=build_place_response([place_json]), request=request
-            )
+            return httpx.Response(200, json=build_place_response([place_json]), request=request)
 
         client = make_mock_client(handler)
         results = await client.search_text("test", max_results=20)
@@ -224,9 +219,7 @@ class TestPlacesAPIClientSearchTextResponse:
         ]
 
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200, json=build_place_response(places_json), request=request
-            )
+            return httpx.Response(200, json=build_place_response(places_json), request=request)
 
         client = make_mock_client(handler)
         results = await client.search_text("test", max_results=20)
@@ -241,9 +234,7 @@ class TestPlacesAPIClientSearchTextResponse:
         """Empty places array → empty list returned."""
 
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200, json=build_place_response([]), request=request
-            )
+            return httpx.Response(200, json=build_place_response([]), request=request)
 
         client = make_mock_client(handler)
         results = await client.search_text("nonexistent", max_results=20)
@@ -268,6 +259,7 @@ class TestPlacesAPIClientSearchTextPagination:
             nonlocal call_count
             call_count += 1
             import json
+
             body = json.loads(request.read().decode("utf-8"))
 
             if call_count == 1:
@@ -307,15 +299,16 @@ class TestPlacesAPIClientSearchTextPagination:
 
     async def test_respects_max_results(self):
         """Results should not exceed max_results, even with more pages."""
+
         def handler(request: httpx.Request) -> httpx.Response:
             import json
+
             body = json.loads(request.read().decode("utf-8"))
             # Return exactly what was asked for (pageSize), plus a next token
             # to test that we stop when max_results is hit
             page_size = body["pageSize"]
             places = [
-                {"id": f"p-{i}", "displayName": {"text": f"Place {i}"}}
-                for i in range(page_size)
+                {"id": f"p-{i}", "displayName": {"text": f"Place {i}"}} for i in range(page_size)
             ]
             return httpx.Response(
                 200,
@@ -339,9 +332,7 @@ class TestPlacesAPIClientSearchTextPagination:
             return httpx.Response(
                 200,
                 json=build_place_response(
-                    [
-                        {"id": "single", "displayName": {"text": "Only Place"}}
-                    ]
+                    [{"id": "single", "displayName": {"text": "Only Place"}}]
                     # No nextPageToken
                 ),
                 request=request,
@@ -433,9 +424,7 @@ class TestPlacesAPIClientSearchTextErrors:
                 return httpx.Response(
                     200,
                     json=build_place_response(
-                        [
-                            {"id": "p1", "displayName": {"text": "First Page"}}
-                        ],
+                        [{"id": "p1", "displayName": {"text": "First Page"}}],
                         next_page_token="token-next",
                     ),
                     request=request,
@@ -525,12 +514,14 @@ class TestPlacesAPIClientKeyResolution:
         checks both AGENCY_AUDIT_GOOGLE_MAPS_API_KEY and GOOGLE_MAPS_API_KEY."""
         import os
 
-        with patch.dict(os.environ, {"GOOGLE_MAPS_API_KEY": "bare-env-key"}), \
-             patch("agency_audit.config.settings") as mock_settings:
-                mock_settings.google_maps_api_key = "bare-env-key"
-                client = PlacesAPIClient()
-                assert client.api_key == "bare-env-key"
-                assert client.available is True
+        with (
+            patch.dict(os.environ, {"GOOGLE_MAPS_API_KEY": "bare-env-key"}),
+            patch("agency_audit.config.settings") as mock_settings,
+        ):
+            mock_settings.google_maps_api_key = "bare-env-key"
+            client = PlacesAPIClient()
+            assert client.api_key == "bare-env-key"
+            assert client.available is True
 
     async def test_run_discovery_raises_when_no_key(self):
         """run_discovery raises RuntimeError when api_key is empty."""
@@ -660,6 +651,7 @@ class TestPlacesAPIClientConfiguration:
         await client.close()
 
         assert captured_url == PlacesAPIClient.BASE_URL
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Fixtures

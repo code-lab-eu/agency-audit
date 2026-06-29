@@ -617,6 +617,4 @@ class TestMCPToolRegistration:
 
         for name, fn in funcs.items():
             assert callable(fn), f"{name} is not callable"
-            assert inspect.iscoroutinefunction(fn), (
-                f"{name} is not an async function"
-            )
+            assert inspect.iscoroutinefunction(fn), f"{name} is not an async function"
