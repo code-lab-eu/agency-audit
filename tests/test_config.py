@@ -301,7 +301,7 @@ class TestSettingsEnvOverride:
 
 
 class TestGetSettings:
-    """Tests for the get_settings() dependency injection function."""
+    """Tests for the get_settings() singleton accessor."""
 
     def test_returns_settings_instance(self):
         from agency_audit.config import get_settings
