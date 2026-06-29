@@ -43,8 +43,10 @@ def test_config_dsn_special_chars_in_password():
 
     password = "p@ss:word/with%chars"
     s = Settings(
-        pg_host="localhost", pg_port=5432,
-        pg_user="agency_audit", pg_password=password,
+        pg_host="localhost",
+        pg_port=5432,
+        pg_user="agency_audit",
+        pg_password=password,
         pg_database="agency_audit",
     )
     encoded = quote(password, safe="")
@@ -60,8 +62,10 @@ def test_config_dsn_special_chars_in_user():
 
     username = "us@r:n/me%"
     s = Settings(
-        pg_host="localhost", pg_port=5432,
-        pg_user=username, pg_password="plainpass",
+        pg_host="localhost",
+        pg_port=5432,
+        pg_user=username,
+        pg_password="plainpass",
         pg_database="testdb",
     )
     encoded = quote(username, safe="")
