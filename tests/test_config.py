@@ -251,10 +251,7 @@ class TestSettingsEnvOverride:
     def test_env_var_overrides_env_file(self, tmp_path, monkeypatch):
         """Environment variables should override .env file values."""
         env_file = tmp_path / ".env"
-        env_file.write_text(
-            "AGENCY_AUDIT_PG_HOST=filehost\n"
-            "AGENCY_AUDIT_LOG_LEVEL=WARNING\n"
-        )
+        env_file.write_text("AGENCY_AUDIT_PG_HOST=filehost\nAGENCY_AUDIT_LOG_LEVEL=WARNING\n")
         monkeypatch.setenv("AGENCY_AUDIT_PG_HOST", "envhost")
         monkeypatch.setenv("AGENCY_AUDIT_LOG_LEVEL", "ERROR")
         monkeypatch.chdir(tmp_path)
