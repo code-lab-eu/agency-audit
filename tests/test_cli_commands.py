@@ -502,7 +502,7 @@ def test_serve_command_executes():
 
 
 def test_serve_default_bind_address():
-    """serve defaults to loopback (127.0.0.1), not 0.0.0.0."""
+    """serve defaults to loopback (127.0.0.1)."""
     with patch("uvicorn.Server") as mock_server_cls:
         mock_server = mock_server_cls.return_value
         mock_server.run = MagicMock()
