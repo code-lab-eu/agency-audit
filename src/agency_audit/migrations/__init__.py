@@ -1,6 +1,5 @@
 """Simple SQL migration runner — applies .sql files in order, skipping already-applied ones."""
 
-import contextlib
 from pathlib import Path
 
 import asyncpg
@@ -42,11 +41,10 @@ async def run_migrations(conn: asyncpg.Connection, migrations_dir: Path | None =
             await conn.execute(sql)
             # After 000_schema_migrations.sql runs the table exists;
             # the INSERT succeeds for every migration from that point on.
-            with contextlib.suppress(UndefinedTableError):
-                await conn.execute(
-                    "INSERT INTO schema_migrations (version) VALUES ($1)",
-                    version,
-                )
+            await conn.execute(
+                "INSERT INTO schema_migrations (version) VALUES ($1)",
+                version,
+            )
 
         applied.append(version)
 

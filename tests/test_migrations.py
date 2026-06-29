@@ -108,14 +108,15 @@ class TestMigrationSkip:
 
     @pytest.mark.asyncio
     async def test_first_run_applies_all_and_records(self):
-        """Fresh database: UndefinedTableError on every check → all applied."""
+        """Fresh database: first fetchval raises UndefinedTableError; after 000
+        creates the table, remaining checks succeed and return False."""
         call_count = 0
 
         def _check_version(_sql, *args):
             nonlocal call_count
             call_count += 1
-            if call_count <= 3:
-                # First three checks — schema_migrations not found
+            if call_count == 1:
+                # 000_schema_migrations: table doesn't exist yet
                 raise UndefinedTableError("table does not exist")
             # After 000 creates the table, remaining checks succeed
             return False
@@ -168,3 +169,35 @@ class TestMigrationSkip:
             insert_call = calls[1]
             assert "schema_migrations" in insert_call.args[0]
             assert insert_call.args[1] == "001_init.sql"
+
+    @pytest.mark.asyncio
+    async def test_failed_migration_rolls_back_and_not_recorded(self):
+        """If conn.execute(sql) raises inside the transaction, the version
+        must *not* be recorded in schema_migrations."""
+        mock_conn, mock_tx = _make_connection(fetchval_side_effect=UndefinedTableError("first run"))
+        # First execute call (SQL) raises; second (INSERT) must never be reached
+        mock_conn.execute.side_effect = [
+            RuntimeError("simulated migration failure"),
+            # should never reach this
+            RuntimeError("INSERT was called — BUG"),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "001_broken.sql").write_text("ALTER TABLE sites ADD x INT;")
+
+            with pytest.raises(RuntimeError, match="simulated migration failure"):
+                await run_migrations(mock_conn, Path(tmpdir))
+
+        # The failed migration must NOT be in the applied list
+        # (the exception propagates, so result is never returned)
+
+        # The INSERT into schema_migrations must NOT have been called
+        insert_calls = [
+            c for c in mock_conn.execute.call_args_list if "schema_migrations" in str(c.args[0])
+        ]
+        assert len(insert_calls) == 0, "version was recorded despite migration failure"
+
+        # The transaction was entered...
+        mock_tx.__aenter__.assert_called()
+        # ...and the failure causes __aexit__ to be called with exception info
+        mock_tx.__aexit__.assert_called()
