@@ -8,6 +8,17 @@ import pytest
 class TestPoolLifecycle:
     """Tests for pool get/close/re-get lifecycle without any private attributes."""
 
+    @pytest.fixture(autouse=True)
+    async def _save_restore_module_state(self):
+        """Save and restore module-level pool state so mocks don't leak to other tests."""
+        from agency_audit import db
+
+        saved_pool = db._pool
+        saved_closed = db._pool_closed
+        yield
+        db._pool = saved_pool
+        db._pool_closed = saved_closed
+
     @pytest.mark.asyncio
     async def test_get_pool_creates_new_pool(self):
         """get_pool() should create a pool via asyncpg.create_pool on first call."""
