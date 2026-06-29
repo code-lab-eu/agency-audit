@@ -336,20 +336,81 @@ def test_htmx_discover_city_triggers_background():
         mock_ctx.__aenter__.return_value = mock_conn
         mock_pool.acquire.return_value = mock_ctx
 
-        mock_conn.execute = AsyncMock()
         mock_conn.fetchrow = AsyncMock(return_value=_city_row_record("pending"))
+        # The atomic transition returns the city id when it flips the row.
+        mock_conn.fetchval = AsyncMock(return_value=42)
 
         # Prevent the background task from running real discovery.
-        with patch("agency_audit.web.app._run_city_discovery", new=AsyncMock()):
+        with patch("agency_audit.web.app._run_city_discovery", new=AsyncMock()) as mock_run:
             response = client.post("/htmx/country/BE/cities/42/discover")
 
         assert response.status_code == 200
-        # City was flipped to in_progress and the row reflects it (with polling).
-        mock_conn.execute.assert_any_call(
-            "UPDATE cities SET discovery_status = 'in_progress' WHERE id = $1", 42
-        )
+        # The transition is atomic, country-bound, and a no-op if already running.
+        transition_sql = mock_conn.fetchval.call_args[0][0]
+        assert "discovery_status = 'in_progress'" in transition_sql
+        assert "country = $2" in transition_sql
+        assert "discovery_status <> 'in_progress'" in transition_sql
+        assert mock_conn.fetchval.call_args[0][1:] == (42, "BE")
+        # A real transition enqueues exactly one discovery job.
+        mock_run.assert_called_once()
         assert "every 3s" in response.text
         assert "spinner-border" in response.text
+
+
+def test_htmx_discover_city_idempotent_when_already_running():
+    """A second click while in_progress re-renders the row but enqueues nothing."""
+    with (
+        patch("agency_audit.web.app.get_pool") as mock_get_pool,
+        patch("agency_audit.web.app.settings") as mock_settings,
+    ):
+        mock_settings.google_maps_api_key = "test-key"
+        mock_pool = MagicMock()
+        mock_get_pool.return_value = mock_pool
+
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_pool.acquire.return_value = mock_ctx
+
+        mock_conn.fetchrow = AsyncMock(return_value=_city_row_record("in_progress"))
+        # No row transitioned: the city was already in_progress.
+        mock_conn.fetchval = AsyncMock(return_value=None)
+
+        with patch("agency_audit.web.app._run_city_discovery", new=AsyncMock()) as mock_run:
+            response = client.post("/htmx/country/BE/cities/42/discover")
+
+        assert response.status_code == 200
+        # No duplicate discovery job, but the row still polls.
+        mock_run.assert_not_called()
+        assert "every 3s" in response.text
+        assert "spinner-border" in response.text
+
+
+def test_htmx_discover_city_country_mismatch_404():
+    """A city that doesn't belong to the URL's country is not found (no cross-country run)."""
+    with (
+        patch("agency_audit.web.app.get_pool") as mock_get_pool,
+        patch("agency_audit.web.app.settings") as mock_settings,
+    ):
+        mock_settings.google_maps_api_key = "test-key"
+        mock_pool = MagicMock()
+        mock_get_pool.return_value = mock_pool
+
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_pool.acquire.return_value = mock_ctx
+
+        # WHERE ci.id = $1 AND ci.country = $2 matches nothing.
+        mock_conn.fetchrow = AsyncMock(return_value=None)
+        mock_conn.fetchval = AsyncMock()
+
+        with patch("agency_audit.web.app._run_city_discovery", new=AsyncMock()) as mock_run:
+            response = client.post("/htmx/country/BE/cities/999/discover")
+
+        assert response.status_code == 404
+        mock_conn.fetchval.assert_not_called()
+        mock_run.assert_not_called()
 
 
 def test_htmx_discover_city_requires_api_key():
@@ -401,6 +462,7 @@ async def test_run_city_discovery_marks_failed_on_error():
                 "id": 42,
                 "label": "Brussels",
                 "slug": "brussels",
+                "country": "BE",
                 "latitude": 50.85,
                 "longitude": 4.35,
             }
@@ -414,6 +476,9 @@ async def test_run_city_discovery_marks_failed_on_error():
         from agency_audit.web.app import _run_city_discovery
 
         await _run_city_discovery(42, "BE")
+
+        # Discovery uses the city's stored country, not a caller-supplied ISO.
+        assert pipeline.discover_city.call_args.kwargs["country_iso"] == "BE"
 
         mock_conn.execute.assert_any_call(
             "UPDATE cities SET discovery_status = 'failed' WHERE id = $1", 42

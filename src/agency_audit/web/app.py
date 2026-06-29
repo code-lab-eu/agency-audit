@@ -201,8 +201,13 @@ async def _country_detail(pool: asyncpg.Pool, iso: str) -> dict[str, Any] | None
     }
 
 
-async def _city_row_data(pool: asyncpg.Pool, city_id: int) -> dict[str, Any] | None:
-    """Fetch the single-city fields the cities table row needs (for HTMX re-render)."""
+async def _city_row_data(pool: asyncpg.Pool, city_id: int, iso: str) -> dict[str, Any] | None:
+    """Fetch the single-city fields the cities table row needs (for HTMX re-render).
+
+    Bound to ``iso`` so a city is only ever looked up in the country whose page
+    it is rendered on — a request for a city that belongs to another country
+    returns ``None`` (404) rather than rendering on the wrong page.
+    """
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -214,10 +219,11 @@ async def _city_row_data(pool: asyncpg.Pool, city_id: int) -> dict[str, Any] | N
             FROM cities ci
             LEFT JOIN website_cities wc ON wc.city_id = ci.id
             LEFT JOIN websites w ON w.id = wc.website_id
-            WHERE ci.id = $1
+            WHERE ci.id = $1 AND ci.country = $2
             GROUP BY ci.id, ci.label, ci.slug, ci.population, ci.discovery_status
             """,
             city_id,
+            iso.upper(),
         )
     return dict(row) if row else None
 
@@ -227,15 +233,19 @@ async def _run_city_discovery(city_id: int, iso: str) -> None:
 
     ``DiscoveryPipeline.discover_city`` flips ``discovery_status`` to ``done``
     when it finishes; on failure we mark the city ``failed`` so the polling row
-    stops spinning.
+    stops spinning. The city's own stored ``country`` is used for the discovery
+    query templates — never the caller-supplied ISO — and the lookup is bound to
+    that country so a mismatched request finds nothing.
     """
     from agency_audit.discovery import DiscoveryPipeline
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, label, slug, latitude, longitude FROM cities WHERE id = $1",
+            "SELECT id, label, slug, country, latitude, longitude "
+            "FROM cities WHERE id = $1 AND country = $2",
             city_id,
+            iso.upper(),
         )
     if row is None:
         return
@@ -246,7 +256,7 @@ async def _run_city_discovery(city_id: int, iso: str) -> None:
             city_id=row["id"],
             city_label=row["label"],
             city_slug=row["slug"],
-            country_iso=iso.upper(),
+            country_iso=row["country"],
             latitude=row["latitude"],
             longitude=row["longitude"],
         )
@@ -498,7 +508,7 @@ async def htmx_discover_city(
 ):
     """Trigger discovery for a single city in the background and return its row."""
     pool = await get_pool()
-    city = await _city_row_data(pool, city_id)
+    city = await _city_row_data(pool, city_id, iso)
     if city is None:
         return HTMLResponse("Not found", status_code=404)
 
@@ -511,11 +521,20 @@ async def htmx_discover_city(
             {"ci": city, "iso": iso, "error": "No Google Maps API key configured"},
         )
 
+    # Atomic, idempotent transition: only the request that actually flips the row
+    # out of 'in_progress' enqueues a discovery job. Concurrent double-clicks see
+    # no rows updated and fall through to re-rendering the already-running row,
+    # so we never enqueue duplicate Google Places runs for the same city.
     async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE cities SET discovery_status = 'in_progress' WHERE id = $1", city_id
+        transitioned = await conn.fetchval(
+            "UPDATE cities SET discovery_status = 'in_progress' "
+            "WHERE id = $1 AND country = $2 AND discovery_status <> 'in_progress' "
+            "RETURNING id",
+            city_id,
+            iso.upper(),
         )
-    background_tasks.add_task(_run_city_discovery, city_id, iso)
+    if transitioned is not None:
+        background_tasks.add_task(_run_city_discovery, city_id, iso)
 
     city["discovery_status"] = "in_progress"
     return templates.TemplateResponse(
@@ -537,7 +556,7 @@ async def htmx_city_row(request: Request, iso: str, city_id: int):
     show the newly discovered agencies. Polling stops on the same response.
     """
     pool = await get_pool()
-    city = await _city_row_data(pool, city_id)
+    city = await _city_row_data(pool, city_id, iso)
     if city is None:
         return HTMLResponse("Not found", status_code=404)
     response = templates.TemplateResponse(
