@@ -237,7 +237,7 @@ uv run ruff format src/ tests/
 
 ## Tech Stack
 
-- Python 3.12+, asyncpg, FastAPI, Jinja2, httpx, selectolax, Playwright
+- Python 3.14+, asyncpg, FastAPI, Jinja2, httpx, selectolax, Playwright
 - Typer + Rich CLI
 - FastMCP for agent-DB bridge
 - PostgreSQL 16+ (JSONB for flexible audit data)
