@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 import asyncpg
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
+from agency_audit.config import settings
 from agency_audit.db import get_pool
+
+logger = logging.getLogger(__name__)
 
 # --- App setup -----------------------------------------------------------------
 
@@ -146,6 +150,23 @@ async def _country_list(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+async def _country_websites(pool: asyncpg.Pool, iso: str) -> list[dict[str, Any]]:
+    """Websites discovered for a country, highest score first."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT w.id, w.url, w.label, w.score, w.audit_status
+            FROM websites w
+            JOIN website_cities wc ON wc.website_id = w.id
+            JOIN cities ci ON ci.id = wc.city_id
+            WHERE ci.country = $1
+            ORDER BY w.score DESC, w.label
+            """,
+            iso.upper(),
+        )
+    return [dict(r) for r in rows]
+
+
 async def _country_detail(pool: asyncpg.Pool, iso: str) -> dict[str, Any] | None:
     async with pool.acquire() as conn:
         country = await conn.fetchrow(
@@ -171,23 +192,82 @@ async def _country_detail(pool: asyncpg.Pool, iso: str) -> dict[str, Any] | None
             iso.upper(),
         )
 
-        websites = await conn.fetch(
-            """
-            SELECT w.id, w.url, w.label, w.score, w.audit_status
-            FROM websites w
-            JOIN website_cities wc ON wc.website_id = w.id
-            JOIN cities ci ON ci.id = wc.city_id
-            WHERE ci.country = $1
-            ORDER BY w.score DESC, w.label
-            """,
-            iso.upper(),
-        )
+    websites = await _country_websites(pool, iso)
 
     return {
         "country": dict(country),
         "cities": [dict(r) for r in cities],
-        "websites": [dict(r) for r in websites],
+        "websites": websites,
     }
+
+
+async def _city_row_data(pool: asyncpg.Pool, city_id: int, iso: str) -> dict[str, Any] | None:
+    """Fetch the single-city fields the cities table row needs (for HTMX re-render).
+
+    Bound to ``iso`` so a city is only ever looked up in the country whose page
+    it is rendered on — a request for a city that belongs to another country
+    returns ``None`` (404) rather than rendering on the wrong page.
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                ci.id, ci.label, ci.slug, ci.population, ci.discovery_status,
+                COUNT(DISTINCT wc.website_id) AS website_count,
+                COUNT(DISTINCT CASE WHEN w.audit_status = 'audited'
+                    THEN wc.website_id END) AS audited_count
+            FROM cities ci
+            LEFT JOIN website_cities wc ON wc.city_id = ci.id
+            LEFT JOIN websites w ON w.id = wc.website_id
+            WHERE ci.id = $1 AND ci.country = $2
+            GROUP BY ci.id, ci.label, ci.slug, ci.population, ci.discovery_status
+            """,
+            city_id,
+            iso.upper(),
+        )
+    return dict(row) if row else None
+
+
+async def _run_city_discovery(city_id: int, iso: str) -> None:
+    """Background task: run Google Maps discovery for a single city.
+
+    ``DiscoveryPipeline.discover_city`` flips ``discovery_status`` to ``done``
+    when it finishes; on failure we mark the city ``failed`` so the polling row
+    stops spinning. The city's own stored ``country`` is used for the discovery
+    query templates — never the caller-supplied ISO — and the lookup is bound to
+    that country so a mismatched request finds nothing.
+    """
+    from agency_audit.discovery import DiscoveryPipeline
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, label, slug, country, latitude, longitude "
+            "FROM cities WHERE id = $1 AND country = $2",
+            city_id,
+            iso.upper(),
+        )
+    if row is None:
+        return
+
+    pipeline = DiscoveryPipeline()
+    try:
+        await pipeline.discover_city(
+            city_id=row["id"],
+            city_label=row["label"],
+            city_slug=row["slug"],
+            country_iso=row["country"],
+            latitude=row["latitude"],
+            longitude=row["longitude"],
+        )
+    except Exception:
+        logger.exception("Background discovery failed for city %s", city_id)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE cities SET discovery_status = 'failed' WHERE id = $1", city_id
+            )
+    finally:
+        await pipeline.close()
 
 
 async def _website_detail(pool: asyncpg.Pool, website_id: int) -> dict[str, Any] | None:
@@ -413,6 +493,91 @@ async def htmx_rediscover_city(request: Request, city_id: int):
         request,
         "_discovery_queue.html",
         {"data": data},
+    )
+
+
+@app.post(
+    "/htmx/country/{iso}/cities/{city_id}/discover",
+    response_class=HTMLResponse,
+)
+async def htmx_discover_city(
+    request: Request,
+    iso: str,
+    city_id: int,
+    background_tasks: BackgroundTasks,
+):
+    """Trigger discovery for a single city in the background and return its row."""
+    pool = await get_pool()
+    city = await _city_row_data(pool, city_id, iso)
+    if city is None:
+        return HTMLResponse("Not found", status_code=404)
+
+    # Guard: a Maps API key is required, else discovery would mark the city
+    # 'done' with zero results. Surface the misconfiguration instead.
+    if not settings.google_maps_api_key:
+        return templates.TemplateResponse(
+            request,
+            "_city_row.html",
+            {"ci": city, "iso": iso, "error": "No Google Maps API key configured"},
+        )
+
+    # Atomic, idempotent transition: only the request that actually flips the row
+    # out of 'in_progress' enqueues a discovery job. Concurrent double-clicks see
+    # no rows updated and fall through to re-rendering the already-running row,
+    # so we never enqueue duplicate Google Places runs for the same city.
+    async with pool.acquire() as conn:
+        transitioned = await conn.fetchval(
+            "UPDATE cities SET discovery_status = 'in_progress' "
+            "WHERE id = $1 AND country = $2 AND discovery_status <> 'in_progress' "
+            "RETURNING id",
+            city_id,
+            iso.upper(),
+        )
+    if transitioned is not None:
+        background_tasks.add_task(_run_city_discovery, city_id, iso)
+
+    city["discovery_status"] = "in_progress"
+    return templates.TemplateResponse(
+        request,
+        "_city_row.html",
+        {"ci": city, "iso": iso},
+    )
+
+
+@app.get(
+    "/htmx/country/{iso}/cities/{city_id}/row",
+    response_class=HTMLResponse,
+)
+async def htmx_city_row(request: Request, iso: str, city_id: int):
+    """Re-render a single city row. In-progress rows poll this to update status.
+
+    When the city is no longer ``in_progress`` (discovery finished), emit an
+    ``HX-Trigger: discoveryComplete`` header so the Websites table refreshes to
+    show the newly discovered agencies. Polling stops on the same response.
+    """
+    pool = await get_pool()
+    city = await _city_row_data(pool, city_id, iso)
+    if city is None:
+        return HTMLResponse("Not found", status_code=404)
+    response = templates.TemplateResponse(
+        request,
+        "_city_row.html",
+        {"ci": city, "iso": iso},
+    )
+    if city["discovery_status"] != "in_progress":
+        response.headers["HX-Trigger"] = "discoveryComplete"
+    return response
+
+
+@app.get("/htmx/country/{iso}/websites", response_class=HTMLResponse)
+async def htmx_country_websites(request: Request, iso: str):
+    """Partial: the country's Websites table, refreshed when discovery completes."""
+    pool = await get_pool()
+    websites = await _country_websites(pool, iso)
+    return templates.TemplateResponse(
+        request,
+        "_websites_table.html",
+        {"websites": websites, "iso": iso},
     )
 
 
