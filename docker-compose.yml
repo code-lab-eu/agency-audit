@@ -20,8 +20,10 @@ services:
 
   app:
     build: .
+    # Bind the host port to loopback only.  In production, remove the ports
+    # mapping entirely and place the service behind a reverse proxy.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       AGENCY_AUDIT_PG_HOST: postgres
       AGENCY_AUDIT_PG_PORT: "5432"
