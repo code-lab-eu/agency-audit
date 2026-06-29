@@ -317,11 +317,11 @@ class TestGetSettings:
         assert s1 is s2
 
     def test_can_be_patched_for_testing(self, monkeypatch):
-        """Tests can inject custom Settings by patching the module-level singleton."""
+        """Tests can inject custom Settings by patching get_settings()."""
         from agency_audit import config
 
         custom = Settings(pg_host="customhost", pg_port=9999)
-        monkeypatch.setattr(config, "settings", custom)
+        monkeypatch.setattr(config, "get_settings", lambda: custom)
         s = config.get_settings()
         assert s.pg_host == "customhost"
         assert s.pg_port == 9999
