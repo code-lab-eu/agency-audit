@@ -8,6 +8,8 @@ The scoring and full-pipeline tests can run offline.
 from __future__ import annotations
 
 import json
+import logging
+from pathlib import Path
 
 import httpx
 import pytest
@@ -1512,10 +1514,195 @@ class TestScoring:
         assert len(pc_keys) == 1
         assert pc_keys[0] == "property_count_500+"
 
+    # ------------------------------------------------------------------
+    # scoring config loading — file present, missing, malformed, non-dict,
+    # and explicit-path via AGENCY_AUDIT_SCORING_CONFIG_PATH
+    # ------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# AuditData serialization
-# ---------------------------------------------------------------------------
+    def test_load_config_from_file(self, tmp_path, monkeypatch):
+        """load_scoring_config loads a YAML file when present."""
+        import yaml
+
+        config_path = tmp_path / "scoring_config.yaml"
+        custom = {
+            "robots_allows": 99,
+            "has_api": 15,
+            "min_score": -10,
+            "max_score": 50,
+        }
+        config_path.write_text(yaml.dump(custom))
+
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [config_path],
+        )
+        # Ensure env-var path is empty so we test CONFIG_FILE_PATHS
+        monkeypatch.setenv("AGENCY_AUDIT_SCORING_CONFIG_PATH", "")
+
+        result = load_scoring_config()
+        assert result["robots_allows"] == 99
+        assert result["has_api"] == 15
+        assert result["min_score"] == -10
+        # Unspecified keys fall back to defaults
+        assert result["robots_disallows"] == -50
+
+    def test_load_config_missing_file_falls_back(self, monkeypatch):
+        """load_scoring_config returns defaults when no config file exists."""
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [Path("/nonexistent/scoring_config.yaml")],
+        )
+        monkeypatch.setenv("AGENCY_AUDIT_SCORING_CONFIG_PATH", "")
+
+        result = load_scoring_config()
+        assert result["robots_allows"] == 20  # default
+        assert result["robots_disallows"] == -50  # default
+
+    def test_load_config_malformed_yaml_warns(self, tmp_path, monkeypatch, caplog):
+        """Malformed YAML logs a warning and tries next path (or falls back)."""
+        config_path = tmp_path / "scoring_config.yaml"
+        config_path.write_text(":: not valid yaml :::")
+
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [config_path],
+        )
+        monkeypatch.setenv("AGENCY_AUDIT_SCORING_CONFIG_PATH", "")
+
+        with caplog.at_level(logging.WARNING):
+            result = load_scoring_config()
+
+        assert result["robots_allows"] == 20  # fell back to defaults
+        assert "Failed to parse" in caplog.text
+
+    def test_load_config_non_dict_falls_back(self, tmp_path, monkeypatch, caplog):
+        """Valid YAML that is not a dict logs a warning and falls back."""
+        import yaml
+
+        config_path = tmp_path / "scoring_config.yaml"
+        config_path.write_text(yaml.dump([1, 2, 3]))  # valid YAML, but a list
+
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [config_path],
+        )
+        monkeypatch.setenv("AGENCY_AUDIT_SCORING_CONFIG_PATH", "")
+
+        with caplog.at_level(logging.WARNING):
+            result = load_scoring_config()
+
+        assert result["robots_allows"] == 20  # fell back to defaults
+        assert "not a dict" in caplog.text
+
+    def test_load_config_via_env_path(self, tmp_path, monkeypatch):
+        """Explicit AGENCY_AUDIT_SCORING_CONFIG_PATH is checked first."""
+        from unittest.mock import patch
+
+        import yaml
+
+        config_path = tmp_path / "custom_scoring.yaml"
+        custom = {"robots_allows": 77}
+        config_path.write_text(yaml.dump(custom))
+
+        monkeypatch.setenv("AGENCY_AUDIT_SCORING_CONFIG_PATH", str(config_path))
+        # Re-create settings so it picks up the env var
+        from agency_audit.config import Settings
+
+        new_settings = Settings()
+        # Also patch CONFIG_FILE_PATHS with a broken file to prove
+        # the env-var path wins before CONFIG_FILE_PATHS are tried.
+        broken = tmp_path / "scoring_config.yaml"
+        broken.write_text(":::broken:::")
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [broken],
+        )
+
+        with patch("agency_audit.audit.scoring.settings", new_settings):
+            result = load_scoring_config()
+        assert result["robots_allows"] == 77
+
+    def test_load_config_env_path_missing_warns(self, tmp_path, monkeypatch, caplog):
+        """When env-var path points to a nonexistent file, a warning is logged
+        and the search falls through to CONFIG_FILE_PATHS."""
+        from unittest.mock import patch
+
+        monkeypatch.setenv(
+            "AGENCY_AUDIT_SCORING_CONFIG_PATH",
+            str(tmp_path / "does_not_exist.yaml"),
+        )
+        # Re-create settings so it picks up the env var
+        from agency_audit.config import Settings
+
+        new_settings = Settings()
+        # Provide a valid fallback via CONFIG_FILE_PATHS
+        import yaml
+
+        fallback = tmp_path / "scoring_config.yaml"
+        custom = {"robots_allows": 42}
+        fallback.write_text(yaml.dump(custom))
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [fallback],
+        )
+
+        with (
+            patch("agency_audit.audit.scoring.settings", new_settings),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = load_scoring_config()
+
+        assert result["robots_allows"] == 42
+        assert "does not exist" in caplog.text
+
+    def test_load_config_local_override_wins_over_packaged(self, tmp_path, monkeypatch):
+        """Local override (CWD) takes priority over the packaged fallback."""
+        import yaml
+
+        # Create the "local" override (CWD path)
+        local = tmp_path / "local_override"
+        local.mkdir()
+        cwd_config = local / "scoring_config.yaml"
+        cwd_config.write_text(yaml.dump({"robots_allows": 88}))
+
+        # Create the "packaged" fallback (last in list)
+        pkg = tmp_path / "packaged"
+        pkg.mkdir()
+        pkg_config = pkg / "scoring_config.yaml"
+        pkg_config.write_text(yaml.dump({"robots_allows": 11}))
+
+        # CONFIG_FILE_PATHS: CWD first, packaged last — CWD should win
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [cwd_config, pkg_config],
+        )
+        monkeypatch.setenv("AGENCY_AUDIT_SCORING_CONFIG_PATH", "")
+
+        result = load_scoring_config()
+        assert result["robots_allows"] == 88  # local override value, not 11
+
+    def test_load_config_falls_through_to_packaged(self, tmp_path, monkeypatch):
+        """When local override is unparseable, search falls through to packaged."""
+        import yaml
+
+        # Broken local override
+        broken = tmp_path / "scoring_config.yaml"
+        broken.write_text("::: not yaml :::")
+
+        # Valid packaged fallback
+        pkg = tmp_path / "packaged"
+        pkg.mkdir()
+        pkg_config = pkg / "scoring_config.yaml"
+        pkg_config.write_text(yaml.dump({"robots_allows": 77}))
+
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [broken, pkg_config],
+        )
+        monkeypatch.setenv("AGENCY_AUDIT_SCORING_CONFIG_PATH", "")
+
+        result = load_scoring_config()
+        assert result["robots_allows"] == 77  # fell through to packaged
 
 
 class TestAuditDataSerialization:
