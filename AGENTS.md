@@ -131,9 +131,9 @@ agency-audit/
     discovery.py              # Google Maps Places discovery pipeline
     geonames.py               # Cities15000.zip import from Geonames
     mcp_server.py             # FastMCP tools (get_next_city, submit_audit, …)
-    scoring_config.yaml       # Weights for the 0-100 audit score
     audit/                    # Website audit logic (7 modules)
       __init__.py             # Public API: audit_website, audit_websites, AuditData, compute_score
+      scoring_config.yaml     # Weights for the 0-100 audit score (canonical copy)
       models.py               # Dataclasses: RobotsResult, AuditData, TechStackResult, …
       robots.py               # robots.txt fetch & parse
       anti_scraping.py        # Cloudflare/reCAPTCHA/JS-only detection
@@ -167,7 +167,6 @@ agency-audit/
     qa.sh                     # Full local QA gate (lint + format + mypy + tests); run before every push
   pyproject.toml              # Project metadata, deps, ruff, pytest, mypy config
   docker-compose.yml          # Local PostgreSQL 16
-  scoring_config.yaml         # Audit scoring weights
   .github/workflows/agency-audit-ci.yml  # CI: lint, format check, mypy
 ```
 
@@ -251,7 +250,9 @@ the changes on a fresh branch without rewriting history on the shared one.
 
 ## Additional context
 
-- **Scoring:** Weights live in `scoring_config.yaml` (loaded at runtime).
+- **Scoring:** Weights live in `src/agency_audit/audit/scoring_config.yaml`
+  (loaded at runtime). The file ships inside the wheel. A repo-root copy is
+  also checked for convenience during development.
   Adjust weights there — no code changes needed for tuning
 - **MCP server:** Exposes 5 tools (`get_next_city`, `report_website`,
   `get_unaudited_website`, `submit_audit`, `get_stats`) for agent-driven
