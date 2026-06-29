@@ -76,10 +76,10 @@ Write a body where each unit of work has a clear goal and a checkable bar, kept
 independent of the other units wherever possible.
 
 1. **Lead with orientation (a few sentences).** What agency-audit is, the stack
-   (Python 3.12, asyncpg/PostgreSQL, Typer CLI, FastMCP server, FastAPI/Jinja2
+   (Python 3.14, asyncpg/PostgreSQL, Typer CLI, FastMCP server, FastAPI/Jinja2
    web app, orchestration `loop`), where the checkout is, and the gate every
-   change must pass: `uv run --extra dev pytest` and `uvx ruff check .` both
-   clean, with tests never requiring a live database (mock the pool as
+   change must pass: `scripts/qa.sh` exits green (lint, format check, mypy,
+   tests), with tests never requiring a live database (mock the pool as
    `tests/test_loop.py` does). This is what lets each child stand on its own.
 
 2. **State the standing constraints once.** One small change per unit, on its own
@@ -116,12 +116,12 @@ each unit a checkable bar.
 > **Body:**
 >
 > `agency-audit` ("Real Estate Radar") discovers and audits real estate agency
-> sites: Python 3.12, asyncpg/PostgreSQL, a Typer CLI, a FastMCP server, a
+> sites: Python 3.14, asyncpg/PostgreSQL, a Typer CLI, a FastMCP server, a
 > FastAPI/Jinja2 web app, and an orchestration `loop`. Checkout is the repo root;
 > see `AGENTS.md` for layout and conventions. Every change is one small,
 > single-pass PR on its own `fix/<slug>` or `feat/<slug>` branch off `master`,
-> with unit tests riding along. The gate each PR must pass: `uv run --extra dev
-> pytest` and `uvx ruff check .` both clean, and tests never require a live
+> with unit tests riding along. The gate each PR must pass: `scripts/qa.sh`
+> exits green (lint, format check, mypy, tests), and tests never require a live
 > database — mock the pool as `tests/test_loop.py` does.
 >
 > Do the gate fix first; the coverage work depends on it:

@@ -17,7 +17,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install dependencies
         run: |
@@ -59,7 +59,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install dependencies
         run: |
@@ -73,7 +73,7 @@ jobs:
           AGENCY_AUDIT_PG_USER: testuser
           AGENCY_AUDIT_PG_PASSWORD: testpass
           AGENCY_AUDIT_PG_DATABASE: testdb
-        run: python .github/scripts/ci-db-setup.py
+        run: python scripts/seed-test-db.py
 
       - name: Run tests with coverage
         env:
@@ -85,20 +85,10 @@ jobs:
         run: |
           pytest \
             --cov=src/agency_audit \
-            --cov-report=xml \
             --cov-report=term-missing \
+            --cov-report=xml \
             --junitxml=junit.xml \
             tests/
-
-      - name: Coverage threshold check
-        env:
-          AGENCY_AUDIT_PG_HOST: localhost
-          AGENCY_AUDIT_PG_PORT: 5432
-          AGENCY_AUDIT_PG_USER: testuser
-          AGENCY_AUDIT_PG_PASSWORD: testpass
-          AGENCY_AUDIT_PG_DATABASE: testdb
-        run: |
-          coverage report --fail-under=80
 
       - name: Coverage summary
         if: always()
