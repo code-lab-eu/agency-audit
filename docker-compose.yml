@@ -13,7 +13,7 @@ services:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agency_audit"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agency_audit}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -25,9 +25,9 @@ services:
     environment:
       AGENCY_AUDIT_PG_HOST: postgres
       AGENCY_AUDIT_PG_PORT: "5432"
-      AGENCY_AUDIT_PG_USER: agency_audit
-      AGENCY_AUDIT_PG_PASSWORD: agency_audit
-      AGENCY_AUDIT_PG_DATABASE: agency_audit
+      AGENCY_AUDIT_PG_USER: ${POSTGRES_USER:-agency_audit}
+      AGENCY_AUDIT_PG_PASSWORD: ${POSTGRES_PASSWORD:-agency_audit}
+      AGENCY_AUDIT_PG_DATABASE: ${POSTGRES_DB:-agency_audit}
       AGENCY_AUDIT_GOOGLE_MAPS_API_KEY: ""
       AGENCY_AUDIT_GEONAMES_MIN_POPULATION: "50000"
     depends_on:
