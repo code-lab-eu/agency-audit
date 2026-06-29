@@ -515,5 +515,6 @@ def test_serve_default_bind_address():
             assert config_call is not None
             # Config is the first positional arg
             from uvicorn import Config
+
             if isinstance(config_call[0][0], Config):
                 assert config_call[0][0].host == "127.0.0.1"
