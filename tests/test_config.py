@@ -203,6 +203,14 @@ class TestSettingsEnvFile:
 
     def test_env_file_loading(self, tmp_path, monkeypatch):
         """Settings loaded from a .env file should reflect file values."""
+        # Clear env vars that would take precedence over .env file values
+        for var in (
+            "AGENCY_AUDIT_PG_HOST",
+            "AGENCY_AUDIT_PG_PORT",
+            "AGENCY_AUDIT_LOG_LEVEL",
+            "AGENCY_AUDIT_PLACES_MAX_RESULTS",
+        ):
+            monkeypatch.delenv(var, raising=False)
         env_file = tmp_path / ".env"
         env_file.write_text(
             "AGENCY_AUDIT_PG_HOST=envfilehost\n"
@@ -219,6 +227,9 @@ class TestSettingsEnvFile:
 
     def test_env_file_partial_overrides(self, tmp_path, monkeypatch):
         """A .env file with partial settings keeps defaults for unset fields."""
+        monkeypatch.delenv("AGENCY_AUDIT_LOG_LEVEL", raising=False)
+        monkeypatch.delenv("AGENCY_AUDIT_PG_HOST", raising=False)
+        monkeypatch.delenv("AGENCY_AUDIT_PG_PORT", raising=False)
         env_file = tmp_path / ".env"
         env_file.write_text("AGENCY_AUDIT_LOG_LEVEL=WARNING\n")
         monkeypatch.chdir(tmp_path)
@@ -230,6 +241,7 @@ class TestSettingsEnvFile:
 
     def test_env_file_with_empty_values(self, tmp_path, monkeypatch):
         """Empty values in .env file should be treated as empty strings."""
+        monkeypatch.delenv("AGENCY_AUDIT_GOOGLE_MAPS_API_KEY", raising=False)
         env_file = tmp_path / ".env"
         env_file.write_text("AGENCY_AUDIT_GOOGLE_MAPS_API_KEY=\n")
         monkeypatch.chdir(tmp_path)
