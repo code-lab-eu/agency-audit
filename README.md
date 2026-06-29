@@ -141,7 +141,7 @@ agency-audit run-all --countries "BG,RO,GR"
 Start the FastAPI + HTMX dashboard.
 
 ```bash
-# Default: http://0.0.0.0:8000
+# Default: http://127.0.0.1:8000
 agency-audit serve
 
 # Custom host, port, and auto-reload

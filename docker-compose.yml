@@ -2,30 +2,34 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: agency_audit
-      POSTGRES_PASSWORD: agency_audit
-      POSTGRES_DB: agency_audit
+      POSTGRES_USER: ${AGENCY_AUDIT_PG_USER:-agency_audit}
+      POSTGRES_PASSWORD: ${AGENCY_AUDIT_PG_PASSWORD:-agency_audit}
+      POSTGRES_DB: ${AGENCY_AUDIT_PG_DATABASE:-agency_audit}
+    # Port mapping exposes PostgreSQL to the host for development convenience.
+    # In production, this should be removed or restricted to a private network.
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agency_audit"]
+      test: ["CMD-SHELL", "pg_isready -U ${AGENCY_AUDIT_PG_USER:-agency_audit}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   app:
     build: .
+    # Bind the host port to loopback only.  In production, remove the ports
+    # mapping entirely and place the service behind a reverse proxy.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       AGENCY_AUDIT_PG_HOST: postgres
       AGENCY_AUDIT_PG_PORT: "5432"
-      AGENCY_AUDIT_PG_USER: agency_audit
-      AGENCY_AUDIT_PG_PASSWORD: agency_audit
-      AGENCY_AUDIT_PG_DATABASE: agency_audit
+      AGENCY_AUDIT_PG_USER: ${AGENCY_AUDIT_PG_USER:-agency_audit}
+      AGENCY_AUDIT_PG_PASSWORD: ${AGENCY_AUDIT_PG_PASSWORD:-agency_audit}
+      AGENCY_AUDIT_PG_DATABASE: ${AGENCY_AUDIT_PG_DATABASE:-agency_audit}
       AGENCY_AUDIT_GOOGLE_MAPS_API_KEY: ""
       AGENCY_AUDIT_GEONAMES_MIN_POPULATION: "50000"
     depends_on:

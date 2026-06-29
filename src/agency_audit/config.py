@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     playwright_wait_seconds: float = 3.0
 
     # -- Web dashboard server -------------------------------------------------
-    serve_host: str = "0.0.0.0"
+    serve_host: str = "127.0.0.1"
     serve_port: int = 8000
 
     # -- Scoring config -------------------------------------------------------

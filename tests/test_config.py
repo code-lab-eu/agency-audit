@@ -160,7 +160,7 @@ class TestSettingsDefaults:
 
     def test_serve_defaults(self):
         s = Settings()
-        assert s.serve_host == "0.0.0.0"
+        assert s.serve_host == "127.0.0.1"
         assert s.serve_port == 8000
 
     def test_playwright_defaults(self):

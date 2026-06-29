@@ -499,3 +499,22 @@ def test_serve_command_executes():
             assert result.exit_code == 0
             assert "Starting Agency Audit dashboard" in result.output
             mock_server.run.assert_called_once()
+
+
+def test_serve_default_bind_address():
+    """serve defaults to loopback (127.0.0.1)."""
+    with patch("uvicorn.Server") as mock_server_cls:
+        mock_server = mock_server_cls.return_value
+        mock_server.run = MagicMock()
+
+        with patch("agency_audit.cli.asyncio.run"):
+            result = runner.invoke(app, ["serve"])
+            assert result.exit_code == 0
+            # Verify uvicorn.Config received host="127.0.0.1"
+            config_call = mock_server_cls.call_args
+            assert config_call is not None
+            # Config is the first positional arg
+            from uvicorn import Config
+
+            if isinstance(config_call[0][0], Config):
+                assert config_call[0][0].host == "127.0.0.1"
