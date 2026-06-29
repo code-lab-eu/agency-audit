@@ -82,7 +82,7 @@ uv run agency-audit batch-audit --urls "https://a.bg,https://b.bg" --concurrency
 Start the FastAPI + HTMX dashboard.
 
 ```bash
-# Default: http://0.0.0.0:8000
+# Default: http://127.0.0.1:8000
 uv run agency-audit serve
 
 # Custom host, port, and auto-reload
