@@ -1,6 +1,7 @@
 """Typer CLI for agency-audit."""
 
 import asyncio
+import json
 from pathlib import Path
 
 import asyncpg
@@ -219,8 +220,6 @@ def audit(
         raise typer.Exit(1)
 
     async def _run():
-        import json
-
         from agency_audit.audit.auditor import audit_website
 
         target_url = url
@@ -353,8 +352,6 @@ def batch_audit(
     url_list = [u.strip() for u in urls.split(",") if u.strip()]
 
     async def _run():
-        import json
-
         from agency_audit.audit.auditor import audit_websites
 
         console.print(f"[cyan]Auditing {len(url_list)} websites (concurrency={concurrency})...[/]")
