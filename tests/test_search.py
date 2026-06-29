@@ -1,6 +1,7 @@
 """Tests for agency_audit.search — full-text search with tsvector/tsquery.
 
-All tests mock the database pool — no live PostgreSQL required.
+Mock-based tests that verify the SQL, parameter passing, and edge cases.
+PostgreSQL-backed integration tests are in test_search_integration.py.
 """
 
 from __future__ import annotations
@@ -9,12 +10,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agency_audit.search import search_agencies
+from agency_audit.search import (
+    _MAX_SEARCH_LIMIT,
+    _MIN_SEARCH_LIMIT,
+    search_agencies,
+    set_agency_description,
+)
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
 
-def _make_pool_mock(*, fetch_return=None):
+def _make_pool_mock(*, fetch_return=None, execute_return=None):
     """Create a pool mock that returns configurable rows from conn.fetch().
 
     Returns (mock_pool, mock_conn) so callers can inspect mock_conn
@@ -22,6 +28,7 @@ def _make_pool_mock(*, fetch_return=None):
     """
     mock_conn = AsyncMock()
     mock_conn.fetch = AsyncMock(return_value=fetch_return or [])
+    mock_conn.execute = AsyncMock(return_value=execute_return)
 
     mock_ctx = AsyncMock()
     mock_ctx.__aenter__.return_value = mock_conn
@@ -42,11 +49,7 @@ def _make_row(
     audit_status="audited",
     rank=0.9,
 ):
-    """Create a dict-like asyncpg.Record stand-in.
-
-    asyncpg.Record quacks like a dict (supports dict(row)), so a plain
-    dict works fine as the return value of conn.fetch().
-    """
+    """Create a dict-like asyncpg.Record stand-in."""
     return {
         "id": id_,
         "url": url,
@@ -81,7 +84,6 @@ class TestSearchAgencies:
         assert result[1]["id"] == 2
         assert result[0]["rank"] == 0.95
 
-        # Verify the SQL was called with correct params
         conn_mock.fetch.assert_awaited_once()
         call_args = conn_mock.fetch.call_args
         assert call_args.args[1] == "alpha beta"  # query string
@@ -110,7 +112,7 @@ class TestSearchAgencies:
 
     @pytest.mark.asyncio
     async def test_respects_limit_parameter(self):
-        """The caller-supplied limit is passed through to the SQL query."""
+        """The caller-supplied (valid) limit is passed through to SQL."""
         pool_mock, conn_mock = _make_pool_mock(fetch_return=[_make_row()])
 
         with patch("agency_audit.search.get_pool", return_value=pool_mock):
@@ -118,6 +120,39 @@ class TestSearchAgencies:
 
         call_args = conn_mock.fetch.call_args
         assert call_args.args[2] == 5
+
+    @pytest.mark.asyncio
+    async def test_limit_below_minimum_is_clamped(self):
+        """limit < 1 is clamped to _MIN_SEARCH_LIMIT (1)."""
+        pool_mock, conn_mock = _make_pool_mock(fetch_return=[_make_row()])
+
+        with patch("agency_audit.search.get_pool", return_value=pool_mock):
+            await search_agencies("test", limit=0)
+
+        call_args = conn_mock.fetch.call_args
+        assert call_args.args[2] == _MIN_SEARCH_LIMIT
+
+    @pytest.mark.asyncio
+    async def test_limit_negative_is_clamped(self):
+        """Negative limit is clamped to _MIN_SEARCH_LIMIT (1)."""
+        pool_mock, conn_mock = _make_pool_mock(fetch_return=[_make_row()])
+
+        with patch("agency_audit.search.get_pool", return_value=pool_mock):
+            await search_agencies("test", limit=-10)
+
+        call_args = conn_mock.fetch.call_args
+        assert call_args.args[2] == _MIN_SEARCH_LIMIT
+
+    @pytest.mark.asyncio
+    async def test_limit_above_maximum_is_clamped(self):
+        """limit > _MAX_SEARCH_LIMIT is clamped."""
+        pool_mock, conn_mock = _make_pool_mock(fetch_return=[_make_row()])
+
+        with patch("agency_audit.search.get_pool", return_value=pool_mock):
+            await search_agencies("test", limit=9999)
+
+        call_args = conn_mock.fetch.call_args
+        assert call_args.args[2] == _MAX_SEARCH_LIMIT
 
     @pytest.mark.asyncio
     async def test_result_keys_match_expected_schema(self):
@@ -199,7 +234,6 @@ class TestSearchSqlInjection:
         with patch("agency_audit.search.get_pool", return_value=pool_mock):
             result = await search_agencies("O'Brien agency")
 
-        # Should not raise; the parameterised query handles the quote
         assert result == []
         conn_mock.fetch.assert_awaited_once()
 
@@ -211,7 +245,6 @@ class TestSearchSqlInjection:
         with patch("agency_audit.search.get_pool", return_value=pool_mock):
             await search_agencies("DROP TABLE websites; --")
 
-        # Parameterised query passes the whole string as $1
         call_args = conn_mock.fetch.call_args
         assert "DROP TABLE" in call_args.args[1]
         conn_mock.fetch.assert_awaited_once()
@@ -232,3 +265,43 @@ class TestSearchModuleImports:
 
         sig = inspect.signature(search_agencies)
         assert sig.parameters["limit"].default == 20
+
+
+class TestSetAgencyDescription:
+    """Tests for set_agency_description() helper."""
+
+    @pytest.mark.asyncio
+    async def test_updates_description_column(self):
+        """set_agency_description issues an UPDATE with the given value."""
+        pool_mock, conn_mock = _make_pool_mock()
+
+        with patch("agency_audit.search.get_pool", return_value=pool_mock):
+            await set_agency_description(42, "Top real estate agency in Sofia")
+
+        conn_mock.execute.assert_awaited_once()
+        call_args = conn_mock.execute.call_args
+        assert call_args.args[0].startswith("UPDATE websites SET description")
+        assert call_args.args[1] == "Top real estate agency in Sofia"
+        assert call_args.args[2] == 42
+
+    @pytest.mark.asyncio
+    async def test_strips_whitespace_from_description(self):
+        """Leading/trailing whitespace is stripped before writing."""
+        pool_mock, conn_mock = _make_pool_mock()
+
+        with patch("agency_audit.search.get_pool", return_value=pool_mock):
+            await set_agency_description(1, "  Nice agency  ")
+
+        call_args = conn_mock.execute.call_args
+        assert call_args.args[1] == "Nice agency"
+
+    @pytest.mark.asyncio
+    async def test_empty_description_sets_null(self):
+        """An empty/whitespace-only description sets NULL."""
+        pool_mock, conn_mock = _make_pool_mock()
+
+        with patch("agency_audit.search.get_pool", return_value=pool_mock):
+            await set_agency_description(1, "   ")
+
+        call_args = conn_mock.execute.call_args
+        assert call_args.args[1] is None

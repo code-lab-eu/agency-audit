@@ -1,20 +1,20 @@
--- 004_add_fulltext_search.sql — Full-text search on agency names and descriptions
+-- 005_add_fulltext_search.sql — Full-text search on agency names
 --
--- Adds a description column (populated by discovery/audit pipelines) and a
--- generated tsvector column with a GIN index for fast full-text search.
+-- Adds a description column (stub for future integration — search only indexes
+-- label until a population path is wired), a generated tsvector column on label,
+-- and a GIN index for fast full-text search.
 
 -- =============================================================================
--- websites: add description column for agency prose
+-- websites: add description column (stub — populated later by discovery/audit)
 -- =============================================================================
 ALTER TABLE websites ADD COLUMN IF NOT EXISTS description TEXT;
 
 -- =============================================================================
--- websites: generated tsvector with weighted fields (label = A, description = B)
+-- websites: generated tsvector on label (name-only search for now)
 -- =============================================================================
 ALTER TABLE websites ADD COLUMN IF NOT EXISTS search_vector tsvector
     GENERATED ALWAYS AS (
-        setweight(to_tsvector('english', COALESCE(label, '')), 'A') ||
-        setweight(to_tsvector('english', COALESCE(description, '')), 'B')
+        setweight(to_tsvector('english', COALESCE(label, '')), 'A')
     ) STORED;
 
 -- =============================================================================
