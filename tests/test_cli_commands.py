@@ -117,6 +117,15 @@ def test_audit_arg_validation():
         mock_asyncio.assert_not_called()
 
 
+def test_audit_output_db_requires_website_id():
+    """audit --output db without --website-id exits non-zero with clear message."""
+    with patch("agency_audit.cli.asyncio.run") as mock_asyncio:
+        result = runner.invoke(app, ["audit", "--output", "db", "--url", "https://example.com"])
+        assert result.exit_code == 1
+        assert "--output db requires --website-id" in result.output
+        mock_asyncio.assert_not_called()
+
+
 # ──────────────────────────────────────────────────────────────────────
 # stats command
 # ──────────────────────────────────────────────────────────────────────
