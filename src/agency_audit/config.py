@@ -177,3 +177,13 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    """Return the singleton Settings instance.
+
+    This is the canonical entry point for dependency injection.
+    Tests can patch ``agency_audit.config.get_settings`` to inject
+    custom configuration without touching the module-level ``settings``.
+    """
+    return settings

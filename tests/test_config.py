@@ -196,3 +196,120 @@ class TestSettingsDefaults:
         s = Settings(pg_host="")
         with pytest.raises(RuntimeError, match="pg_host"):
             s.ensure_ready_for("db")
+
+
+class TestSettingsEnvFile:
+    """Tests for loading settings from a .env file."""
+
+    def test_env_file_loading(self, tmp_path, monkeypatch):
+        """Settings loaded from a .env file should reflect file values."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "AGENCY_AUDIT_PG_HOST=envfilehost\n"
+            "AGENCY_AUDIT_PG_PORT=9999\n"
+            "AGENCY_AUDIT_LOG_LEVEL=DEBUG\n"
+            "AGENCY_AUDIT_PLACES_MAX_RESULTS=42\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        s = Settings(_env_file=env_file)
+        assert s.pg_host == "envfilehost"
+        assert s.pg_port == 9999
+        assert s.log_level == "DEBUG"
+        assert s.places_max_results == 42
+
+    def test_env_file_partial_overrides(self, tmp_path, monkeypatch):
+        """A .env file with partial settings keeps defaults for unset fields."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("AGENCY_AUDIT_LOG_LEVEL=WARNING\n")
+        monkeypatch.chdir(tmp_path)
+        s = Settings(_env_file=env_file)
+        assert s.log_level == "WARNING"
+        # Defaults remain for unset fields
+        assert s.pg_host == "localhost"
+        assert s.pg_port == 5432
+
+    def test_env_file_with_empty_values(self, tmp_path, monkeypatch):
+        """Empty values in .env file should be treated as empty strings."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("AGENCY_AUDIT_GOOGLE_MAPS_API_KEY=\n")
+        monkeypatch.chdir(tmp_path)
+        s = Settings(_env_file=env_file)
+        assert s.google_maps_api_key == ""
+
+
+class TestSettingsEnvOverride:
+    """Tests for environment variable overrides taking precedence."""
+
+    def test_env_var_overrides_default(self, monkeypatch):
+        """Environment variables should override the default values."""
+        monkeypatch.setenv("AGENCY_AUDIT_PG_HOST", "envhost")
+        monkeypatch.setenv("AGENCY_AUDIT_LOG_LEVEL", "ERROR")
+        s = Settings()
+        assert s.pg_host == "envhost"
+        assert s.log_level == "ERROR"
+
+    def test_env_var_overrides_env_file(self, tmp_path, monkeypatch):
+        """Environment variables should override .env file values."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "AGENCY_AUDIT_PG_HOST=filehost\n"
+            "AGENCY_AUDIT_LOG_LEVEL=WARNING\n"
+        )
+        monkeypatch.setenv("AGENCY_AUDIT_PG_HOST", "envhost")
+        monkeypatch.setenv("AGENCY_AUDIT_LOG_LEVEL", "ERROR")
+        monkeypatch.chdir(tmp_path)
+        s = Settings(_env_file=env_file)
+        assert s.pg_host == "envhost"
+        assert s.log_level == "ERROR"
+
+    def test_mixed_env_and_defaults(self, monkeypatch):
+        """Only overridden env vars change; everything else stays default."""
+        monkeypatch.setenv("AGENCY_AUDIT_AUDIT_CONCURRENCY", "25")
+        s = Settings()
+        assert s.audit_concurrency == 25
+        assert s.pg_host == "localhost"
+        assert s.log_level == "INFO"
+
+    def test_int_env_var_parsing(self, monkeypatch):
+        """Integer fields should be parsed from string env var values."""
+        monkeypatch.setenv("AGENCY_AUDIT_PG_PORT", "7777")
+        monkeypatch.setenv("AGENCY_AUDIT_AUDIT_CONCURRENCY", "12")
+        s = Settings()
+        assert s.pg_port == 7777
+        assert isinstance(s.pg_port, int)
+        assert s.audit_concurrency == 12
+        assert isinstance(s.audit_concurrency, int)
+
+    def test_float_env_var_parsing(self, monkeypatch):
+        """Float fields should be parsed from string env var values."""
+        monkeypatch.setenv("AGENCY_AUDIT_PLACES_RATE_LIMIT_QPS", "3.5")
+        s = Settings()
+        assert s.places_rate_limit_qps == 3.5
+        assert isinstance(s.places_rate_limit_qps, float)
+
+
+class TestGetSettings:
+    """Tests for the get_settings() dependency injection function."""
+
+    def test_returns_settings_instance(self):
+        from agency_audit.config import get_settings
+
+        s = get_settings()
+        assert isinstance(s, Settings)
+
+    def test_returns_singleton(self):
+        from agency_audit.config import get_settings
+
+        s1 = get_settings()
+        s2 = get_settings()
+        assert s1 is s2
+
+    def test_can_be_patched_for_testing(self, monkeypatch):
+        """Tests can inject custom Settings by patching the module-level singleton."""
+        from agency_audit import config
+
+        custom = Settings(pg_host="customhost", pg_port=9999)
+        monkeypatch.setattr(config, "settings", custom)
+        s = config.get_settings()
+        assert s.pg_host == "customhost"
+        assert s.pg_port == 9999
