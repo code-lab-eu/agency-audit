@@ -45,8 +45,12 @@ async def save_viewport(data: dict[str, Any]) -> int:
     return int(row_id)
 
 
-async def load_viewports(user_id: str) -> list[dict[str, Any]]:
+async def load_viewports(user_id: str | None = None) -> list[dict[str, Any]]:
     """Load all viewport presets for a given user, newest first.
+
+    When *user_id* is a string, returns presets owned by that user.
+    When *user_id* is ``None`` (the default), returns anonymous presets
+    (those with a NULL ``user_id`` column).
 
     Returns a list of dicts with all columns (id, user_id, name, center_lat,
     center_lng, zoom_level, north, south, east, west, created_at, updated_at).
@@ -58,7 +62,7 @@ async def load_viewports(user_id: str) -> list[dict[str, Any]]:
             """SELECT id, user_id, name, center_lat, center_lng, zoom_level,
                       north, south, east, west, created_at, updated_at
                FROM viewport_presets
-               WHERE user_id = $1
+               WHERE user_id IS NOT DISTINCT FROM $1
                ORDER BY created_at DESC""",
             user_id,
         )
