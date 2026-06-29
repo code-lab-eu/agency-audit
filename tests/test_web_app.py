@@ -310,6 +310,142 @@ def test_htmx_rediscover_city():
         )
 
 
+def _city_row_record(status="pending"):
+    return {
+        "id": 42,
+        "label": "Brussels",
+        "slug": "brussels",
+        "population": 1000000,
+        "discovery_status": status,
+        "website_count": 0,
+        "audited_count": 0,
+    }
+
+
+def test_htmx_discover_city_triggers_background():
+    with (
+        patch("agency_audit.web.app.get_pool") as mock_get_pool,
+        patch("agency_audit.web.app.settings") as mock_settings,
+    ):
+        mock_settings.google_maps_api_key = "test-key"
+        mock_pool = MagicMock()
+        mock_get_pool.return_value = mock_pool
+
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_pool.acquire.return_value = mock_ctx
+
+        mock_conn.execute = AsyncMock()
+        mock_conn.fetchrow = AsyncMock(return_value=_city_row_record("pending"))
+
+        # Prevent the background task from running real discovery.
+        with patch("agency_audit.web.app._run_city_discovery", new=AsyncMock()):
+            response = client.post("/htmx/country/BE/cities/42/discover")
+
+        assert response.status_code == 200
+        # City was flipped to in_progress and the row reflects it (with polling).
+        mock_conn.execute.assert_any_call(
+            "UPDATE cities SET discovery_status = 'in_progress' WHERE id = $1", 42
+        )
+        assert "every 3s" in response.text
+        assert "spinner-border" in response.text
+
+
+def test_htmx_discover_city_requires_api_key():
+    with (
+        patch("agency_audit.web.app.get_pool") as mock_get_pool,
+        patch("agency_audit.web.app.settings") as mock_settings,
+    ):
+        mock_settings.google_maps_api_key = ""
+        mock_pool = MagicMock()
+        mock_get_pool.return_value = mock_pool
+
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_pool.acquire.return_value = mock_ctx
+
+        mock_conn.execute = AsyncMock()
+        mock_conn.fetchrow = AsyncMock(return_value=_city_row_record("pending"))
+
+        response = client.post("/htmx/country/BE/cities/42/discover")
+        assert response.status_code == 200
+        assert "No Google Maps API key configured" in response.text
+        # No status change when misconfigured.
+        for call in mock_conn.execute.call_args_list:
+            assert "in_progress" not in str(call)
+
+
+def test_htmx_city_row():
+    with patch("agency_audit.web.app.get_pool") as mock_get_pool:
+        mock_pool = MagicMock()
+        mock_get_pool.return_value = mock_pool
+
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_pool.acquire.return_value = mock_ctx
+
+        mock_conn.fetchrow = AsyncMock(return_value=_city_row_record("done"))
+
+        response = client.get("/htmx/country/BE/cities/42/row")
+        assert response.status_code == 200
+        # Done rows don't poll and show the refresh button.
+        assert "every 3s" not in response.text
+        assert "Refresh discovery" in response.text
+        # Completion fires the event that refreshes the Websites table.
+        assert response.headers.get("HX-Trigger") == "discoveryComplete"
+
+
+def test_htmx_city_row_in_progress_no_trigger():
+    with patch("agency_audit.web.app.get_pool") as mock_get_pool:
+        mock_pool = MagicMock()
+        mock_get_pool.return_value = mock_pool
+
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_pool.acquire.return_value = mock_ctx
+
+        mock_conn.fetchrow = AsyncMock(return_value=_city_row_record("in_progress"))
+
+        response = client.get("/htmx/country/BE/cities/42/row")
+        assert response.status_code == 200
+        # Still running: keep polling, don't refresh the Websites table yet.
+        assert "every 3s" in response.text
+        assert "HX-Trigger" not in response.headers
+
+
+def test_htmx_country_websites():
+    with patch("agency_audit.web.app.get_pool") as mock_get_pool:
+        mock_pool = MagicMock()
+        mock_get_pool.return_value = mock_pool
+
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_pool.acquire.return_value = mock_ctx
+
+        mock_conn.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": 7,
+                    "url": "https://example.be",
+                    "label": "Example Agency",
+                    "score": 42,
+                    "audit_status": "audited",
+                }
+            ]
+        )
+
+        response = client.get("/htmx/country/BE/websites")
+        assert response.status_code == 200
+        assert 'id="websites-table"' in response.text
+        assert "discoveryComplete from:body" in response.text
+        assert "Example Agency" in response.text
+
+
 def test_htmx_recent_activity():
     with patch("agency_audit.web.app.get_pool") as mock_get_pool:
         mock_pool = MagicMock()

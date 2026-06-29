@@ -1,0 +1,28 @@
+<table id="websites-table" class="websites-table table table-sm table-hover mb-0"
+       hx-get="/htmx/country/{{ iso }}/websites"
+       hx-trigger="discoveryComplete from:body"
+       hx-swap="outerHTML">
+    <thead class="table-light">
+        <tr>
+            <th>Website</th>
+            <th class="text-end">Score</th>
+            <th>Status</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for w in websites %}
+        <tr onclick="window.location='/website/{{ w.id }}'">
+            <td>
+                <strong>{{ w.label or w.url }}</strong>
+                <br><small class="text-muted">{{ w.url }}</small>
+            </td>
+            <td class="text-end">
+                <span class="{{ w.score | score_color }}">{{ w.score }}</span>
+            </td>
+            <td>{{ w.audit_status | status_badge }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" class="text-muted text-center py-3">No websites discovered yet</td></tr>
+        {% endfor %}
+    </tbody>
+</table>

@@ -1,0 +1,23 @@
+<tr{% if ci.discovery_status == 'in_progress' %} hx-get="/htmx/country/{{ iso }}/cities/{{ ci.id }}/row" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+    <td>
+        <strong>{{ ci.label }}</strong>
+        <small class="text-muted">/{{ ci.slug }}</small>
+    </td>
+    <td class="text-end">{{ "{:,}".format(ci.population) }}</td>
+    <td class="text-end">{{ ci.website_count }}</td>
+    <td class="text-end">{{ ci.audited_count }}</td>
+    <td>{{ ci.discovery_status | status_badge }}</td>
+    <td class="text-end">
+        {% if ci.discovery_status == 'in_progress' %}
+        <span class="spinner-border spinner-border-sm text-info" role="status" aria-label="Discovering"></span>
+        {% else %}
+        <button class="btn btn-sm btn-outline-primary"
+                hx-post="/htmx/country/{{ iso }}/cities/{{ ci.id }}/discover"
+                hx-target="closest tr"
+                hx-swap="outerHTML"
+                title="Refresh discovery"
+                aria-label="Refresh discovery for {{ ci.label }}">↻</button>
+        {% endif %}
+        {% if error %}<div class="text-danger small mt-1">{{ error }}</div>{% endif %}
+    </td>
+</tr>
