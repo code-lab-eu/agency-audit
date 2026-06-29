@@ -436,3 +436,24 @@ async def api_stats():
     """JSON API for stats."""
     pool = await get_pool()
     return JSONResponse(await _overview_stats(pool))
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint.
+
+    Returns 200 with ``{"status": "healthy", "db": "connected"}`` when the
+    service is ready and the database is reachable.  Returns 503 if the
+    database cannot be reached, so orchestrators (Docker, K8s, load-balancers)
+    can take the instance out of rotation.
+    """
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+    except Exception as exc:
+        return JSONResponse(
+            {"status": "unhealthy", "db": "disconnected", "detail": str(exc)},
+            status_code=503,
+        )
+    return JSONResponse({"status": "healthy", "db": "connected"})

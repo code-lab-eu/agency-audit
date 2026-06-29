@@ -17,6 +17,7 @@ import re
 import httpx
 
 from agency_audit.audit.models import TechStackResult
+from agency_audit.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +199,7 @@ async def detect_tech_stack(
     result = TechStackResult()
     own_client = client is None and response is None
     if own_client:
-        client = httpx.AsyncClient(timeout=15, follow_redirects=True)
+        client = httpx.AsyncClient(timeout=settings.audit_http_timeout, follow_redirects=True)
 
     try:
         if response is None:

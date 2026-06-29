@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 
+from agency_audit.config import settings
 from agency_audit.db import get_pool
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ COUNTRY_QUERIES: dict[str, list[str]] = {
 }
 
 # Default Google Maps Text Search radius in meters
-DEFAULT_RADIUS = 10000
+DEFAULT_RADIUS = settings.places_radius_meters
 
 
 @dataclass
@@ -132,7 +133,7 @@ class PlacesAPIClient:
     async def _ensure_client(self):
         if self._client is None:
             self._client = httpx.AsyncClient(
-                timeout=30.0,
+                timeout=float(settings.places_api_timeout),
                 headers={
                     "Content-Type": "application/json",
                     "X-Goog-Api-Key": self.api_key,
@@ -150,15 +151,17 @@ class PlacesAPIClient:
         query: str,
         location_bias: tuple[float, float] | None = None,
         radius: int = DEFAULT_RADIUS,
-        max_results: int = 60,
+        max_results: int | None = None,
     ) -> list[PlaceResult]:
         """Search Google Maps Places API for a text query.
 
-        Handles pagination up to max_results (default 60, max 60 for
-        Text Search, but we paginate across multiple requests).
+        Handles pagination up to max_results (default from settings,
+        max 60 for Text Search, but we paginate across multiple requests).
 
         Returns up to max_results PlaceResult objects.
         """
+        if max_results is None:
+            max_results = settings.places_max_results
         await self._rate_limit()
 
         client = await self._ensure_client()
@@ -224,7 +227,7 @@ class PlacesAPIClient:
         """Simple rate limiting — max 5 QPS for Text Search."""
         now = time.monotonic()
         elapsed = now - self._last_request_time
-        min_interval = 0.2  # 5 QPS
+        min_interval = 1.0 / settings.places_rate_limit_qps
         if elapsed < min_interval:
             await asyncio.sleep(min_interval - elapsed)
         self._last_request_time = time.monotonic()
@@ -295,7 +298,6 @@ class DiscoveryPipeline:
                     places = await self.places.search_text(
                         query=search_query,
                         location_bias=location,
-                        max_results=60,
                     )
                 else:
                     logger.warning(f"Places API not available for {city_label}")

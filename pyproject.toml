@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "agency-audit"
 version = "0.1.0"
 description = "Real Estate Radar — Website Discovery & Audit System"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
     "asyncpg>=0.30",
     "fastapi>=0.115",
@@ -19,7 +19,9 @@ dependencies = [
     "rich>=13.9",
     "fastmcp>=3.4,<4.0",
     "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
     "pyyaml>=6.0",
+    "python-json-logger>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -40,7 +42,7 @@ agency-audit-mcp = "agency_audit.mcp_server:main"
 packages = ["src/agency_audit"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
@@ -54,7 +56,7 @@ testpaths = ["tests"]
 quote-style = "double"
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 namespace_packages = true
 explicit_package_bases = true
 ignore_missing_imports = true
@@ -70,7 +72,7 @@ omit = [
 ]
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 88
 show_missing = true
 skip_covered = false
 
