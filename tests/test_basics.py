@@ -37,7 +37,6 @@ def test_config_dsn_no_password():
 
 def test_config_dsn_special_chars_in_password():
     """URL-encode special characters (@, :, /, %) in password."""
-    from urllib.parse import quote
 
     from agency_audit.config import Settings
 
@@ -49,14 +48,13 @@ def test_config_dsn_special_chars_in_password():
         pg_password=password,
         pg_database="agency_audit",
     )
-    encoded = quote(password, safe="")
-    expected = f"postgresql://agency_audit:{encoded}@localhost:5432/agency_audit"
+    # @ → %40, : → %3A, / → %2F, % → %25
+    expected = "postgresql://agency_audit:p%40ss%3Aword%2Fwith%25chars@localhost:5432/agency_audit"
     assert s.dsn == expected
 
 
 def test_config_dsn_special_chars_in_user():
     """URL-encode special characters (@, :, /, %) in username."""
-    from urllib.parse import quote
 
     from agency_audit.config import Settings
 
@@ -68,8 +66,8 @@ def test_config_dsn_special_chars_in_user():
         pg_password="plainpass",
         pg_database="testdb",
     )
-    encoded = quote(username, safe="")
-    expected = f"postgresql://{encoded}:plainpass@localhost:5432/testdb"
+    # @ → %40, : → %3A, / → %2F, % → %25
+    expected = "postgresql://us%40r%3An%2Fme%25:plainpass@localhost:5432/testdb"
     assert s.dsn == expected
 
 

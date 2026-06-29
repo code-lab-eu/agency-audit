@@ -81,9 +81,10 @@ class Settings(BaseSettings):
     @property
     def dsn(self) -> str:
         """Asyncpg connection DSN with URL-encoded credentials."""
-        auth = quote(self.pg_user, safe="")
+        user = quote(self.pg_user, safe="")
+        auth = user
         if self.pg_password:
-            auth = f"{quote(self.pg_user, safe='')}:{quote(self.pg_password, safe='')}"
+            auth = f"{user}:{quote(self.pg_password, safe='')}"
         return f"postgresql://{auth}@{self.pg_host}:{self.pg_port}/{self.pg_database}"
 
     # -- Validation -----------------------------------------------------------
