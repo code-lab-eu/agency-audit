@@ -653,4 +653,3 @@ class TestPlacesAPIClientConfiguration:
         await client.close()
 
         assert captured_url == PlacesAPIClient.BASE_URL
-
