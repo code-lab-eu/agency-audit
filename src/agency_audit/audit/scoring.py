@@ -82,7 +82,7 @@ def _try_load_config(path: Path) -> dict | None:
     try:
         with open(path) as f:
             user_config = yaml.safe_load(f)
-    except yaml.YAMLError, OSError:
+    except (yaml.YAMLError, OSError):
         logger.warning(
             "Failed to parse %s — skipping",
             path,
