@@ -95,7 +95,7 @@ async def delete_viewport(preset_id: int) -> bool:
         )
 
     # asyncpg's Connection.execute returns a string like "DELETE 1"
-    deleted = result != "DELETE 0"
+    deleted = bool(result != "DELETE 0")
     if deleted:
         logger.info("Deleted viewport preset %d", preset_id)
     return deleted

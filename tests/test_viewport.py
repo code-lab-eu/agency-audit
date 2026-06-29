@@ -111,36 +111,38 @@ class TestLoadViewports:
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__.return_value = mock_conn
             mock_pool.acquire.return_value = mock_ctx
-            mock_conn.fetch = AsyncMock(return_value=[
-                {
-                    "id": 1,
-                    "user_id": "test-user",
-                    "name": "Preset A",
-                    "center_lat": 42.0,
-                    "center_lng": 24.0,
-                    "zoom_level": 10,
-                    "north": 43.0,
-                    "south": 41.0,
-                    "east": 25.0,
-                    "west": 23.0,
-                    "created_at": now,
-                    "updated_at": now,
-                },
-                {
-                    "id": 2,
-                    "user_id": "test-user",
-                    "name": "Preset B",
-                    "center_lat": 43.0,
-                    "center_lng": 25.0,
-                    "zoom_level": 11,
-                    "north": 44.0,
-                    "south": 42.0,
-                    "east": 26.0,
-                    "west": 24.0,
-                    "created_at": now,
-                    "updated_at": now,
-                },
-            ])
+            mock_conn.fetch = AsyncMock(
+                return_value=[
+                    {
+                        "id": 1,
+                        "user_id": "test-user",
+                        "name": "Preset A",
+                        "center_lat": 42.0,
+                        "center_lng": 24.0,
+                        "zoom_level": 10,
+                        "north": 43.0,
+                        "south": 41.0,
+                        "east": 25.0,
+                        "west": 23.0,
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                    {
+                        "id": 2,
+                        "user_id": "test-user",
+                        "name": "Preset B",
+                        "center_lat": 43.0,
+                        "center_lng": 25.0,
+                        "zoom_level": 11,
+                        "north": 44.0,
+                        "south": 42.0,
+                        "east": 26.0,
+                        "west": 24.0,
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                ]
+            )
 
             result = await load_viewports("test-user")
             assert len(result) == 2
@@ -270,14 +272,17 @@ class TestModuleExports:
     def test_save_viewport_importable(self):
         """save_viewport should be importable from agency_audit.viewport."""
         from agency_audit.viewport import save_viewport
+
         assert callable(save_viewport)
 
     def test_load_viewports_importable(self):
         """load_viewports should be importable from agency_audit.viewport."""
         from agency_audit.viewport import load_viewports
+
         assert callable(load_viewports)
 
     def test_delete_viewport_importable(self):
         """delete_viewport should be importable from agency_audit.viewport."""
         from agency_audit.viewport import delete_viewport
+
         assert callable(delete_viewport)
