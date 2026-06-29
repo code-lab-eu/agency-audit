@@ -159,7 +159,7 @@ This inserts 5 sample websites (3 audited with scores, 1 blocked, 1 pending)
 and links them to Bulgarian cities.  Requires a running PostgreSQL instance
 with a migrated and seeded database.
 
-For CI, the equivalent setup is handled by `.github/scripts/ci-db-setup.py`.
+For CI, the equivalent setup is handled by `scripts/seed-test-db.py`.
 
 ## Project Structure
 
@@ -190,11 +190,12 @@ first:
 uv sync --extra dev
 ```
 
-The CI `quality` job runs the following checks. Run them locally before
-pushing — they must all pass for the build to go green.
+CI runs two jobs: `quality` (lint, format check, type check) and `test`
+(pytest with coverage against a seeded database).  Run the checks locally
+before pushing — if `scripts/qa.sh` is green, CI should pass too.
 
-**Quick gate:** `scripts/qa.sh` runs lint, format check, mypy, and tests in one
-pass.  Use `scripts/qa.sh --fix` to auto-apply fixes first.
+**Quick gate:** `scripts/qa.sh` runs lint, format check, mypy, and tests
+with coverage in one pass.  Use `scripts/qa.sh --fix` to auto-apply fixes first.
 
 ```bash
 # All-in-one (mirrors CI)
