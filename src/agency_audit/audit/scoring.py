@@ -3,11 +3,15 @@
 The scoring config is externalized in a YAML file (scoring_config.yaml)
 so weights can be adjusted without code changes.
 
-The primary config file ships inside the package at
-``src/agency_audit/audit/scoring_config.yaml``.  At runtime the loader
-also checks ``AGENCY_AUDIT_SCORING_CONFIG_PATH`` (for explicit overrides),
-the current working directory, and the repo root so that developers can
-drop a custom ``scoring_config.yaml`` alongside the checkout.
+At runtime the loader checks paths in this order:
+
+1. ``AGENCY_AUDIT_SCORING_CONFIG_PATH`` env var (explicit override)
+2. ``scoring_config.yaml`` in the current working directory (dev convenience)
+3. ``config/scoring_config.yaml``
+4. Repo root (for development checkouts)
+5. Packaged ``scoring_config.yaml`` inside the package (final fallback)
+
+The first valid dict wins; missing / unparseable files are skipped with a warning.
 
 Score is a signed integer (0-100 typical, negative possible for unsuitable sites).
 """
@@ -60,15 +64,15 @@ DEFAULT_CONFIG: dict = {
 }
 
 # Paths tried in order — first match wins.
-# 1. Package dir (ships with the wheel — primary location)
-# 2. CWD (convenience override during dev)
-# 3. CWD/config/
-# 4. Repo root  (four levels up from src/agency_audit/audit/scoring.py)
+# 1. CWD (convenience override during dev)
+# 2. CWD/config/
+# 3. Repo root  (four levels up from src/agency_audit/audit/scoring.py)
+# 4. Package dir (ships with the wheel — final fallback)
 CONFIG_FILE_PATHS = [
-    Path(__file__).parent / "scoring_config.yaml",
     Path("scoring_config.yaml"),
     Path("config/scoring_config.yaml"),
     Path(__file__).parent.parent.parent.parent / "scoring_config.yaml",
+    Path(__file__).parent / "scoring_config.yaml",
 ]
 
 

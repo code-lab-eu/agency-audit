@@ -1655,10 +1655,54 @@ class TestScoring:
         assert result["robots_allows"] == 42
         assert "does not exist" in caplog.text
 
+    def test_load_config_local_override_wins_over_packaged(self, tmp_path, monkeypatch):
+        """Local override (CWD) takes priority over the packaged fallback."""
+        import yaml
 
-# ---------------------------------------------------------------------------
-# AuditData serialization
-# ---------------------------------------------------------------------------
+        # Create the "local" override (CWD path)
+        local = tmp_path / "local_override"
+        local.mkdir()
+        cwd_config = local / "scoring_config.yaml"
+        cwd_config.write_text(yaml.dump({"robots_allows": 88}))
+
+        # Create the "packaged" fallback (last in list)
+        pkg = tmp_path / "packaged"
+        pkg.mkdir()
+        pkg_config = pkg / "scoring_config.yaml"
+        pkg_config.write_text(yaml.dump({"robots_allows": 11}))
+
+        # CONFIG_FILE_PATHS: CWD first, packaged last — CWD should win
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [cwd_config, pkg_config],
+        )
+        monkeypatch.setenv("AGENCY_AUDIT_SCORING_CONFIG_PATH", "")
+
+        result = load_scoring_config()
+        assert result["robots_allows"] == 88  # local override value, not 11
+
+    def test_load_config_falls_through_to_packaged(self, tmp_path, monkeypatch):
+        """When local override is unparseable, search falls through to packaged."""
+        import yaml
+
+        # Broken local override
+        broken = tmp_path / "scoring_config.yaml"
+        broken.write_text("::: not yaml :::")
+
+        # Valid packaged fallback
+        pkg = tmp_path / "packaged"
+        pkg.mkdir()
+        pkg_config = pkg / "scoring_config.yaml"
+        pkg_config.write_text(yaml.dump({"robots_allows": 77}))
+
+        monkeypatch.setattr(
+            "agency_audit.audit.scoring.CONFIG_FILE_PATHS",
+            [broken, pkg_config],
+        )
+        monkeypatch.setenv("AGENCY_AUDIT_SCORING_CONFIG_PATH", "")
+
+        result = load_scoring_config()
+        assert result["robots_allows"] == 77  # fell through to packaged
 
 
 class TestAuditDataSerialization:
