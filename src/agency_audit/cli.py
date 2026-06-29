@@ -214,6 +214,10 @@ def audit(
         console.print("[red]Either --website-id or --url is required.[/]")
         raise typer.Exit(1)
 
+    if output == "db" and website_id is None:
+        console.print("[red]Error: --output db requires --website-id[/]")
+        raise typer.Exit(1)
+
     async def _run():
         import json
 
