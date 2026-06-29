@@ -48,3 +48,6 @@ pg_data/
 
 # Ephemeral session notes (self-improvement loop — see .agents/rules/)
 docs/notes/
+
+# Prompt drafts
+prompts/
