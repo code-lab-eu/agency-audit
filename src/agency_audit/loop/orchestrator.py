@@ -17,6 +17,7 @@ CLI entry points:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any
@@ -359,8 +360,6 @@ async def _audit_country_websites(
                 )
 
                 # Store result in DB
-                import json
-
                 async with pool.acquire() as c:
                     await c.execute(
                         """UPDATE websites
