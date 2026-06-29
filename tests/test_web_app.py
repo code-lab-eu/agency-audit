@@ -377,6 +377,63 @@ def test_htmx_discover_city_requires_api_key():
             assert "in_progress" not in str(call)
 
 
+async def test_run_city_discovery_marks_failed_on_error():
+    """A failing background discovery marks the city 'failed' so polling stops.
+
+    'failed' must be a status the DB CHECK constraint accepts (migration 004),
+    otherwise this UPDATE would itself raise and leave the row stuck
+    'in_progress'.
+    """
+    with (
+        patch("agency_audit.web.app.get_pool") as mock_get_pool,
+        patch("agency_audit.discovery.DiscoveryPipeline") as mock_pipeline_cls,
+    ):
+        mock_pool = MagicMock()
+        mock_get_pool.return_value = mock_pool
+
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_pool.acquire.return_value = mock_ctx
+
+        mock_conn.fetchrow = AsyncMock(
+            return_value={
+                "id": 42,
+                "label": "Brussels",
+                "slug": "brussels",
+                "latitude": 50.85,
+                "longitude": 4.35,
+            }
+        )
+        mock_conn.execute = AsyncMock()
+
+        pipeline = mock_pipeline_cls.return_value
+        pipeline.discover_city = AsyncMock(side_effect=RuntimeError("boom"))
+        pipeline.close = AsyncMock()
+
+        from agency_audit.web.app import _run_city_discovery
+
+        await _run_city_discovery(42, "BE")
+
+        mock_conn.execute.assert_any_call(
+            "UPDATE cities SET discovery_status = 'failed' WHERE id = $1", 42
+        )
+        pipeline.close.assert_awaited_once()
+
+
+def test_migration_004_allows_failed_status():
+    """The 'failed' status the failure path writes must be in the CHECK constraint."""
+    from pathlib import Path
+
+    import agency_audit.migrations as migrations_pkg
+
+    sql = (Path(migrations_pkg.__file__).parent / "004_add_failed_discovery_status.sql").read_text(
+        encoding="utf-8"
+    )
+    assert "'failed'" in sql
+    assert "cities_discovery_status_check" in sql
+
+
 def test_htmx_city_row():
     with patch("agency_audit.web.app.get_pool") as mock_get_pool:
         mock_pool = MagicMock()
