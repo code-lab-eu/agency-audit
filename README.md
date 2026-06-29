@@ -191,7 +191,20 @@ uv sync --extra dev
 ```
 
 The CI `quality` job runs the following checks. Run them locally before
-pushing — they must all pass for the build to go green:
+pushing — they must all pass for the build to go green.
+
+**Quick gate:** `scripts/qa.sh` runs lint, format check, mypy, and tests in one
+pass.  Use `scripts/qa.sh --fix` to auto-apply fixes first.
+
+```bash
+# All-in-one (mirrors CI)
+scripts/qa.sh
+
+# Auto-fix + re-check
+scripts/qa.sh --fix
+```
+
+Or run each check individually:
 
 ```bash
 # Lint
@@ -203,7 +216,7 @@ uv run ruff format --check src/ tests/
 # Type check
 uv run mypy src/
 
-# Tests (skip integration tests that need PostgreSQL with -k)
+# Test suite (no live database required)
 uv run --extra dev pytest
 ```
 
