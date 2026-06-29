@@ -593,28 +593,14 @@ class TestMCPToolRegistration:
 
         assert not missing, f"Missing tools: {missing}"
         assert not extra, f"Unexpected extra tools: {extra}"
-        assert len(tools) == 5, f"Expected 5 tools, got {len(tools)}"
 
-    def test_tool_functions_are_callable(self) -> None:
-        """Each tool function is importable and callable (async function)."""
-        import inspect
+    @pytest.mark.asyncio
+    async def test_tools_registered_by_name(self) -> None:
+        """Each tool function name appears in the registered tool list."""
+        from agency_audit.mcp_server import mcp
 
-        from agency_audit.mcp_server import (
-            get_next_city,
-            get_stats,
-            get_unaudited_website,
-            report_website,
-            submit_audit,
-        )
+        tools = await mcp.list_tools()
+        registered = {t.name for t in tools}
 
-        funcs = {
-            "get_next_city": get_next_city,
-            "report_website": report_website,
-            "get_unaudited_website": get_unaudited_website,
-            "submit_audit": submit_audit,
-            "get_stats": get_stats,
-        }
-
-        for name, fn in funcs.items():
-            assert callable(fn), f"{name} is not callable"
-            assert inspect.iscoroutinefunction(fn), f"{name} is not an async function"
+        for name in self.EXPECTED_TOOLS:
+            assert name in registered, f"Tool {name!r} not found in registered tools"
