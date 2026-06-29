@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import quote
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -79,10 +80,11 @@ class Settings(BaseSettings):
 
     @property
     def dsn(self) -> str:
-        """Asyncpg connection DSN."""
-        auth = self.pg_user
+        """Asyncpg connection DSN with URL-encoded credentials."""
+        user = quote(self.pg_user, safe="")
+        auth = user
         if self.pg_password:
-            auth = f"{self.pg_user}:{self.pg_password}"
+            auth = f"{user}:{quote(self.pg_password, safe='')}"
         return f"postgresql://{auth}@{self.pg_host}:{self.pg_port}/{self.pg_database}"
 
     # -- Validation -----------------------------------------------------------
