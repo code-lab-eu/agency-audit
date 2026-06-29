@@ -7,6 +7,7 @@ re-audit and queues them (sets audit_status back to 'pending').
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -175,6 +176,4 @@ async def schedule_reaudits(
 
 
 def _make_json(obj: Any) -> str:
-    import json
-
     return json.dumps(obj, default=str)
