@@ -45,21 +45,11 @@ All configuration is read from environment variables prefixed with
 | `AGENCY_AUDIT_GEONAMES_MIN_POPULATION` | `50000` | Min population for city import |
 | `AGENCY_AUDIT_GOOGLE_MAPS_API_KEY` | *(empty)* | Google Maps Places API key (required for `discover`) |
 
-### Google Maps API Key
-
-The `discover` command requires a Google Maps Places API key.  Without one,
-discovery exits with an error.  Set it in `.env`:
-
-```bash
-AGENCY_AUDIT_GOOGLE_MAPS_API_KEY=your-key-here
-```
-
 ## Operational Commands
 
 ### Discover agencies
 
 Finds real estate agencies via the Google Maps Places API.
-**Requires `AGENCY_AUDIT_GOOGLE_MAPS_API_KEY`.**
 
 ```bash
 # Discover agencies in Bulgaria (limit to 5 cities)
