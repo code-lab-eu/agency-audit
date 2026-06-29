@@ -273,6 +273,9 @@ class TestSettingsEnvOverride:
 
     def test_mixed_env_and_defaults(self, monkeypatch):
         """Only overridden env vars change; everything else stays default."""
+        # Clear env vars that may be set in Docker/CI environments
+        monkeypatch.delenv("AGENCY_AUDIT_PG_HOST", raising=False)
+        monkeypatch.delenv("AGENCY_AUDIT_LOG_LEVEL", raising=False)
         monkeypatch.setenv("AGENCY_AUDIT_AUDIT_CONCURRENCY", "25")
         s = Settings()
         assert s.audit_concurrency == 25
