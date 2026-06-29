@@ -3,6 +3,15 @@
 Instructions for AI coding agents and human contributors working on this
 codebase. Read this before writing any code.
 
+## Agent rules
+
+Working practices that apply to every session live in `.agents/rules/`. Read and
+follow them:
+
+- [Self-improvement loop](.agents/rules/self-improvement-loop.md) — apply every
+  session: keep a session note in `docs/notes/`, then promote durable learnings
+  into rules, skills, and docs when the loop closes.
+
 ## Project overview
 
 **Real Estate Radar — Website Discovery & Audit System.** Discovers, audits,
