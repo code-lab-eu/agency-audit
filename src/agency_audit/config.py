@@ -177,15 +177,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
-
-def get_settings() -> Settings:
-    """Return the singleton Settings instance.
-
-    This is an explicit accessor for the module-level singleton.
-    Production code currently imports ``settings`` directly; this
-    function exists as an opt-in point for callers that want
-    test-time injection via ``unittest.mock.patch`` on
-    ``agency_audit.config.get_settings``.
-    """
-    return settings

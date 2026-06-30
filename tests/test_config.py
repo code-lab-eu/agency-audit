@@ -298,30 +298,3 @@ class TestSettingsEnvOverride:
         s = Settings()
         assert s.places_rate_limit_qps == 3.5
         assert isinstance(s.places_rate_limit_qps, float)
-
-
-class TestGetSettings:
-    """Tests for the get_settings() singleton accessor."""
-
-    def test_returns_settings_instance(self):
-        from agency_audit.config import get_settings
-
-        s = get_settings()
-        assert isinstance(s, Settings)
-
-    def test_returns_singleton(self):
-        from agency_audit.config import get_settings
-
-        s1 = get_settings()
-        s2 = get_settings()
-        assert s1 is s2
-
-    def test_can_be_patched_for_testing(self, monkeypatch):
-        """Tests can inject custom Settings by patching get_settings()."""
-        from agency_audit import config
-
-        custom = Settings(pg_host="customhost", pg_port=9999)
-        monkeypatch.setattr(config, "get_settings", lambda: custom)
-        s = config.get_settings()
-        assert s.pg_host == "customhost"
-        assert s.pg_port == 9999
