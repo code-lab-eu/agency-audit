@@ -30,6 +30,9 @@ jobs:
       - name: Format check (ruff)
         run: ruff format --check src/ tests/
 
+      - name: No new DB mocks in tests
+        run: python scripts/check_test_db_mocks.py
+
       - name: Type check (mypy)
         run: mypy src/
 
