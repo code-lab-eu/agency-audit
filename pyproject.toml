@@ -30,6 +30,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.25",
     "pytest-cov>=7.1",
+    "testcontainers[postgres]>=4.14.2",
     "hypothesis>=6.0",
     "ruff>=0.8",
     "mypy>=1.0",
@@ -80,4 +81,5 @@ skip_covered = false
 [dependency-groups]
 dev = [
     "pytest-cov>=7.1.0",
+    "testcontainers[postgres]>=4.14.2",
 ]
