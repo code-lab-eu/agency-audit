@@ -22,6 +22,18 @@ split well. Read `AGENTS.md` at the repo root first — it is the source of trut
 for agency-audit's commands, layout, conventions, and the test/lint gate, and the
 orientation you bake into the body comes from there.
 
+## Always save the prompt to a file
+
+The deliverable is a file, not chat output — write it to `docs/prompts/` so it can
+be reviewed, edited, and pasted into the board later. Save each prompt as
+`docs/prompts/<slug>.md`, where `<slug>` is a short kebab-case name for the work
+(e.g. `docs/prompts/real-db-test-fixture.md`). Put the title on the first line as
+a top-level `# heading` and the body beneath it. One file per triage task; when a
+goal needs several sequenced triage cards, write one file each and number the
+slugs (`...-1-fixture.md`, `...-2-migration.md`). Create `docs/prompts/` if it
+does not exist. Keep the file to just the prompt — no commentary about the drafting
+session.
+
 ## How the decomposer reads your task
 
 The decomposer is an auxiliary LLM. When a task sits in `triage` (automatically
@@ -144,6 +156,7 @@ each unit a checkable bar.
 
 ## Checklist before you submit
 
+- [ ] Saved to `docs/prompts/<slug>.md` with the title as the `# heading` — not left in chat.
 - [ ] Body is self-orienting: stack, checkout, and the pytest + ruff gate are stated.
 - [ ] Standing constraints (one small change, own branch, tests ride along) appear once.
 - [ ] Each unit has a concrete location and a single-unit-testable acceptance bar.
