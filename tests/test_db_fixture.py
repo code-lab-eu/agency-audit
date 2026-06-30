@@ -26,9 +26,7 @@ async def test_db_conn_has_migrations_applied(db_conn: asyncpg.Connection):
 async def test_db_conn_can_insert_and_query(db_conn: asyncpg.Connection):
     """Basic CRUD should work through the fixture connection."""
     # Create a test country
-    await db_conn.execute(
-        "INSERT INTO countries (iso, label) VALUES ('XX', 'Testland')"
-    )
+    await db_conn.execute("INSERT INTO countries (iso, label) VALUES ('XX', 'Testland')")
     row = await db_conn.fetchrow("SELECT iso, label FROM countries WHERE iso = 'XX'")
     assert row is not None
     assert row["iso"] == "XX"
