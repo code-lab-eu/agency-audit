@@ -51,3 +51,4 @@ docs/notes/
 
 # Prompt drafts
 prompts/
+docker-compose.override.yml
