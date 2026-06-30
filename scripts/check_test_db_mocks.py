@@ -63,7 +63,6 @@ KNOWN_DEBT: set[str] = {
     "test_loop.py",
     "test_loop_coverage.py",
     "test_mcp_server.py",  # has real-DB tests too; the mocked unit tests remain
-    "test_orchestrator_errors.py",
     "test_web_app.py",
 }
 
