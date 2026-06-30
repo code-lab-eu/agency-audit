@@ -58,7 +58,6 @@ ALLOWED: dict[str, str] = {
 # real DB. Grandfathered so the check passes today. Remove an entry once its
 # file no longer mocks the database (the check enforces that — see below).
 KNOWN_DEBT: set[str] = {
-    "test_cli_commands.py",
     "test_loop.py",
     "test_loop_coverage.py",
     "test_mcp_server.py",  # has real-DB tests too; the mocked unit tests remain
