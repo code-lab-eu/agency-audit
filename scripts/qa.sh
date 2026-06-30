@@ -81,6 +81,7 @@ fi
 # deliberately skips coverage — the gate lives in this script and in CI.)
 run "Lint (ruff check)"          uv run --extra dev ruff check src/ tests/
 run "Format check (ruff format)" uv run --extra dev ruff format --check src/ tests/
+run "No new DB mocks in tests"   uv run python scripts/check_test_db_mocks.py
 run "Type check (mypy)"          uv run --extra dev mypy src/
 run "Tests + coverage (pytest)"  uv run --extra dev pytest --cov=src/agency_audit --cov-report=term-missing
 
