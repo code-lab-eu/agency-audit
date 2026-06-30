@@ -1,4 +1,4 @@
--- 004_add_spatial_geometry.sql — Add PostGIS geometry column for spatial queries
+-- 005_add_spatial_geometry.sql — Add PostGIS geometry column for spatial queries
 --
 -- This migration:
 --   1. Enables the PostGIS extension (required for geometry types)
