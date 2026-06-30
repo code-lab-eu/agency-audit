@@ -430,18 +430,29 @@ async def test_concurrent_get_next_city_returns_distinct():
 
 async def test_get_next_city_no_pending_cities(committed_db_conn):
     """When no pending cities exist, get_next_city returns an error."""
-    # Temporarily mark all pending cities as done
-    await committed_db_conn.execute(
-        "UPDATE cities SET discovery_status = 'done' WHERE discovery_status = 'pending'"
-    )
+    # Capture the IDs of cities we'll mutate so we can restore ONLY those rows.
+    # A blanket UPDATE of all 'done' → 'pending' in the finally block would
+    # corrupt pre-existing completed discovery state because this module uses
+    # committed writes (not transaction rollback).
+    rows = await committed_db_conn.fetch("SELECT id FROM cities WHERE discovery_status = 'pending'")
+    changed_ids = [row["id"] for row in rows]
+
+    # Temporarily mark those specific cities as done
+    if changed_ids:
+        await committed_db_conn.execute(
+            "UPDATE cities SET discovery_status = 'done' WHERE id = ANY($1)",
+            changed_ids,
+        )
     try:
         result = await get_next_city()
         assert result == {"error": "no pending cities"}
     finally:
-        # Restore pending status for subsequent tests
-        await committed_db_conn.execute(
-            "UPDATE cities SET discovery_status = 'pending' WHERE discovery_status = 'done'"
-        )
+        # Restore only the rows this test mutated — not every 'done' city
+        if changed_ids:
+            await committed_db_conn.execute(
+                "UPDATE cities SET discovery_status = 'pending' WHERE id = ANY($1)",
+                changed_ids,
+            )
 
 
 async def test_concurrent_get_unaudited_website_returns_distinct(committed_db_conn):
