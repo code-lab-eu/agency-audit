@@ -1,0 +1,1495 @@
+{
+  "generated_by": "_catalog_mocks.py",
+  "total_files_scanned": 21,
+  "files_with_mocks": 10,
+  "total_mock_instances": 325,
+  "module_counts": {
+    "test_cli_commands": 4,
+    "test_db": 4,
+    "test_discovery_pipeline": 28,
+    "test_geonames_discovery": 35,
+    "test_loop": 35,
+    "test_loop_coverage": 45,
+    "test_mcp_server": 15,
+    "test_migrations": 1,
+    "test_orchestrator_errors": 30,
+    "test_web_app": 128
+  },
+  "files": [
+    {
+      "file": "tests/test_cli_commands.py",
+      "tests": [
+        {
+          "function": "__module_level__",
+          "lines": [
+            18,
+            21
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock"
+          ]
+        },
+        {
+          "function": "test_stats_command_executes",
+          "lines": [
+            138,
+            144
+          ],
+          "techniques": [
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        }
+      ],
+      "total_mocks": 4
+    },
+    {
+      "file": "tests/test_db.py",
+      "tests": [
+        {
+          "function": "test_get_close_reget_lifecycle",
+          "lines": [
+            111,
+            126
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_get_pool_creates_new_pool",
+          "lines": [
+            32
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_get_pool_returns_existing_pool",
+          "lines": [
+            49
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        }
+      ],
+      "total_mocks": 4
+    },
+    {
+      "file": "tests/test_discovery_pipeline.py",
+      "tests": [
+        {
+          "function": "__module_level__",
+          "lines": [
+            29,
+            30,
+            31,
+            32,
+            33,
+            40
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value"
+          ]
+        },
+        {
+          "function": "test_discovers_countries_from_db",
+          "lines": [
+            367,
+            387
+          ],
+          "techniques": [
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_discovery_status_in_progress_set",
+          "lines": [
+            644
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_empty_country_codes_list",
+          "lines": [
+            668
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_existing_website_reused",
+          "lines": [
+            544,
+            554
+          ],
+          "techniques": [
+            "AsyncMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_fewer_cities_than_max",
+          "lines": [
+            259
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_honors_max_cities_with_more_available",
+          "lines": [
+            229
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_multiple_queries_per_city",
+          "lines": [
+            708
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_one_country_empty_one_with_cities",
+          "lines": [
+            333
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_places_unavailable_zero_agencies",
+          "lines": [
+            419
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_and_close_lifecycle",
+          "lines": [
+            610
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_discovery_with_key",
+          "lines": [
+            771
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_no_agencies_found",
+          "lines": [
+            182
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_returns_empty_when_no_cities",
+          "lines": [
+            152
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_single_country_one_city",
+          "lines": [
+            113
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_search_text_error_handled",
+          "lines": [
+            735
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_two_countries_each_one_city",
+          "lines": [
+            298
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_writes_to_discovery_log",
+          "lines": [
+            522
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_writes_to_website_cities",
+          "lines": [
+            492
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_writes_to_websites_table",
+          "lines": [
+            453,
+            463
+          ],
+          "techniques": [
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        }
+      ],
+      "total_mocks": 28
+    },
+    {
+      "file": "tests/test_geonames_discovery.py",
+      "tests": [
+        {
+          "function": "test_get_pool_cached",
+          "lines": [
+            482,
+            483,
+            505,
+            506
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_get_pool_creates_pool",
+          "lines": [
+            470,
+            471
+          ],
+          "techniques": [
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_import_geonames_empty",
+          "lines": [
+            363
+          ],
+          "techniques": [
+            "AsyncMock"
+          ]
+        },
+        {
+          "function": "test_import_geonames_with_provided_zip",
+          "lines": [
+            337,
+            338
+          ],
+          "techniques": [
+            "AsyncMock"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_country_with_zero_cities",
+          "lines": [
+            878,
+            883
+          ],
+          "techniques": [
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_empty_country_list",
+          "lines": [
+            750,
+            754
+          ],
+          "techniques": [
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_existing_website_skipped_insert",
+          "lines": [
+            799,
+            819
+          ],
+          "techniques": [
+            "AsyncMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_honors_max_cities_per_country",
+          "lines": [
+            663,
+            680
+          ],
+          "techniques": [
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_no_country_codes_auto_discovers",
+          "lines": [
+            702,
+            707,
+            727,
+            728
+          ],
+          "techniques": [
+            "cursor_return_value",
+            "cursor_side_effect",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_no_pending_cities",
+          "lines": [
+            774,
+            779,
+            780
+          ],
+          "techniques": [
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_places_error_handled_gracefully",
+          "lines": [
+            900,
+            915
+          ],
+          "techniques": [
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_places_not_available_breaks",
+          "lines": [
+            936,
+            951
+          ],
+          "techniques": [
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_sets_discovery_status_done",
+          "lines": [
+            624,
+            639
+          ],
+          "techniques": [
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_single_city_single_country",
+          "lines": [
+            517,
+            534,
+            535
+          ],
+          "techniques": [
+            "AsyncMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_for_countries_writes_to_websites_table",
+          "lines": [
+            572,
+            591
+          ],
+          "techniques": [
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        }
+      ],
+      "total_mocks": 35
+    },
+    {
+      "file": "tests/test_loop.py",
+      "tests": [
+        {
+          "function": "test_detect_duplicates_empty",
+          "lines": [
+            234,
+            235,
+            238
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_failed_audit_increments_attempts",
+          "lines": [
+            461,
+            462,
+            465
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_flag_suspicious_scores_empty",
+          "lines": [
+            190,
+            191,
+            194
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_flag_suspicious_scores_found",
+          "lines": [
+            209,
+            210,
+            213
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_get_progress_empty_db",
+          "lines": [
+            323,
+            324,
+            327,
+            332,
+            333
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_get_reaudit_queue_empty",
+          "lines": [
+            261,
+            262,
+            265
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_mark_failed_website_audit_log_joins_cities",
+          "lines": [
+            133,
+            134,
+            137
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_mark_failed_website_updates_status",
+          "lines": [
+            107,
+            108,
+            111
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_reaudit_scheduling_resets_attempts_to_zero",
+          "lines": [
+            504,
+            505,
+            508
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_schedule_reaudits_empty",
+          "lines": [
+            279,
+            280,
+            283
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_successful_audit_resets_attempts_to_zero",
+          "lines": [
+            410,
+            411,
+            414
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        }
+      ],
+      "total_mocks": 35
+    },
+    {
+      "file": "tests/test_loop_coverage.py",
+      "tests": [
+        {
+          "function": "test_empty",
+          "lines": [
+            112,
+            113,
+            116,
+            120
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_get_reaudit_queue_with_results",
+          "lines": [
+            166,
+            167,
+            170
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_log_audit_run",
+          "lines": [
+            324,
+            325,
+            328,
+            332
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_log_audit_run_with_country",
+          "lines": [
+            343,
+            344,
+            347,
+            351
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_log_discovery_run",
+          "lines": [
+            289,
+            290,
+            293,
+            297
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_log_discovery_run_with_errors",
+          "lines": [
+            307,
+            308,
+            311,
+            315
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_log_full_loop_run",
+          "lines": [
+            360,
+            361,
+            364,
+            368
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_mark_failed_discovery",
+          "lines": [
+            243,
+            244,
+            247
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_mark_failed_website",
+          "lines": [
+            227,
+            228,
+            231
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_mark_for_manual_review_error_severity",
+          "lines": [
+            42,
+            43,
+            46
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_mark_for_manual_review_warning",
+          "lines": [
+            21,
+            22,
+            25
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_schedule_reaudits_with_results",
+          "lines": [
+            197,
+            198,
+            201
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_with_reviews",
+          "lines": [
+            129,
+            130,
+            133
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        }
+      ],
+      "total_mocks": 45
+    },
+    {
+      "file": "tests/test_mcp_server.py",
+      "tests": [
+        {
+          "function": "test_country_filter_passed_to_query",
+          "lines": [
+            469,
+            470,
+            473
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_returns_error_when_no_pending",
+          "lines": [
+            446,
+            447,
+            450,
+            544,
+            545,
+            548
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_uses_for_update_skip_locked",
+          "lines": [
+            410,
+            411,
+            414,
+            504,
+            505,
+            508
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        }
+      ],
+      "total_mocks": 15
+    },
+    {
+      "file": "tests/test_migrations.py",
+      "tests": [
+        {
+          "function": "__module_level__",
+          "lines": [
+            21
+          ],
+          "techniques": [
+            "AsyncMock"
+          ]
+        }
+      ],
+      "total_mocks": 1
+    },
+    {
+      "file": "tests/test_orchestrator_errors.py",
+      "tests": [
+        {
+          "function": "test_audit_country_websites_empty",
+          "lines": [
+            412,
+            413,
+            416,
+            420
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_audit_phase_error",
+          "lines": [
+            50,
+            54
+          ],
+          "techniques": [
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_audit_phase_success",
+          "lines": [
+            223
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_discovery_phase_error",
+          "lines": [
+            17,
+            21
+          ],
+          "techniques": [
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_discovery_phase_success",
+          "lines": [
+            188
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_qc_phase_error",
+          "lines": [
+            76,
+            80
+          ],
+          "techniques": [
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_qc_phase_success",
+          "lines": [
+            250
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_reaudit_phase_error",
+          "lines": [
+            102,
+            106
+          ],
+          "techniques": [
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_reaudit_phase_success",
+          "lines": [
+            277
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_all_countries_default_countries",
+          "lines": [
+            160,
+            163,
+            165,
+            168
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_all_countries_error_handling",
+          "lines": [
+            390,
+            393,
+            397
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_all_countries_with_countries_list",
+          "lines": [
+            356,
+            359,
+            363
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_country_all_phases_skipped",
+          "lines": [
+            311,
+            314
+          ],
+          "techniques": [
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_country_log_full_loop_error_handled",
+          "lines": [
+            335,
+            338
+          ],
+          "techniques": [
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        }
+      ],
+      "total_mocks": 30
+    },
+    {
+      "file": "tests/test_web_app.py",
+      "tests": [
+        {
+          "function": "test_api_stats",
+          "lines": [
+            593,
+            594,
+            597,
+            602,
+            603
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_countries_route",
+          "lines": [
+            110,
+            111,
+            114,
+            119
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_country_detail",
+          "lines": [
+            685,
+            686,
+            689,
+            694,
+            695
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_country_detail_none",
+          "lines": [
+            708,
+            709,
+            712,
+            717
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_country_detail_route_found",
+          "lines": [
+            131,
+            132,
+            135,
+            140,
+            141
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_country_detail_route_not_found",
+          "lines": [
+            148,
+            149,
+            152,
+            157
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_country_list",
+          "lines": [
+            652,
+            653,
+            656
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_discovery_queue",
+          "lines": [
+            783,
+            784,
+            787,
+            792
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_discovery_route",
+          "lines": [
+            224,
+            225,
+            228,
+            233
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_health_healthy",
+          "lines": [
+            870,
+            871,
+            874,
+            879
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_health_unhealthy",
+          "lines": [
+            890
+          ],
+          "techniques": [
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_htmx_city_row",
+          "lines": [
+            503,
+            504,
+            507,
+            512
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_htmx_city_row_in_progress_no_trigger",
+          "lines": [
+            524,
+            525,
+            528,
+            533
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_htmx_country_websites",
+          "lines": [
+            543,
+            544,
+            547
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_htmx_discover_city_country_mismatch_404",
+          "lines": [
+            392,
+            396,
+            399,
+            405,
+            406
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_htmx_discover_city_idempotent_when_already_running",
+          "lines": [
+            363,
+            367,
+            370,
+            375,
+            377
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_htmx_discover_city_requires_api_key",
+          "lines": [
+            418,
+            422,
+            425,
+            430,
+            431
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_htmx_discover_city_triggers_background",
+          "lines": [
+            327,
+            331,
+            334,
+            339,
+            341
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_htmx_discovery_queue",
+          "lines": [
+            271,
+            272,
+            275,
+            280
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_htmx_recent_activity",
+          "lines": [
+            572,
+            573,
+            576,
+            581
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_htmx_rediscover_city",
+          "lines": [
+            290,
+            291,
+            294,
+            299,
+            300
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_htmx_stats",
+          "lines": [
+            254,
+            255,
+            258,
+            263,
+            264
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_overview_route_templates_exist",
+          "lines": [
+            86,
+            87,
+            90,
+            95,
+            96
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_overview_stats",
+          "lines": [
+            623,
+            624,
+            627,
+            632
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_recent_activity",
+          "lines": [
+            813,
+            814,
+            817,
+            822
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_recent_activity_with_data",
+          "lines": [
+            832,
+            833,
+            836
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_run_city_discovery_marks_failed_on_error",
+          "lines": [
+            449,
+            452,
+            455,
+            470
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_website_detail",
+          "lines": [
+            727,
+            728,
+            731,
+            751
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_website_detail_none",
+          "lines": [
+            764,
+            765,
+            768,
+            773
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_website_detail_route_found",
+          "lines": [
+            169,
+            170,
+            173,
+            196
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        },
+        {
+          "function": "test_website_detail_route_not_found",
+          "lines": [
+            203,
+            204,
+            207,
+            212
+          ],
+          "techniques": [
+            "AsyncMock",
+            "MagicMock",
+            "cursor_return_value",
+            "patch_get_pool"
+          ]
+        }
+      ],
+      "total_mocks": 128
+    }
+  ]
+}
