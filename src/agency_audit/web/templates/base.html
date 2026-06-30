@@ -21,13 +21,17 @@
         .stat-card:hover { transform: translateY(-2px); }
         .progress { height: 8px; }
         .table-hover tbody tr:hover { cursor: pointer; }
+        /* Long, unbroken URLs (e.g. percent-encoded links) must wrap so they
+           don't force a table wider than its grid column. */
+        .main-content td { overflow-wrap: anywhere; word-break: break-word; }
         .htmx-indicator { display: none; }
         .htmx-request .htmx-indicator { display: inline-block; }
         .htmx-request.htmx-indicator { display: inline-block; }
     </style>
 </head>
 <body>
-    <div class="d-flex">
+    <div class="container-fluid">
+      <div class="row">
         <nav class="sidebar col-md-2 d-none d-md-block p-3 position-fixed">
             <h5 class="text-white mb-4">🏢 Agency Audit</h5>
             <ul class="nav flex-column">
@@ -56,6 +60,7 @@
         <main class="col-md-10 offset-md-2 main-content">
             {% block content %}{% endblock %}
         </main>
+      </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     {% block scripts %}{% endblock %}
