@@ -80,4 +80,5 @@ skip_covered = false
 [dependency-groups]
 dev = [
     "pytest-cov>=7.1.0",
+    "testcontainers[postgres]>=4.14.2",
 ]
