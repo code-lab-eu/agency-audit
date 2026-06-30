@@ -32,16 +32,45 @@ async def test_db_conn_has_migrations_applied(db_conn: asyncpg.Connection):
 
 
 async def test_db_conn_can_insert_and_query(db_conn: asyncpg.Connection):
-    """Basic CRUD should work through the fixture connection."""
-    # Create a test country
+    """Basic CRUD should work through the fixture connection.
+
+    Writes are rolled back automatically by the fixture — no manual
+    cleanup needed.
+    """
     await db_conn.execute("INSERT INTO countries (iso, label) VALUES ('XX', 'Testland')")
     row = await db_conn.fetchrow("SELECT iso, label FROM countries WHERE iso = 'XX'")
     assert row is not None
     assert row["iso"] == "XX"
     assert row["label"] == "Testland"
 
-    # Clean up
-    await db_conn.execute("DELETE FROM countries WHERE iso = 'XX'")
+
+async def test_db_conn_state_does_not_leak(db_conn: asyncpg.Connection, postgres_dsn: str):
+    """Writes inside a db_conn transaction are invisible to other connections.
+
+    The fixture wraps every test connection in a rollback-only
+    transaction.  A second connection (simulating the next test
+    function) must not see uncommitted writes — proving that the
+    isolation boundary works and that no test author needs to
+    remember to clean up.
+    """
+    # Write inside the transaction
+    await db_conn.execute("INSERT INTO countries (iso, label) VALUES ('ZZ', 'LeakTest')")
+
+    # Visible within the same transaction
+    row = await db_conn.fetchrow("SELECT iso FROM countries WHERE iso = 'ZZ'")
+    assert row is not None, "Write must be visible within its own transaction"
+
+    # A separate connection (simulating the next test) must NOT see the
+    # uncommitted write — PostgreSQL READ COMMITTED isolation ensures this.
+    conn2 = await asyncpg.connect(dsn=postgres_dsn)
+    try:
+        row2 = await conn2.fetchrow("SELECT iso FROM countries WHERE iso = 'ZZ'")
+        assert row2 is None, (
+            "Uncommitted write leaked to a separate connection!  "
+            "The fixture's transaction isolation is broken."
+        )
+    finally:
+        await conn2.close()
 
 
 async def test_db_conn_session_scope_isolation():

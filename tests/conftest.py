@@ -95,15 +95,24 @@ def _ensure_migrations(postgres_dsn: str) -> None:
 async def db_conn(
     postgres_dsn: str, _ensure_migrations: None
 ) -> AsyncGenerator[asyncpg.Connection]:
-    """Function-scoped asyncpg connection with migrations already applied.
+    """Function-scoped asyncpg connection with rollback-only isolation.
 
-    Each test receives a fresh connection.  The container (if any) and
-    migrations are session-scoped so they are set up only once.
+    Each test receives a fresh connection inside a transaction that is
+    **always rolled back** at teardown, regardless of test outcome.
+    This guarantees that no writes from one test function leak into
+    another (or into the developer's local database on the non-Docker
+    fallback path).
+
+    The container (if any) and migrations are session-scoped so they
+    are set up only once.
     """
     conn = await asyncpg.connect(dsn=postgres_dsn)
+    tr = conn.transaction()
+    await tr.start()
     try:
         yield conn
     finally:
+        await tr.rollback()
         await conn.close()
 
 
