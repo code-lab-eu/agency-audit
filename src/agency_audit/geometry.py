@@ -3,8 +3,7 @@
 Self-contained module providing bounding-box queries and location
 management over the ``websites.location`` geometry column.
 
-All functions are async and accept an asyncpg connection or pool
-so they can be tested with in-memory mocks.
+All functions are async and accept an asyncpg connection or pool.
 """
 
 from __future__ import annotations

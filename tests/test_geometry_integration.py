@@ -219,6 +219,22 @@ class TestQueryByBoundingBoxLive:
         assert len(results) == 1
         assert results[0]["location_wkt"] == _point_wkt(42.6977, 23.3219)
 
+    async def test_empty_bbox_returns_empty_list(self, db_conn: asyncpg.Connection):
+        """A bbox containing no websites should return an empty list."""
+        wid = await _insert_website(db_conn, "https://test-geo-empty.example.com", "Empty")
+        # Sofia centre
+        await db_conn.execute(
+            "UPDATE websites SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326) WHERE id = $3",
+            23.3219,
+            42.6977,
+            wid,
+        )
+
+        # Query a bbox far away (middle of Pacific ocean)
+        results = await query_by_bounding_box(0.0, 0.0, 1.0, 1.0, conn=db_conn)
+
+        assert results == []
+
 
 # ---------------------------------------------------------------------------
 # set_location — live PostGIS
