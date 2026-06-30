@@ -5,12 +5,17 @@ reaudit (non-empty results), retry (mark_failed_*), tracking (log_* functions).
 
 Migrated from mocked database calls to the real database (shared db_conn fixture).
 Non-database mocks (helper-function patches) remain intact.
+
+All database-hitting tests accept the ``postgres_dsn`` fixture and monkeypatch
+``settings`` so that seed connections, ``get_pool()``, and assertions all target
+the same database — no ambient-state dependency.
 """
 
 from __future__ import annotations
 
 import json
 from unittest.mock import patch
+from urllib.parse import urlparse
 
 import asyncpg
 import pytest
@@ -23,13 +28,25 @@ from agency_audit.db import close_pool
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def _seed_conn() -> asyncpg.Connection:
+async def _seed_conn(dsn: str) -> asyncpg.Connection:
     """Return an auto-commit connection for seeding test data.
 
     Data inserted through this connection is immediately committed and
     visible to get_pool() connections used by the functions under test.
+    Uses *dsn* (from the postgres_dsn fixture) so all connections target
+    the same database.
     """
-    return await asyncpg.connect(dsn=settings.dsn)
+    return await asyncpg.connect(dsn=dsn)
+
+
+def _point_settings_at_fixture_db(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Monkeypatch global settings so ``get_pool()`` connects to the fixture DB."""
+    parsed = urlparse(postgres_dsn)
+    monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
+    monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
+    monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
+    monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
+    monkeypatch.setattr(settings, "pg_password", parsed.password or "")
 
 
 @pytest.fixture(autouse=True)
@@ -45,10 +62,14 @@ async def _fresh_pool() -> None:
 
 
 class TestQCMarkForReview:
-    async def test_mark_for_manual_review_warning(self, db_conn: asyncpg.Connection):
+    async def test_mark_for_manual_review_warning(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.qc import mark_for_manual_review
 
-        seed = await _seed_conn()
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        seed = await _seed_conn(postgres_dsn)
         try:
             website_id = await seed.fetchval(
                 "INSERT INTO websites (url, label) "
@@ -68,10 +89,14 @@ class TestQCMarkForReview:
             await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-mr%'")
             await seed.close()
 
-    async def test_mark_for_manual_review_error_severity(self, db_conn: asyncpg.Connection):
+    async def test_mark_for_manual_review_error_severity(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.qc import mark_for_manual_review
 
-        seed = await _seed_conn()
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        seed = await _seed_conn(postgres_dsn)
         try:
             website_id = await seed.fetchval(
                 "INSERT INTO websites (url, label) "
@@ -96,7 +121,7 @@ class TestQCMarkForReview:
 
 class TestQCRunChecks:
     @pytest.mark.asyncio
-    async def test_run_qc_checks_empty(self):
+    async def test_run_qc_checks_empty(self) -> None:
         from agency_audit.loop.qc import run_qc_checks
 
         with (
@@ -112,7 +137,7 @@ class TestQCRunChecks:
             assert summary["total_findings"] == 0
 
     @pytest.mark.asyncio
-    async def test_run_qc_checks_with_findings(self):
+    async def test_run_qc_checks_with_findings(self) -> None:
         from agency_audit.loop.qc import QCFinding, run_qc_checks
 
         with (
@@ -139,17 +164,33 @@ class TestQCRunChecks:
 
 
 class TestQCGetWebsitesNeedingReview:
-    async def test_empty(self, db_conn: asyncpg.Connection):
+    async def test_no_owned_reviews(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.qc import get_websites_needing_review
 
-        # No websites with needs_review=true exist → empty list
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        # Clean any leftovers from prior runs, then verify the test-owned
+        # URL does not appear — scoped to rows this test owns, not global state.
+        seed = await _seed_conn(postgres_dsn)
+        try:
+            await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-review%'")
+        finally:
+            await seed.close()
+
         result = await get_websites_needing_review()
-        assert result == []
+        result_urls = {r["url"] for r in result}
+        assert "https://test-review.example.com" not in result_urls
 
-    async def test_with_reviews(self, db_conn: asyncpg.Connection):
+    async def test_with_reviews(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.qc import get_websites_needing_review
 
-        seed = await _seed_conn()
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        seed = await _seed_conn(postgres_dsn)
         try:
             # Insert one website flagged for review, one not
             await seed.execute(
@@ -163,9 +204,12 @@ class TestQCGetWebsitesNeedingReview:
             )
 
             result = await get_websites_needing_review()
-            assert len(result) == 1
-            assert result[0]["url"] == "https://test-review.example.com"
-            assert result[0]["score"] == 0
+            result_urls = {r["url"] for r in result}
+            assert "https://test-review.example.com" in result_urls
+            assert "https://test-ok.example.com" not in result_urls
+            # Verify the flagged row's data is intact
+            review_row = next(r for r in result if r["url"] == "https://test-review.example.com")
+            assert review_row["score"] == 0
         finally:
             await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
             await seed.close()
@@ -177,10 +221,14 @@ class TestQCGetWebsitesNeedingReview:
 
 
 class TestReauditWithResults:
-    async def test_get_reaudit_queue_with_results(self, db_conn: asyncpg.Connection):
+    async def test_get_reaudit_queue_with_results(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.reaudit import get_reaudit_queue
 
-        seed = await _seed_conn()
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        seed = await _seed_conn(postgres_dsn)
         try:
             # Insert an audited website with an old last_audited_at date,
             # linked to Sofia (city id=1, country BG from seed fixtures).
@@ -207,10 +255,14 @@ class TestReauditWithResults:
             await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
             await seed.close()
 
-    async def test_schedule_reaudits_with_results(self, db_conn: asyncpg.Connection):
+    async def test_schedule_reaudits_with_results(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.reaudit import schedule_reaudits
 
-        seed = await _seed_conn()
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        seed = await _seed_conn(postgres_dsn)
         try:
             w1 = await seed.fetchval(
                 "INSERT INTO websites (url, label, score, audit_status, "
@@ -258,10 +310,14 @@ class TestReauditWithResults:
 
 
 class TestRetryMarkFailed:
-    async def test_mark_failed_website(self, db_conn: asyncpg.Connection):
+    async def test_mark_failed_website(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.retry import mark_failed_website
 
-        seed = await _seed_conn()
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        seed = await _seed_conn(postgres_dsn)
         try:
             # Need website + website_cities link to a real city for the
             # audit_log INSERT (JOIN website_cities → cities).
@@ -305,10 +361,14 @@ class TestRetryMarkFailed:
             await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
             await seed.close()
 
-    async def test_mark_failed_discovery(self, db_conn: asyncpg.Connection):
+    async def test_mark_failed_discovery(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.retry import mark_failed_discovery
 
-        seed = await _seed_conn()
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        seed = await _seed_conn(postgres_dsn)
         try:
             # Use Sofia (city id=1) — reset to pending first, then mark failed
             await seed.execute("UPDATE cities SET discovery_status = 'pending' WHERE id = 1")
@@ -334,7 +394,7 @@ class TestRetryMarkFailed:
             await seed.close()
 
     @pytest.mark.asyncio
-    async def test_mark_failed_website_type(self):
+    async def test_mark_failed_website_type(self) -> None:
         from agency_audit.loop.retry import mark_failed
 
         with patch("agency_audit.loop.retry.mark_failed_website") as mock_ws:
@@ -342,7 +402,7 @@ class TestRetryMarkFailed:
             mock_ws.assert_called_once_with(42, "error")
 
     @pytest.mark.asyncio
-    async def test_mark_failed_city_type(self):
+    async def test_mark_failed_city_type(self) -> None:
         from agency_audit.loop.retry import mark_failed
 
         with patch("agency_audit.loop.retry.mark_failed_discovery") as mock_city:
@@ -350,7 +410,7 @@ class TestRetryMarkFailed:
             mock_city.assert_called_once_with(7, "error")
 
     @pytest.mark.asyncio
-    async def test_mark_failed_unknown_type(self):
+    async def test_mark_failed_unknown_type(self) -> None:
         from agency_audit.loop.retry import mark_failed
 
         with pytest.raises(ValueError, match="Unknown item_type"):
@@ -363,10 +423,14 @@ class TestRetryMarkFailed:
 
 
 class TestTrackingLogFunctions:
-    async def test_log_discovery_run(self, db_conn: asyncpg.Connection):
+    async def test_log_discovery_run(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.tracking import log_discovery_run
 
-        seed = await _seed_conn()
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        seed = await _seed_conn(postgres_dsn)
         try:
             log_id = await log_discovery_run("BG", 5, 12, 2.5)
             assert isinstance(log_id, int)
@@ -390,10 +454,14 @@ class TestTrackingLogFunctions:
             await seed.execute("DELETE FROM audit_log WHERE run_type = 'discovery'")
             await seed.close()
 
-    async def test_log_discovery_run_with_errors(self, db_conn: asyncpg.Connection):
+    async def test_log_discovery_run_with_errors(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.tracking import log_discovery_run
 
-        seed = await _seed_conn()
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        seed = await _seed_conn(postgres_dsn)
         try:
             log_id = await log_discovery_run("BG", 3, 5, 1.0, errors=["err1", "err2"])
             assert isinstance(log_id, int)
@@ -410,10 +478,14 @@ class TestTrackingLogFunctions:
             await seed.execute("DELETE FROM audit_log WHERE run_type = 'discovery'")
             await seed.close()
 
-    async def test_log_audit_run(self, db_conn: asyncpg.Connection):
+    async def test_log_audit_run(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.tracking import log_audit_run
 
-        seed = await _seed_conn()
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        seed = await _seed_conn(postgres_dsn)
         try:
             # Need website + website_cities → city so country can be resolved
             website_id = await seed.fetchval(
@@ -450,10 +522,14 @@ class TestTrackingLogFunctions:
             await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
             await seed.close()
 
-    async def test_log_audit_run_with_country(self, db_conn: asyncpg.Connection):
+    async def test_log_audit_run_with_country(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.tracking import log_audit_run
 
-        seed = await _seed_conn()
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        seed = await _seed_conn(postgres_dsn)
         try:
             website_id = await seed.fetchval(
                 "INSERT INTO websites (url, label) "
@@ -490,10 +566,14 @@ class TestTrackingLogFunctions:
             await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
             await seed.close()
 
-    async def test_log_full_loop_run(self, db_conn: asyncpg.Connection):
+    async def test_log_full_loop_run(
+        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from agency_audit.loop.tracking import log_full_loop_run
 
-        seed = await _seed_conn()
+        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+
+        seed = await _seed_conn(postgres_dsn)
         try:
             log_id = await log_full_loop_run("BG", 10, 25, 20, 18, 2, 3, 5, 30.5)
             assert isinstance(log_id, int)
@@ -526,7 +606,7 @@ class TestTrackingLogFunctions:
 
 
 class TestRetryConfigDefaults:
-    def test_defaults(self):
+    def test_defaults(self) -> None:
         from agency_audit.loop.retry import RetryConfig
 
         config = RetryConfig()
@@ -535,7 +615,7 @@ class TestRetryConfigDefaults:
         assert config.backoff_factor == 2.0
         assert config.max_delay == 60.0
 
-    def test_default_config_instance(self):
+    def test_default_config_instance(self) -> None:
         from agency_audit.loop.retry import DEFAULT_RETRY_CONFIG
 
         assert DEFAULT_RETRY_CONFIG.max_attempts == 3
@@ -547,13 +627,13 @@ class TestRetryConfigDefaults:
 
 
 class TestReauditHelpers:
-    def test_make_json(self):
+    def test_make_json(self) -> None:
         from agency_audit.loop.reaudit import _make_json
 
         result = _make_json({"key": "value"})
         assert '"key": "value"' in result
 
-    def test_default_reaudit_constants(self):
+    def test_default_reaudit_constants(self) -> None:
         from agency_audit.loop.reaudit import (
             DEFAULT_REAUDIT_INTERVAL_DAYS,
             MAX_REAUDIT_BATCH,
