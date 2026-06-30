@@ -35,6 +35,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 
+from agency_audit.config import settings
 from agency_audit.migrations import run_migrations
 
 logger = logging.getLogger(__name__)
@@ -48,21 +49,6 @@ def _docker_available() -> bool:
     return True  # remote TCP - assume reachable
 
 
-def _build_fallback_dsn() -> str:
-    """Build a DSN from AGENCY_AUDIT_* environment variables or defaults."""
-    pg_host = os.environ.get("AGENCY_AUDIT_PG_HOST", "localhost")
-    pg_port = os.environ.get("AGENCY_AUDIT_PG_PORT", "5432")
-    pg_user = os.environ.get("AGENCY_AUDIT_PG_USER", "hermes")
-    pg_password = os.environ.get("AGENCY_AUDIT_PG_PASSWORD", "hermes")
-    pg_database = os.environ.get("AGENCY_AUDIT_PG_DATABASE", "agency_audit_test")
-
-    colon, slash, at_sign = ":", "/", "@"
-    auth = pg_user
-    if pg_password:
-        auth = pg_user + colon + pg_password
-    return "postgresql://" + auth + at_sign + pg_host + colon + pg_port + slash + pg_database
-
-
 @pytest.fixture(scope="session")
 def postgres_dsn() -> str:
     """Session-scoped PostgreSQL connection DSN.
@@ -72,7 +58,7 @@ def postgres_dsn() -> str:
     available, otherwise uses localhost defaults.
     """
     if os.environ.get("AGENCY_AUDIT_PG_HOST"):
-        return _build_fallback_dsn()
+        return settings.dsn
 
     if _docker_available():
         from testcontainers.postgres import PostgresContainer
@@ -85,7 +71,7 @@ def postgres_dsn() -> str:
         raw = container.get_connection_url()
         return raw.replace("postgresql+psycopg2://", "postgresql://")
 
-    return _build_fallback_dsn()
+    return settings.dsn
 
 
 @pytest.fixture(scope="session")
