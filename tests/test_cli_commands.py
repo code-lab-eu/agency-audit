@@ -8,6 +8,7 @@ functions and assert on CLI output.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from agency_audit.cli import app
@@ -122,7 +123,8 @@ def test_audit_output_db_requires_website_id():
 # ──────────────────────────────────────────────────────────────────────
 
 
-def test_stats_command_executes(postgres_dsn: str) -> None:
+@pytest.mark.usefixtures("postgres_dsn")
+def test_stats_command_executes():
     """stats command prints database statistics with real row counts."""
     result = runner.invoke(app, ["stats"])
     assert result.exit_code == 0
