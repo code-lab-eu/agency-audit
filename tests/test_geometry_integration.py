@@ -70,8 +70,12 @@ async def _insert_website(conn: asyncpg.Connection, url: str, label: str = "") -
 
 
 def _point_wkt(lat: float, lng: float) -> str:
-    """Return a WKT representation of a point (lng lat for WGS84)."""
-    return f"POINT({lng} {lat})"
+    """Return a WKT representation of a point (lng lat for WGS84).
+
+    Uses :g format to match PostGIS 18 output: integer-valued coordinates
+    are rendered without a trailing .0 (e.g. POINT(23 42) not POINT(23.0 42.0)).
+    """
+    return f"POINT({lng:g} {lat:g})"
 
 
 # ---------------------------------------------------------------------------

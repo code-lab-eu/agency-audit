@@ -9,8 +9,10 @@ services:
     # In production, this should be removed or restricted to a private network.
     ports:
       - "5432:5432"
+    # PG 18+ uses version-specific data directories (/var/lib/postgresql/18/data).
+    # Mount the parent directory so the container can create the subdirectory.
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${AGENCY_AUDIT_PG_USER:-agency_audit}"]
