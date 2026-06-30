@@ -60,7 +60,6 @@ ALLOWED: dict[str, str] = {
 KNOWN_DEBT: set[str] = {
     "test_cli_commands.py",
     "test_discovery_pipeline.py",
-    "test_geonames_discovery.py",
     "test_loop.py",
     "test_loop_coverage.py",
     "test_mcp_server.py",  # has real-DB tests too; the mocked unit tests remain

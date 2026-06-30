@@ -795,3 +795,495 @@ class TestRunDiscovery:
 
             with pytest.raises(RuntimeError, match="No Google Maps API key"):
                 await run_discovery(countries=["BG"])
+
+
+# ──────────────────────────────────────────────────────────────────────
+# DiscoveryPipeline lifecycle and pool methods (moved from
+# test_geonames_discovery.py — uses mocked get_pool)
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestDiscoveryPipelineMethods:
+    """Close, pool creation, and cache methods for DiscoveryPipeline."""
+
+    @pytest.mark.asyncio
+    async def test_close(self):
+        """close() delegates to the places client."""
+        places = PlacesAPIClient(api_key="test")
+        pipeline = DiscoveryPipeline(places_client=places)
+        await pipeline.close()
+
+    @pytest.mark.asyncio
+    async def test_close_no_places(self):
+        """close() should not crash when places is None."""
+        pipeline = DiscoveryPipeline(places_client=PlacesAPIClient(api_key="test"))
+        pipeline.places = None
+        await pipeline.close()
+
+    @pytest.mark.asyncio
+    async def test_get_pool_creates_pool(self):
+        """_get_pool calls get_pool() and caches the result."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            mock_get_pool.return_value = MagicMock()
+            pipeline = DiscoveryPipeline(places_client=PlacesAPIClient(api_key="test"))
+            pool = await pipeline._get_pool()
+            assert pool is not None
+            mock_get_pool.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_pool_cached(self):
+        """_get_pool returns the same pool on subsequent calls."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            mock_get_pool.return_value = MagicMock()
+            pipeline = DiscoveryPipeline(places_client=PlacesAPIClient(api_key="test"))
+            pool1 = await pipeline._get_pool()
+            pool2 = await pipeline._get_pool()
+            assert pool1 is pool2
+            mock_get_pool.assert_called_once()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# DiscoveryPipeline.run_for_countries — full integration with mocks
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestDiscoveryPipelineRunForCountries:
+    """Tests for run_for_countries() with mocked pool, httpx, and places client.
+
+    No live network or database required.
+    """
+
+    @staticmethod
+    def _make_mock_pool():
+        """Create a mock pool with acquire() returning an async context manager."""
+        pool = MagicMock()
+        conn = AsyncMock()
+        ctx = AsyncMock()
+        ctx.__aenter__.return_value = conn
+        pool.acquire.return_value = ctx
+        return pool, conn
+
+    @pytest.mark.asyncio
+    async def test_run_for_countries_single_city_single_country(self):
+        """run_for_countries returns correct summary for one city in one country."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            pool, conn = self._make_mock_pool()
+            mock_get_pool.return_value = pool
+
+            # Mock city row for fetchrow
+            conn.fetchrow = AsyncMock(
+                return_value={
+                    "id": 1,
+                    "label": "Sofia",
+                    "slug": "sofia",
+                    "country": "BG",
+                    "population": 1236047,
+                    "latitude": 42.69751,
+                    "longitude": 23.32415,
+                }
+            )
+            # Mock website insert: no existing website, then return id=101
+            conn.fetchval = AsyncMock(return_value=101)
+            conn.execute = AsyncMock()
+
+            # Mock places client to return one result
+            places = PlacesAPIClient(api_key="test")
+            places.search_text = AsyncMock(
+                return_value=[
+                    PlaceResult(
+                        place_id="abc123",
+                        name="Agency One",
+                        formatted_address="1 Main St",
+                        phone="+359****3456",
+                        website="https://agency1.bg",
+                        latitude=42.69,
+                        longitude=23.32,
+                    )
+                ]
+            )
+
+            pipeline = DiscoveryPipeline(places_client=places)
+            summary = await pipeline.run_for_countries(
+                country_codes=["BG"],
+                max_cities_per_country=1,
+            )
+
+            # Assert return shape
+            assert summary["countries_processed"] == 1
+            assert summary["cities_processed"] == 1
+            assert summary["agencies_found"] == 1
+            assert "BG" in summary["results"]
+            assert summary["results"]["BG"]["cities"] == 1
+            assert summary["results"]["BG"]["agencies"] == 1
+
+    @pytest.mark.asyncio
+    async def test_run_for_countries_writes_to_websites_table(self):
+        """discover_city writes to websites (via fetchval), website_cities, and discovery_log."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            pool, conn = self._make_mock_pool()
+            mock_get_pool.return_value = pool
+
+            # First call: city row (run_for_countries). Second: no existing website (discover_city)
+            conn.fetchrow = AsyncMock(
+                side_effect=[
+                    {
+                        "id": 1,
+                        "label": "Sofia",
+                        "slug": "sofia",
+                        "country": "BG",
+                        "population": 1236047,
+                        "latitude": 42.69751,
+                        "longitude": 23.32415,
+                    },
+                    None,  # No existing website → INSERT path
+                ]
+            )
+            conn.fetchval = AsyncMock(return_value=42)
+
+            places = PlacesAPIClient(api_key="test")
+            places.search_text = AsyncMock(
+                return_value=[
+                    PlaceResult(
+                        place_id="abc123",
+                        name="Agency One",
+                        website="https://agency1.bg",
+                    )
+                ]
+            )
+
+            pipeline = DiscoveryPipeline(places_client=places)
+            await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
+
+            # INSERT INTO websites goes through fetchval (uses RETURNING id)
+            website_inserts = [
+                c for c in conn.fetchval.call_args_list if "INSERT INTO websites" in str(c.args[0])
+            ]
+            assert len(website_inserts) == 1
+
+            # website_cities and discovery_log writes go through execute
+            execute_calls = [str(c) for c in conn.execute.call_args_list]
+            all_sql = " ".join(execute_calls)
+            assert "INSERT INTO website_cities" in all_sql
+            assert "INSERT INTO discovery_log" in all_sql
+
+    @pytest.mark.asyncio
+    async def test_run_for_countries_sets_discovery_status_done(self):
+        """After discover_city, discovery_status should be set to 'done'."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            pool, conn = self._make_mock_pool()
+            mock_get_pool.return_value = pool
+
+            conn.fetchrow = AsyncMock(
+                return_value={
+                    "id": 1,
+                    "label": "Sofia",
+                    "slug": "sofia",
+                    "country": "BG",
+                    "population": 1236047,
+                    "latitude": 42.69751,
+                    "longitude": 23.32415,
+                }
+            )
+            conn.fetchval = AsyncMock(return_value=42)
+
+            places = PlacesAPIClient(api_key="test")
+            places.search_text = AsyncMock(return_value=[])
+
+            pipeline = DiscoveryPipeline(places_client=places)
+            await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
+
+            # Check that one of the execute calls sets discovery_status = 'done'
+            done_calls = [
+                str(c)
+                for c in conn.execute.call_args_list
+                if "discovery_status" in str(c) and "'done'" in str(c)
+            ]
+            assert len(done_calls) >= 1, (
+                f"Expected at least one execute call with discovery_status='done', "
+                f"got calls: {[str(c) for c in conn.execute.call_args_list]}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_run_for_countries_honors_max_cities_per_country(self):
+        """Only max_cities_per_country cities should be processed per country."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            pool, conn = self._make_mock_pool()
+            mock_get_pool.return_value = pool
+
+            # Return the same city row indefinitely so the while loop could run forever
+            # but max_cities_per_country should stop it
+            conn.fetchrow = AsyncMock(
+                return_value={
+                    "id": 1,
+                    "label": "Sofia",
+                    "slug": "sofia",
+                    "country": "BG",
+                    "population": 1236047,
+                    "latitude": 42.69751,
+                    "longitude": 23.32415,
+                }
+            )
+            conn.fetchval = AsyncMock(return_value=42)
+
+            places = PlacesAPIClient(api_key="test")
+            places.search_text = AsyncMock(return_value=[])
+
+            pipeline = DiscoveryPipeline(places_client=places)
+            summary = await pipeline.run_for_countries(
+                country_codes=["BG"],
+                max_cities_per_country=2,
+            )
+
+            # Exactly 2 cities processed despite the same row being returned
+            assert summary["cities_processed"] == 2
+            assert summary["results"]["BG"]["cities"] == 2
+            # fetchrow called once per city (while loop stops at max, no extra check)
+            assert conn.fetchrow.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_run_for_countries_no_country_codes_auto_discovers(self):
+        """When country_codes is None, discovers from DB via SELECT DISTINCT."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            pool, conn = self._make_mock_pool()
+            mock_get_pool.return_value = pool
+
+            # pool.fetch returns countries
+            pool.fetch = AsyncMock(return_value=[{"country": "BG"}, {"country": "RO"}])
+
+            # fetchrow returns a city for each call; after max_cities returns None
+            call_count = [0]
+
+            async def fetchrow_side_effect(*args, **kwargs):
+                call_count[0] += 1
+                # Give each country 1 city, then None
+                if call_count[0] <= 2:
+                    return {
+                        "id": call_count[0],
+                        "label": f"City-{call_count[0]}",
+                        "slug": f"city-{call_count[0]}",
+                        "country": "BG" if call_count[0] == 1 else "RO",
+                        "population": 100000,
+                        "latitude": 42.0,
+                        "longitude": 23.0,
+                    }
+                return None
+
+            conn.fetchrow = AsyncMock(side_effect=fetchrow_side_effect)
+            conn.fetchval = AsyncMock(return_value=42)
+
+            places = PlacesAPIClient(api_key="test")
+            places.search_text = AsyncMock(return_value=[])
+
+            pipeline = DiscoveryPipeline(places_client=places)
+            summary = await pipeline.run_for_countries(
+                country_codes=None,
+                max_cities_per_country=1,
+            )
+
+            # pool.fetch should have been called for auto-discovery
+            pool.fetch.assert_called_once()
+            assert summary["countries_processed"] == 2
+            assert "BG" in summary["results"]
+            assert "RO" in summary["results"]
+
+    @pytest.mark.asyncio
+    async def test_run_for_countries_empty_country_list(self):
+        """Empty country_codes list is falsy → falls through to auto-discovery."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            pool, conn = self._make_mock_pool()
+            mock_get_pool.return_value = pool
+            # Since [] is falsy, the else branch calls pool.fetch — mock it
+            pool.fetch = AsyncMock(return_value=[])
+
+            places = PlacesAPIClient(api_key="test")
+            pipeline = DiscoveryPipeline(places_client=places)
+
+            summary = await pipeline.run_for_countries(
+                country_codes=[],
+                max_cities_per_country=3,
+            )
+
+            assert summary["countries_processed"] == 0
+            assert summary["cities_processed"] == 0
+            assert summary["agencies_found"] == 0
+            assert summary["results"] == {}
+
+    @pytest.mark.asyncio
+    async def test_run_for_countries_no_pending_cities(self):
+        """When no pending cities exist, summary reflects zero cities processed."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            pool, conn = self._make_mock_pool()
+            mock_get_pool.return_value = pool
+
+            # First call returns None (no pending cities)
+            conn.fetchrow = AsyncMock(return_value=None)
+            conn.fetchval = AsyncMock(return_value=42)
+
+            places = PlacesAPIClient(api_key="test")
+            pipeline = DiscoveryPipeline(places_client=places)
+
+            summary = await pipeline.run_for_countries(
+                country_codes=["BG"],
+                max_cities_per_country=3,
+            )
+
+            assert summary["countries_processed"] == 0
+            assert summary["cities_processed"] == 0
+            assert summary["results"]["BG"]["cities"] == 0
+
+    @pytest.mark.asyncio
+    async def test_run_for_countries_existing_website_skipped_insert(self):
+        """When a website already exists (maps_place_id match), UPDATE instead of INSERT."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            pool, conn = self._make_mock_pool()
+            mock_get_pool.return_value = pool
+
+            conn.fetchrow = AsyncMock(
+                side_effect=[
+                    # City row for run_for_countries fetch
+                    {
+                        "id": 1,
+                        "label": "Sofia",
+                        "slug": "sofia",
+                        "country": "BG",
+                        "population": 1236047,
+                        "latitude": 42.69751,
+                        "longitude": 23.32415,
+                    },
+                    # Existing website lookup: returns existing id
+                    {"id": 99},
+                ]
+            )
+            conn.fetchval = AsyncMock()  # Not called because existing found
+
+            places = PlacesAPIClient(api_key="test")
+            places.search_text = AsyncMock(
+                return_value=[
+                    PlaceResult(
+                        place_id="existing123",
+                        name="Existing Agency",
+                        website="https://existing.bg",
+                    )
+                ]
+            )
+
+            pipeline = DiscoveryPipeline(places_client=places)
+            summary = await pipeline.run_for_countries(
+                country_codes=["BG"],
+                max_cities_per_country=1,
+            )
+
+            assert summary["agencies_found"] == 1
+            # fetchval should NOT have been called (we found existing website)
+            conn.fetchval.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_close_lifecycle_closes_places_client(self):
+        """close() calls places.close() which calls aclose on the HTTP client."""
+        mock_http = AsyncMock()
+        places = PlacesAPIClient(api_key="test")
+        places._client = mock_http
+
+        pipeline = DiscoveryPipeline(places_client=places)
+        await pipeline.close()
+
+        mock_http.aclose.assert_called_once()
+        assert places._client is None
+
+    @pytest.mark.asyncio
+    async def test_close_lifecycle_idempotent(self):
+        """close() can be called multiple times safely."""
+        mock_http = AsyncMock()
+        places = PlacesAPIClient(api_key="test")
+        places._client = mock_http
+
+        pipeline = DiscoveryPipeline(places_client=places)
+        await pipeline.close()
+        await pipeline.close()  # Second call: places._client is None, no crash
+
+        mock_http.aclose.assert_called_once()
+        assert places._client is None
+
+    @pytest.mark.asyncio
+    async def test_run_for_countries_country_with_zero_cities(self):
+        """Country with 0 cities processed should not increment countries_processed."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            pool, conn = self._make_mock_pool()
+            mock_get_pool.return_value = pool
+
+            # No pending cities
+            conn.fetchrow = AsyncMock(return_value=None)
+
+            places = PlacesAPIClient(api_key="test")
+            pipeline = DiscoveryPipeline(places_client=places)
+
+            summary = await pipeline.run_for_countries(
+                country_codes=["BG"],
+                max_cities_per_country=3,
+            )
+
+            assert summary["countries_processed"] == 0
+
+    @pytest.mark.asyncio
+    async def test_run_for_countries_places_error_handled_gracefully(self):
+        """When places.search_text raises, discover_city continues without crashing."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            pool, conn = self._make_mock_pool()
+            mock_get_pool.return_value = pool
+
+            conn.fetchrow = AsyncMock(
+                return_value={
+                    "id": 1,
+                    "label": "Sofia",
+                    "slug": "sofia",
+                    "country": "BG",
+                    "population": 1236047,
+                    "latitude": 42.69751,
+                    "longitude": 23.32415,
+                }
+            )
+            conn.fetchval = AsyncMock(return_value=42)
+
+            places = PlacesAPIClient(api_key="test")
+            # search_text raises an exception
+            places.search_text = AsyncMock(side_effect=RuntimeError("API error"))
+
+            pipeline = DiscoveryPipeline(places_client=places)
+            summary = await pipeline.run_for_countries(
+                country_codes=["BG"],
+                max_cities_per_country=1,
+            )
+
+            # Should still complete and report 0 agencies
+            assert summary["cities_processed"] == 1
+            assert summary["agencies_found"] == 0
+
+    @pytest.mark.asyncio
+    async def test_run_for_countries_places_not_available_breaks(self):
+        """When places.available is False, discover_city stops and reports 0."""
+        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
+            pool, conn = self._make_mock_pool()
+            mock_get_pool.return_value = pool
+
+            conn.fetchrow = AsyncMock(
+                return_value={
+                    "id": 1,
+                    "label": "Sofia",
+                    "slug": "sofia",
+                    "country": "BG",
+                    "population": 1236047,
+                    "latitude": 42.69751,
+                    "longitude": 23.32415,
+                }
+            )
+            conn.fetchval = AsyncMock(return_value=42)
+
+            places = PlacesAPIClient(api_key="")  # Empty key → not available
+            pipeline = DiscoveryPipeline(places_client=places)
+            summary = await pipeline.run_for_countries(
+                country_codes=["BG"],
+                max_cities_per_country=1,
+            )
+
+            assert summary["cities_processed"] == 1
+            assert summary["agencies_found"] == 0
