@@ -1,12 +1,15 @@
 """Tests for the agency-audit MCP server tools.
 
-Integration tests (fixtures section) run against a live PostgreSQL database.
-Mocked-connection unit tests (TestGetNextCityAtomic, TestGetUnauditedWebsiteAtomic)
-verify atomic claiming with FOR UPDATE SKIP LOCKED without requiring a live DB.
+All tests run against a live PostgreSQL database.
+
+The ``committed_db_conn`` fixture provides a COMMITTED connection with explicit
+cleanup — required for concurrent FOR UPDATE SKIP LOCKED tests where writes
+must be visible across multiple connections.  Simple single-connection tests
+also use it for consistency within this module.
 """
 
+import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
 import pytest
@@ -27,15 +30,16 @@ from agency_audit.mcp_server import (
 
 
 @pytest.fixture
-async def db_conn():
-    """Direct connection for test setup/teardown.
+async def committed_db_conn():
+    """Committed connection for test setup/teardown and cross-connection visibility.
 
-    Uses a fresh connection (not the pool) so it works reliably across
-    pytest-asyncio's per-function event loops.
+    Uses a fresh committed connection (not the pool) for explicit setup
+    and teardown.  Writes are immediately visible to other connections
+    (including pool connections used by the MCP tools).  Required for
+    concurrent FOR UPDATE SKIP LOCKED tests where two pool connections
+    must see each other's committed rows.
 
-    These are integration tests that run against a live, seeded
-    PostgreSQL database. When no database is reachable (e.g. in CI
-    without a Postgres service), the whole module is skipped rather
+    When no database is reachable, the whole module is skipped rather
     than failing.
     """
     try:
@@ -49,19 +53,19 @@ async def db_conn():
 
 
 @pytest.fixture(autouse=True)
-async def cleanup_test_data(db_conn):
+async def cleanup_test_data(committed_db_conn):
     """Reset relevant state before and after each test.
 
     Also closes the shared pool after each test so the next test gets
     a fresh pool on its own event loop.
     """
-    await db_conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-    await db_conn.execute(
+    await committed_db_conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
+    await committed_db_conn.execute(
         "UPDATE cities SET discovery_status = 'pending' WHERE discovery_status = 'in_progress'"
     )
     yield
-    await db_conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-    await db_conn.execute(
+    await committed_db_conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
+    await committed_db_conn.execute(
         "UPDATE cities SET discovery_status = 'pending' WHERE discovery_status = 'in_progress'"
     )
     # Reset the module-level pool so the next test creates a fresh one
@@ -84,10 +88,12 @@ async def test_get_next_city_returns_pending_city():
     assert "population" in result
 
 
-async def test_get_next_city_marks_in_progress(db_conn):
+async def test_get_next_city_marks_in_progress(committed_db_conn):
     result = await get_next_city()
     city_id = result["id"]
-    status = await db_conn.fetchval("SELECT discovery_status FROM cities WHERE id = $1", city_id)
+    status = await committed_db_conn.fetchval(
+        "SELECT discovery_status FROM cities WHERE id = $1", city_id
+    )
     assert status == "in_progress"
 
 
@@ -103,10 +109,10 @@ async def test_get_next_city_unknown_country():
     assert "error" in result
 
 
-async def test_get_next_city_highest_population_first(db_conn):
+async def test_get_next_city_highest_population_first(committed_db_conn):
     """City with highest population should be returned first."""
     # Get the max population city from pending cities BEFORE calling get_next_city
-    max_pop = await db_conn.fetchval(
+    max_pop = await committed_db_conn.fetchval(
         "SELECT MAX(population) FROM cities WHERE discovery_status = 'pending'"
     )
     result = await get_next_city()
@@ -118,21 +124,21 @@ async def test_get_next_city_highest_population_first(db_conn):
 # ---------------------------------------------------------------------------
 
 
-async def test_report_website_creates_new(db_conn):
+async def test_report_website_creates_new(committed_db_conn):
     result = await report_website(
         url="https://test-agency.example.com",
         name="Test Agency",
         city="sofia",
         place_id="ChIJ1234",
         address="123 Test St",
-        phone="+359888123456",
+        phone="+359****3456",
     )
     assert result["created"] is True
     assert "website_id" in result
     assert "city_id" in result
 
     # Verify website was inserted
-    row = await db_conn.fetchrow(
+    row = await committed_db_conn.fetchrow(
         "SELECT url, label, maps_place_id, address, phone FROM websites WHERE id = $1",
         result["website_id"],
     )
@@ -140,10 +146,10 @@ async def test_report_website_creates_new(db_conn):
     assert row["label"] == "Test Agency"
     assert row["maps_place_id"] == "ChIJ1234"
     assert row["address"] == "123 Test St"
-    assert row["phone"] == "+359888123456"
+    assert row["phone"] == "+359****3456"
 
     # Verify website_cities link
-    link = await db_conn.fetchrow(
+    link = await committed_db_conn.fetchrow(
         "SELECT * FROM website_cities WHERE website_id = $1 AND city_id = $2",
         result["website_id"],
         result["city_id"],
@@ -151,7 +157,7 @@ async def test_report_website_creates_new(db_conn):
     assert link is not None
 
 
-async def test_report_website_idempotent_url(db_conn):
+async def test_report_website_idempotent_url(committed_db_conn):
     """Reporting the same URL twice should not create a duplicate website."""
     r1 = await report_website(
         url="https://test-dup.example.com",
@@ -177,9 +183,9 @@ async def test_report_website_unknown_city():
     assert "error" in result
 
 
-async def test_report_website_city_by_id(db_conn):
+async def test_report_website_city_by_id(committed_db_conn):
     """Report website using numeric city ID."""
-    city_id = await db_conn.fetchval("SELECT id FROM cities LIMIT 1")
+    city_id = await committed_db_conn.fetchval("SELECT id FROM cities LIMIT 1")
     result = await report_website(
         url="https://test-byid.example.com",
         name="ByID Agency",
@@ -193,7 +199,7 @@ async def test_report_website_city_by_id(db_conn):
 # ---------------------------------------------------------------------------
 
 
-async def test_get_unaudited_website_returns_pending(db_conn):
+async def test_get_unaudited_website_returns_pending(committed_db_conn):
     # First report a website
     await report_website(
         url="https://test-unaudited.example.com",
@@ -208,15 +214,18 @@ async def test_get_unaudited_website_returns_pending(db_conn):
     assert result["url"] == "https://test-unaudited.example.com"
 
     # Verify it was marked as auditing
-    status = await db_conn.fetchval("SELECT audit_status FROM websites WHERE id = $1", result["id"])
+    status = await committed_db_conn.fetchval(
+        "SELECT audit_status FROM websites WHERE id = $1", result["id"]
+    )
     assert status == "auditing"
 
 
-async def test_get_unaudited_website_none_pending(db_conn):
+async def test_get_unaudited_website_none_pending(committed_db_conn):
     """When no pending websites exist, return error."""
     # Mark any pending test websites as audited
-    await db_conn.execute(
-        "UPDATE websites SET audit_status = 'audited' WHERE audit_status = 'pending' AND url LIKE 'https://test-%'"
+    await committed_db_conn.execute(
+        "UPDATE websites SET audit_status = 'audited' "
+        "WHERE audit_status = 'pending' AND url LIKE 'https://test-%'"
     )
     result = await get_unaudited_website()
     # There might be non-test pending websites, but in test env there shouldn't be any
@@ -229,7 +238,7 @@ async def test_get_unaudited_website_none_pending(db_conn):
 # ---------------------------------------------------------------------------
 
 
-async def test_submit_audit_stores_results(db_conn):
+async def test_submit_audit_stores_results(committed_db_conn):
     # Create a website to audit
     ws = await report_website(
         url="https://test-audit.example.com",
@@ -253,7 +262,7 @@ async def test_submit_audit_stores_results(db_conn):
     assert result["website_id"] == website_id
 
     # Verify stored data
-    row = await db_conn.fetchrow(
+    row = await committed_db_conn.fetchrow(
         "SELECT audit_data, score, audit_status, last_audited_at FROM websites WHERE id = $1",
         website_id,
     )
@@ -284,7 +293,7 @@ async def test_submit_audit_nonexistent_website():
     assert "error" in result
 
 
-async def test_submit_audit_negative_score(db_conn):
+async def test_submit_audit_negative_score(committed_db_conn):
     """Score can be negative for unsuitable sites."""
     ws = await report_website(
         url="https://test-negative.example.com",
@@ -302,7 +311,9 @@ async def test_submit_audit_negative_score(db_conn):
     )
     assert result["status"] == "audited"
 
-    score = await db_conn.fetchval("SELECT score FROM websites WHERE id = $1", ws["website_id"])
+    score = await committed_db_conn.fetchval(
+        "SELECT score FROM websites WHERE id = $1", ws["website_id"]
+    )
     assert score == -50
 
 
@@ -326,7 +337,7 @@ async def test_get_stats_returns_all_fields():
     assert isinstance(result["average_score"], float)
 
 
-async def test_get_stats_reflects_audit(db_conn):
+async def test_get_stats_reflects_audit(committed_db_conn):
     # Report and audit a website
     ws = await report_website(
         url="https://test-stats.example.com",
@@ -355,7 +366,7 @@ async def test_get_stats_reflects_audit(db_conn):
 # ---------------------------------------------------------------------------
 
 
-async def test_full_pipeline(db_conn):
+async def test_full_pipeline(committed_db_conn):
     """Test the full discovery → audit pipeline flow."""
     # 1. Get next city
     city = await get_next_city(country="BG")
@@ -395,165 +406,69 @@ async def test_full_pipeline(db_conn):
 
 
 # ---------------------------------------------------------------------------
-# Atomic claim unit tests (no live DB required)
+# Atomic claim tests (real DB — concurrent FOR UPDATE SKIP LOCKED)
 # ---------------------------------------------------------------------------
 
 
-class TestGetNextCityAtomic:
-    """Mock-based tests verifying atomic UPDATE ... FOR UPDATE SKIP LOCKED."""
+async def test_concurrent_get_next_city_returns_distinct():
+    """Two concurrent get_next_city calls must return different cities.
 
-    @pytest.mark.asyncio
-    async def test_uses_for_update_skip_locked(self):
-        """Assert the SQL query sent to the database contains FOR UPDATE SKIP LOCKED."""
-        from agency_audit.mcp_server import get_next_city
-
-        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
-
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
-
-            mock_conn.fetchrow.return_value = {
-                "id": 1,
-                "country": "BG",
-                "label": "Sofia",
-                "slug": "sofia",
-                "population": 1200000,
-                "latitude": 42.7,
-                "longitude": 23.3,
-            }
-
-            result = await get_next_city()
-
-            # Get the query text sent to fetchrow
-            query = mock_conn.fetchrow.call_args[0][0]
-            assert "FOR UPDATE SKIP LOCKED" in query, (
-                f"Query did not contain FOR UPDATE SKIP LOCKED: {query}"
-            )
-            assert "UPDATE cities" in query
-            assert "RETURNING" in query
-            assert result["country"] == "BG"
-            assert result["slug"] == "sofia"
-
-    @pytest.mark.asyncio
-    async def test_returns_error_when_no_pending(self):
-        """When no rows match, the UPDATE ... RETURNING yields None."""
-        from agency_audit.mcp_server import get_next_city
-
-        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
-
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
-
-            # No pending cities — fetchrow returns None
-            mock_conn.fetchrow.return_value = None
-
-            result = await get_next_city()
-            assert result == {"error": "no pending cities"}
-
-            query = mock_conn.fetchrow.call_args[0][0]
-            assert "FOR UPDATE SKIP LOCKED" in query
-
-    @pytest.mark.asyncio
-    async def test_country_filter_passed_to_query(self):
-        """Country filter should appear in the subquery WHERE clause."""
-        from agency_audit.mcp_server import get_next_city
-
-        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
-
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
-
-            mock_conn.fetchrow.return_value = {
-                "id": 5,
-                "country": "DE",
-                "label": "Berlin",
-                "slug": "berlin",
-                "population": 3645000,
-                "latitude": 52.52,
-                "longitude": 13.40,
-            }
-
-            result = await get_next_city(country="DE")
-
-            query = mock_conn.fetchrow.call_args[0][0]
-            assert "FOR UPDATE SKIP LOCKED" in query
-            assert "AND country" in query
-            assert result["country"] == "DE"
+    Verifies the FOR UPDATE SKIP LOCKED atomic-claiming behaviour: row-level
+    locks from the first claim prevent the second claim from seeing the same
+    row, so two concurrent workers can never claim the same city.
+    """
+    result1, result2 = await asyncio.gather(
+        get_next_city(),
+        get_next_city(),
+    )
+    assert "error" not in result1, f"unexpected error: {result1}"
+    assert "error" not in result2, f"unexpected error: {result2}"
+    assert result1["id"] != result2["id"], (
+        f"Both claims returned city id={result1['id']} — FOR UPDATE SKIP LOCKED failed"
+    )
 
 
-class TestGetUnauditedWebsiteAtomic:
-    """Mock-based tests verifying atomic UPDATE ... FOR UPDATE SKIP LOCKED."""
+async def test_get_next_city_no_pending_cities(committed_db_conn):
+    """When no pending cities exist, get_next_city returns an error."""
+    # Temporarily mark all pending cities as done
+    await committed_db_conn.execute(
+        "UPDATE cities SET discovery_status = 'done' WHERE discovery_status = 'pending'"
+    )
+    try:
+        result = await get_next_city()
+        assert result == {"error": "no pending cities"}
+    finally:
+        # Restore pending status for subsequent tests
+        await committed_db_conn.execute(
+            "UPDATE cities SET discovery_status = 'pending' WHERE discovery_status = 'done'"
+        )
 
-    @pytest.mark.asyncio
-    async def test_uses_for_update_skip_locked(self):
-        """Assert the SQL query sent to the database contains FOR UPDATE SKIP LOCKED."""
-        from agency_audit.mcp_server import get_unaudited_website
 
-        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
+async def test_concurrent_get_unaudited_website_returns_distinct(committed_db_conn):
+    """Two concurrent get_unaudited_website calls must return different websites.
 
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
+    Verifies the FOR UPDATE SKIP LOCKED atomic-claiming behaviour on the
+    websites table: row-level locks from the first claim prevent the second
+    claim from seeing the same row.
+    """
+    # Seed two pending websites (must be committed so both pool connections see them)
+    await report_website(
+        url="https://test-claim-a.example.com",
+        name="Claim A",
+        city="sofia",
+    )
+    await report_website(
+        url="https://test-claim-b.example.com",
+        name="Claim B",
+        city="sofia",
+    )
 
-            mock_conn.fetchrow.return_value = {
-                "id": 42,
-                "url": "https://example-agency.com",
-                "label": "Example Agency",
-                "maps_place_id": "ChIJ123",
-                "address": "123 Main St",
-                "phone": "+359****3456",
-            }
-            mock_conn.fetch.return_value = [
-                {"id": 1, "label": "Sofia", "slug": "sofia", "country": "BG"}
-            ]
-
-            result = await get_unaudited_website()
-
-            # Verify the atomic UPDATE query
-            query = mock_conn.fetchrow.call_args[0][0]
-            assert "FOR UPDATE SKIP LOCKED" in query, (
-                f"Query did not contain FOR UPDATE SKIP LOCKED: {query}"
-            )
-            assert "UPDATE websites" in query
-            assert "RETURNING" in query
-            assert result["url"] == "https://example-agency.com"
-            assert result["id"] == 42
-            assert len(result["cities"]) == 1
-            assert result["cities"][0]["slug"] == "sofia"
-
-    @pytest.mark.asyncio
-    async def test_returns_error_when_no_pending(self):
-        """When no rows match, the UPDATE ... RETURNING yields None."""
-        from agency_audit.mcp_server import get_unaudited_website
-
-        with patch("agency_audit.mcp_server.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
-
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
-
-            mock_conn.fetchrow.return_value = None
-
-            result = await get_unaudited_website()
-            assert result == {"error": "no pending websites"}
-
-            query = mock_conn.fetchrow.call_args[0][0]
-            assert "FOR UPDATE SKIP LOCKED" in query
+    result1, result2 = await asyncio.gather(
+        get_unaudited_website(),
+        get_unaudited_website(),
+    )
+    assert "error" not in result1, f"unexpected error: {result1}"
+    assert "error" not in result2, f"unexpected error: {result2}"
+    assert result1["id"] != result2["id"], (
+        f"Both claims returned website id={result1['id']} — FOR UPDATE SKIP LOCKED failed"
+    )
