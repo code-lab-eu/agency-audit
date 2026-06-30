@@ -151,9 +151,16 @@ async def test_stats_command_executes(
         await seed_conn.execute(cities_sql)
 
         # Read back what we actually have so assertions are dynamic
-        # — they survive fixture changes.
+        # — they survive fixture changes and uncontrolled pre-existing rows.
         expected_countries = await seed_conn.fetchval("SELECT COUNT(*) FROM countries")
         expected_cities = await seed_conn.fetchval("SELECT COUNT(*) FROM cities")
+        expected_websites = await seed_conn.fetchval("SELECT COUNT(*) FROM websites")
+        expected_audited = await seed_conn.fetchval(
+            "SELECT COUNT(*) FROM websites WHERE audit_status = 'audited'"
+        )
+        expected_pending = await seed_conn.fetchval(
+            "SELECT COUNT(*) FROM websites WHERE audit_status = 'pending'"
+        )
 
         # Point the CLI's global settings at the fixture database so
         # get_pool() connects here, not to the ambient database.
@@ -174,9 +181,9 @@ async def test_stats_command_executes(
         for metric, expected in [
             ("Countries", str(expected_countries)),
             ("Cities", str(expected_cities)),
-            ("Websites", "0"),
-            ("Audited", "0"),
-            ("Pending", "0"),
+            ("Websites", str(expected_websites)),
+            ("Audited", str(expected_audited)),
+            ("Pending", str(expected_pending)),
         ]:
             assert any(metric in line and expected in line for line in lines), (
                 f"Expected '{metric}' row to contain '{expected}', "
