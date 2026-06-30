@@ -11,16 +11,46 @@ async def test_db_conn_fixture_is_connected(db_conn: asyncpg.Connection):
 
 
 async def test_db_conn_has_migrations_applied(db_conn: asyncpg.Connection):
-    """All project migrations should be applied to the test database."""
-    # The schema_migrations table tracks applied migrations
+    """Every expected migration is applied — no partial state.
+
+    Migrations 000–004 are always required.  Migration 005 (PostGIS) is
+    required only when the PostGIS extension is available on the server.
+    """
     versions = await db_conn.fetch("SELECT version FROM schema_migrations ORDER BY version")
-    applied = [row["version"] for row in versions]
-    # At minimum we expect the core tables
-    assert "000_schema_migrations.sql" in applied
-    assert "001_init.sql" in applied
-    assert "002_add_discovery_status.sql" in applied
-    assert "003_add_audit_log.sql" in applied
-    assert "004_add_failed_discovery_status.sql" in applied
+    applied = {row["version"] for row in versions}
+
+    # Core migrations — always required.
+    required = {
+        "000_schema_migrations.sql",
+        "001_init.sql",
+        "002_add_discovery_status.sql",
+        "003_add_audit_log.sql",
+        "004_add_failed_discovery_status.sql",
+    }
+    missing = required - applied
+    assert not missing, f"Core migrations not applied: {missing}"
+
+    # Migration 005 (PostGIS) — required only when the extension is available.
+    postgis_ok = await db_conn.fetchval(
+        "SELECT count(*) > 0 FROM pg_available_extensions WHERE name = 'postgis'"
+    )
+    migration_005 = "005_add_spatial_geometry.sql"
+
+    if postgis_ok:
+        assert migration_005 in applied, (
+            "PostGIS is available but migration 005 was not applied — "
+            "the database is missing spatial columns."
+        )
+        assert applied == required | {migration_005}, (
+            f"Unexpected extra migrations: {applied - required - {migration_005}}"
+        )
+    else:
+        assert migration_005 not in applied, (
+            "PostGIS is unavailable but migration 005 appears in the ledger — "
+            "run_migrations recorded a migration that was skipped."
+        )
+        # No unexpected migrations in the ledger.
+        assert applied == required, f"Unexpected extra migrations: {applied - required}"
 
 
 async def test_db_conn_can_insert_and_query(db_conn: asyncpg.Connection):
