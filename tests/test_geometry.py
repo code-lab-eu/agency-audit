@@ -14,7 +14,7 @@ from agency_audit.geometry import bulk_set_locations, query_by_bounding_box, set
 # ── helpers ────────────────────────────────────────────────────────────────
 
 
-def _make_conn(fetch_return=None, execute_return=None, executemany_return="UPDATE 3"):
+def _make_conn(fetch_return=None, execute_return=None, executemany_return=None):
     """Create a mock asyncpg.Connection with transaction support."""
     mock_conn = AsyncMock()
     if fetch_return is not None:
@@ -233,8 +233,9 @@ class TestBulkSetLocations:
     """Tests for bulk_set_locations."""
 
     async def test_bulk_updates_multiple_websites(self):
-        """Should call executemany with all rows in the correct order."""
-        mock_conn = _make_conn(executemany_return="UPDATE 3")
+        """Should call executemany with all rows in the correct order
+        and return the batch size."""
+        mock_conn = _make_conn()
         mock_pool = _make_pool(mock_conn)
 
         rows = [
@@ -243,7 +244,7 @@ class TestBulkSetLocations:
             (3, 44.0, 25.0),
         ]
         result = await bulk_set_locations(rows, pool=mock_pool)
-        assert result == 3
+        assert result == 3  # len(rows), not a parsed command tag
 
         call_args = mock_conn.executemany.call_args
         sql, params_list = call_args[0]
@@ -253,7 +254,7 @@ class TestBulkSetLocations:
 
     async def test_bulk_returns_zero_for_no_rows(self):
         """Should return 0 when the rows list is empty."""
-        mock_conn = _make_conn(executemany_return="UPDATE 0")
+        mock_conn = _make_conn()
         mock_pool = _make_pool(mock_conn)
 
         result = await bulk_set_locations([], pool=mock_pool)
@@ -272,3 +273,14 @@ class TestBulkSetLocations:
         """Should raise ValueError with neither conn nor pool."""
         with pytest.raises(ValueError, match="Either conn or pool"):
             await bulk_set_locations([(1, 0.0, 0.0)])
+
+    async def test_bulk_return_comes_from_len_rows_not_executemany(self):
+        """Regression: executemany returns None; the count is len(rows)."""
+        mock_conn = _make_conn(executemany_return=None)
+        mock_pool = _make_pool(mock_conn)
+
+        rows = [(1, 0.0, 0.0), (2, 1.0, 1.0)]
+        result = await bulk_set_locations(rows, pool=mock_pool)
+        # If the code tried to parse str("None") it would return 0.
+        # The correct result is len(rows).
+        assert result == 2

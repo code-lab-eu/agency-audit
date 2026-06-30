@@ -9,7 +9,6 @@ so they can be tested with in-memory mocks.
 
 from __future__ import annotations
 
-from contextlib import suppress
 from typing import Any
 
 import asyncpg
@@ -136,7 +135,7 @@ async def _bulk_set_locations(
     conn: asyncpg.Connection,
     rows: list[tuple[int, float, float]],
 ) -> int:
-    result = await conn.executemany(
+    await conn.executemany(
         """
         UPDATE websites
         SET location = ST_SetSRID(ST_MakePoint($2, $1), 4326)
@@ -144,12 +143,7 @@ async def _bulk_set_locations(
         """,
         [(lat, lng, website_id) for website_id, lat, lng in rows],
     )
-    # executemany returns the concatenated command tag string;
-    # parse out the total row count.
-    total = 0
-    for part in str(result).split(";"):
-        part = part.strip()
-        if part.startswith("UPDATE"):
-            with suppress(ValueError, IndexError):
-                total += int(part.split()[-1])
-    return total
+    # asyncpg executemany() returns None (not a command tag), so we
+    # return the batch size as the honest count.  Every tuple has a
+    # WHERE id = ... clause; if the id exists the row is updated.
+    return len(rows)
