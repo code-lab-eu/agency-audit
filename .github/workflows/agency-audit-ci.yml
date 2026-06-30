@@ -43,7 +43,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: postgis/postgis:18-3.6-alpine
         env:
           POSTGRES_USER: testuser
           POSTGRES_PASSWORD: testpass
