@@ -11,45 +11,24 @@ async def test_db_conn_fixture_is_connected(db_conn: asyncpg.Connection):
 
 
 async def test_db_conn_has_migrations_applied(db_conn: asyncpg.Connection):
-    """Every expected migration is applied — no partial state.
+    """All 6 project migrations are applied — no partial state.
 
-    Migrations 000–004 are always required.  Migration 005 (PostGIS) is
-    required only when the PostGIS extension is available on the server.
+    PostGIS is a hard project dependency and migration 005 must always
+    be applied.  The fixture does not degrade gracefully when PostGIS
+    is unavailable.
     """
     versions = await db_conn.fetch("SELECT version FROM schema_migrations ORDER BY version")
     applied = {row["version"] for row in versions}
 
-    # Core migrations — always required.
-    required = {
+    expected = {
         "000_schema_migrations.sql",
         "001_init.sql",
         "002_add_discovery_status.sql",
         "003_add_audit_log.sql",
         "004_add_failed_discovery_status.sql",
+        "005_add_spatial_geometry.sql",
     }
-    missing = required - applied
-    assert not missing, f"Core migrations not applied: {missing}"
-
-    # Migration 005 (PostGIS) — required only when the extension is available.
-    postgis_ok = await db_conn.fetchval(
-        "SELECT count(*) > 0 FROM pg_available_extensions WHERE name = 'postgis'"
-    )
-    migration_005_spatial = "005_add_spatial_geometry.sql"
-
-    if postgis_ok:
-        assert migration_005_spatial in applied, (
-            "PostGIS is available but migration 005 was not applied — "
-            "the database is missing spatial columns."
-        )
-        assert applied == required | {migration_005_spatial}, (
-            f"Unexpected extra migrations: {applied - required - {migration_005_spatial}}"
-        )
-    else:
-        # When PostGIS is unavailable the fixture skips the spatial
-        # migration.  The database may contain pre-existing migration
-        # ledger entries from other branches/workers — the only hard
-        # requirement is that the core migrations (000–004) are applied.
-        pass
+    assert expected <= applied, f"Missing migrations: {expected - applied}. Applied: {applied}"
 
 
 async def test_db_conn_can_insert_and_query(db_conn: asyncpg.Connection):
