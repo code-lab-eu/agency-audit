@@ -6,9 +6,12 @@ commands (run, discover, qc, reaudit, progress) mock their domain
 functions and assert on CLI output.
 """
 
+import asyncio
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
 
+import asyncpg
 import pytest
 from typer.testing import CliRunner
 
@@ -122,38 +125,65 @@ def test_audit_output_db_requires_website_id():
 
 # ──────────────────────────────────────────────────────────────────────
 # stats command
-# ──────────────────────────────────────────────────────────────────────
+async def test_stats_command_executes(
+    db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """stats command prints database statistics with real row counts.
 
+    Seeds the exact data this test asserts on via a separate committed
+    connection so the CLI's own connection pool can see it.  Uses
+    ``db_conn`` (the shared fixture) as a sentinel that the database is
+    provisioned and migrated.  The seed SQL uses ON CONFLICT DO NOTHING
+    so the test is idempotent — no per-test cleanup needed.
+    """
+    # Seed on a separate connection that auto-commits (no transaction
+    # wrapper) so the CLI's pool can see the rows.
+    seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+    try:
+        # 44 European countries (the canonical project seed)
+        countries_sql = (
+            Path(__file__).parent.parent / "src" / "agency_audit" / "seed" / "countries.sql"
+        ).read_text(encoding="utf-8")
+        await seed_conn.execute(countries_sql)
 
-def test_stats_command_executes(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stats command prints database statistics with real row counts."""
-    # Point the CLI's global settings at the fixture's database so get_pool()
-    # connects to the test DB, not the ambient database on localhost.
-    parsed = urlparse(postgres_dsn)
-    monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
-    monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
-    monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
-    monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
-    monkeypatch.setattr(settings, "pg_password", parsed.password or "")
+        # 20 Bulgarian cities (the integration-test fixture)
+        cities_sql = (Path(__file__).parent / "fixtures" / "cities.sql").read_text(encoding="utf-8")
+        await seed_conn.execute(cities_sql)
 
-    result = runner.invoke(app, ["stats"])
-    assert result.exit_code == 0, f"stats command failed:\n{result.output}"
+        # Read back what we actually have so assertions are dynamic
+        # — they survive fixture changes.
+        expected_countries = await seed_conn.fetchval("SELECT COUNT(*) FROM countries")
+        expected_cities = await seed_conn.fetchval("SELECT COUNT(*) FROM cities")
 
-    # Row-specific assertions: each metric name and its value must appear
-    # on the same Rich table row, not just somewhere in the output.
-    assert "Database Stats" in result.output
-    lines = result.output.splitlines()
-    for metric, expected in [
-        ("Countries", "44"),
-        ("Cities", "20"),
-        ("Websites", "0"),
-        ("Audited", "0"),
-        ("Pending", "0"),
-    ]:
-        assert any(metric in line and expected in line for line in lines), (
-            f"Expected '{metric}' row to contain '{expected}', "
-            f"but no matching line was found in:\n{result.output}"
-        )
+        # Point the CLI's global settings at the fixture database so
+        # get_pool() connects here, not to the ambient database.
+        parsed = urlparse(postgres_dsn)
+        monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
+        monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
+        monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
+        monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
+        monkeypatch.setattr(settings, "pg_password", parsed.password or "")
+
+        result = await asyncio.to_thread(runner.invoke, app, ["stats"])
+        assert result.exit_code == 0, f"stats command failed:\n{result.output}"
+
+        # Row-specific assertions: each metric name and its expected
+        # value must appear on the same Rich table output line.
+        assert "Database Stats" in result.output
+        lines = result.output.splitlines()
+        for metric, expected in [
+            ("Countries", str(expected_countries)),
+            ("Cities", str(expected_cities)),
+            ("Websites", "0"),
+            ("Audited", "0"),
+            ("Pending", "0"),
+        ]:
+            assert any(metric in line and expected in line for line in lines), (
+                f"Expected '{metric}' row to contain '{expected}', "
+                f"but no matching line was found in:\n{result.output}"
+            )
+    finally:
+        await seed_conn.close()
 
 
 # ──────────────────────────────────────────────────────────────────────
