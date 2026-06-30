@@ -61,16 +61,23 @@ def _build_fallback_dsn() -> str:
 def postgres_dsn() -> str:
     """Session-scoped PostgreSQL connection DSN.
 
-    Uses testcontainers when Docker is available; falls back to local PG
-    otherwise.
+    Uses AGENCY_AUDIT_PG_* env vars when explicitly configured (e.g. CI
+    service containers), falls back to testcontainers when Docker is
+    available, otherwise uses localhost defaults.
     """
+    if os.environ.get("AGENCY_AUDIT_PG_HOST"):
+        return _build_fallback_dsn()
+
     if _docker_available():
         from testcontainers.postgres import PostgresContainer
 
         container = PostgresContainer("postgres:16-alpine")
         container.start()
         postgres_dsn._tc_container = container  # type: ignore[attr-defined]
-        return container.get_connection_url()
+        # testcontainers returns "postgresql+psycopg2://..."; asyncpg
+        # requires a plain "postgresql://" scheme.
+        raw = container.get_connection_url()
+        return raw.replace("postgresql+psycopg2://", "postgresql://")
 
     return _build_fallback_dsn()
 
