@@ -1,27 +1,18 @@
-"""CLI command tests that execute async bodies by mocking DB dependencies.
+"""CLI command tests exercising Typer commands via CliRunner.
 
-Instead of mocking asyncio.run, we mock the DB pool functions so the real
-asyncio loop can execute the async _run() function bodies.
+Database-backed commands (e.g. stats) connect to the real database
+provisioned by the conftest.py postgres_dsn fixture.  Application-layer
+commands (run, discover, qc, reaudit, progress) mock their domain
+functions and assert on CLI output.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
 from agency_audit.cli import app
 
 runner = CliRunner()
-
-
-def _make_pool_mock():
-    """Create a mock pool that returns an async context manager connection."""
-    mock_conn = AsyncMock()
-    mock_ctx = AsyncMock()
-    mock_ctx.__aenter__.return_value = mock_conn
-    mock_pool = MagicMock()
-    mock_pool.acquire.return_value = mock_ctx
-    # Also mock as a plain context manager variant
-    return mock_pool, mock_conn
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -131,25 +122,17 @@ def test_audit_output_db_requires_website_id():
 # ──────────────────────────────────────────────────────────────────────
 
 
-def test_stats_command_executes():
-    """stats command prints database statistics table."""
-    mock_pool, mock_conn = _make_pool_mock()
-    # stats uses pool.fetchval() directly, not acquire()
-    mock_pool.fetchval = AsyncMock(return_value=10)
-
-    mock_get_pool = AsyncMock(return_value=mock_pool)
-    mock_close_pool = AsyncMock()
-
-    with (
-        patch("agency_audit.cli.get_pool", new=mock_get_pool),
-        patch("agency_audit.cli.close_pool", new=mock_close_pool),
-    ):
-        result = runner.invoke(app, ["stats"])
-        assert result.exit_code == 0
-        assert "Database Stats" in result.output
-        assert "Countries" in result.output
-        assert "Cities" in result.output
-        assert "Websites" in result.output
+def test_stats_command_executes(postgres_dsn: str) -> None:
+    """stats command prints database statistics with real row counts."""
+    result = runner.invoke(app, ["stats"])
+    assert result.exit_code == 0
+    assert "Database Stats" in result.output
+    assert "Countries" in result.output
+    assert "44" in result.output  # seed-countries loads all 44
+    assert "Cities" in result.output
+    assert "20" in result.output  # test fixtures/cities.sql
+    assert "Websites" in result.output
+    assert "0" in result.output  # no websites inserted yet
 
 
 # ──────────────────────────────────────────────────────────────────────
