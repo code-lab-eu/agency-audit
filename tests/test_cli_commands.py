@@ -7,11 +7,13 @@ functions and assert on CLI output.
 """
 
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
 
 import pytest
 from typer.testing import CliRunner
 
 from agency_audit.cli import app
+from agency_audit.config import settings
 
 runner = CliRunner()
 
@@ -123,18 +125,35 @@ def test_audit_output_db_requires_website_id():
 # ──────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.usefixtures("postgres_dsn")
-def test_stats_command_executes():
+def test_stats_command_executes(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """stats command prints database statistics with real row counts."""
+    # Point the CLI's global settings at the fixture's database so get_pool()
+    # connects to the test DB, not the ambient database on localhost.
+    parsed = urlparse(postgres_dsn)
+    monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
+    monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
+    monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
+    monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
+    monkeypatch.setattr(settings, "pg_password", parsed.password or "")
+
     result = runner.invoke(app, ["stats"])
-    assert result.exit_code == 0
+    assert result.exit_code == 0, f"stats command failed:\n{result.output}"
+
+    # Row-specific assertions: each metric name and its value must appear
+    # on the same Rich table row, not just somewhere in the output.
     assert "Database Stats" in result.output
-    assert "Countries" in result.output
-    assert "44" in result.output  # seed-countries loads all 44
-    assert "Cities" in result.output
-    assert "20" in result.output  # test fixtures/cities.sql
-    assert "Websites" in result.output
-    assert "0" in result.output  # no websites inserted yet
+    lines = result.output.splitlines()
+    for metric, expected in [
+        ("Countries", "44"),
+        ("Cities", "20"),
+        ("Websites", "0"),
+        ("Audited", "0"),
+        ("Pending", "0"),
+    ]:
+        assert any(metric in line and expected in line for line in lines), (
+            f"Expected '{metric}' row to contain '{expected}', "
+            f"but no matching line was found in:\n{result.output}"
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────
