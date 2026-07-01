@@ -620,7 +620,14 @@ class DiscoveryPipeline:
         logger.info(f"Discovering agencies in {city_label}, {country_iso}")
 
         queries = await self.query_for_country(country_iso)
-        location = (latitude, longitude) if latitude and longitude else None
+        city = {
+            "id": city_id,
+            "label": city_label,
+            "slug": city_slug,
+            "country": country_iso,
+            "latitude": latitude,
+            "longitude": longitude,
+        }
         found_places: list[PlaceResult] = []
         seen_place_ids: set[str] = set()
 
@@ -630,11 +637,7 @@ class DiscoveryPipeline:
 
             try:
                 if self.places.available:
-                    search = await self.places.search_text(
-                        query=search_query,
-                        location_bias=location,
-                    )
-                    places = search.places
+                    places = await self.search_tiled(query=search_query, city=city)
                 else:
                     logger.warning(f"Places API not available for {city_label}")
                     break

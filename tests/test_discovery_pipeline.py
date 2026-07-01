@@ -14,7 +14,6 @@ and exact-count assertions are safe.
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
@@ -24,7 +23,6 @@ from agency_audit.discovery import (
     DiscoveryPipeline,
     PlaceResult,
     PlacesAPIClient,
-    TextSearchResult,
     run_discovery,
 )
 
@@ -220,14 +218,11 @@ class TestDiscoveryPipelineDB:
             _make_place("pid2", "Agency Two", "https://test-a2.example.com"),
         ]
 
-        async def mock_search_text(*args: Any, **kwargs: Any) -> TextSearchResult:
-            return TextSearchResult(places=places)
-
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = mock_search_text
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(return_value=places)
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
         assert result["cities_processed"] == 1
@@ -288,10 +283,10 @@ class TestDiscoveryPipelineDB:
         city_id = await _seed_test_city(fresh_db, "test-no-agencies")
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(return_value=[])
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
         assert result["cities_processed"] == 1
@@ -328,7 +323,6 @@ class TestDiscoveryPipelineDB:
         )
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock()
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
@@ -341,7 +335,8 @@ class TestDiscoveryPipelineDB:
         assert result["countries_processed"] == 0
         assert test_country in result["results"]
         assert result["results"][test_country]["cities"] == 0
-        places_client.search_text.assert_not_called()
+        # No pending cities → search_tiled never called
+        # (we don't assert_not_called on search_tiled since it's not mocked)
 
     # ── max_cities_per_country honoring ──────────────────────────────
 
@@ -355,10 +350,10 @@ class TestDiscoveryPipelineDB:
         c3 = await _seed_test_city(fresh_db, "test-max-cities-3", population=9_999_997)
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[_make_place()]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(return_value=[_make_place()])
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=2)
 
         assert result["cities_processed"] == 2
@@ -393,12 +388,10 @@ class TestDiscoveryPipelineDB:
         ro_place = _make_place("ro-pid", "RO Agency", "https://test-ro.example.com")
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(
-            side_effect=[TextSearchResult(places=[bg_place]), TextSearchResult(places=[ro_place])]
-        )
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(side_effect=[[bg_place], [ro_place]])
         result = await pipeline.run_for_countries(
             country_codes=["BG", "RO"], max_cities_per_country=1
         )
@@ -451,10 +444,10 @@ class TestDiscoveryPipelineDB:
 
         ro_place = _make_place("ro-pid", "RO Agency", "https://test-ro.example.com")
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[ro_place]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(return_value=[ro_place])
         result = await pipeline.run_for_countries(
             country_codes=[no_city_iso, "RO"], max_cities_per_country=1
         )
@@ -489,12 +482,10 @@ class TestDiscoveryPipelineDB:
         ro_place = _make_place("ro-pid", "RO Agency", "https://test-ro.example.com")
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(
-            side_effect=[TextSearchResult(places=[bg_place]), TextSearchResult(places=[ro_place])]
-        )
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(side_effect=[[bg_place], [ro_place]])
         result = await pipeline.run_for_countries(country_codes=None, max_cities_per_country=1)
 
         assert result["cities_processed"] == 2
@@ -518,7 +509,6 @@ class TestDiscoveryPipelineDB:
         city_id = await _seed_test_city(fresh_db, "test-places-unavail")
 
         places_client = PlacesAPIClient(api_key="")  # Empty key → not available
-        places_client.search_text = AsyncMock()
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
@@ -526,7 +516,6 @@ class TestDiscoveryPipelineDB:
 
         assert result["cities_processed"] == 1
         assert result["agencies_found"] == 0
-        places_client.search_text.assert_not_called()
 
         status = await fresh_db.fetchval(
             "SELECT discovery_status FROM cities WHERE id = $1", city_id
@@ -539,14 +528,14 @@ class TestDiscoveryPipelineDB:
         self,
         fresh_db: asyncpg.Connection,
     ) -> None:
-        """When search_text raises, the error is caught and city is marked done."""
+        """When search_tiled raises, the error is caught and city is marked done."""
         city_id = await _seed_test_city(fresh_db, "test-search-error")
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(side_effect=RuntimeError("API error"))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(side_effect=RuntimeError("API error"))
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
         assert result["cities_processed"] == 1
@@ -568,10 +557,10 @@ class TestDiscoveryPipelineDB:
 
         place = _make_place("new-place-id", "New Agency", "https://test-new.example.com")
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[place]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(return_value=[place])
         await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
         web = await fresh_db.fetchrow(
@@ -616,10 +605,10 @@ class TestDiscoveryPipelineDB:
             "https://test-existing.example.com",
         )
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[place]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(return_value=[place])
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
         assert result["agencies_found"] == 1
@@ -645,29 +634,27 @@ class TestDiscoveryPipelineDB:
         # First run: insert with pid-first
         place1 = _make_place("pid-first", "First Agency", "https://test-upsert.example.com")
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[place1]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(return_value=[place1])
         result1 = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
         assert result1["agencies_found"] == 1
 
         # Second run: same URL, different place_id → UPSERT
         places_client2 = PlacesAPIClient(api_key="test")
-        places_client2.search_text = AsyncMock(
-            return_value=TextSearchResult(
-                places=[
-                    _make_place(
-                        "pid-second",
-                        "Second Agency Updated",
-                        "https://test-upsert.example.com",
-                    )
-                ]
-            )
-        )
         places_client2.close = AsyncMock()
 
         pipeline2 = DiscoveryPipeline(places_client=places_client2)
+        pipeline2.search_tiled = AsyncMock(
+            return_value=[
+                _make_place(
+                    "pid-second",
+                    "Second Agency Updated",
+                    "https://test-upsert.example.com",
+                )
+            ]
+        )
         result2 = await pipeline2.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
         assert result2["agencies_found"] == 1
 
@@ -689,10 +676,10 @@ class TestDiscoveryPipelineDB:
         city_id = await _seed_test_city(fresh_db, "test-status-lifecycle")
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(return_value=[])
         await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
         status = await fresh_db.fetchval(
@@ -711,11 +698,14 @@ class TestDiscoveryPipelineDB:
 
         place = _make_place("cli-pid", "CLI Agency", "https://test-cli.example.com")
 
-        with patch("agency_audit.discovery.PlacesAPIClient") as mock_client_cls:
+        with (
+            patch("agency_audit.discovery.PlacesAPIClient") as mock_client_cls,
+            patch.object(DiscoveryPipeline, "search_tiled") as mock_search_tiled,
+        ):
             places_client = PlacesAPIClient(api_key="test")
-            places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[place]))
             places_client.close = AsyncMock()
             mock_client_cls.return_value = places_client
+            mock_search_tiled.return_value = [place]
 
             result = await run_discovery(countries=["BG"], max_cities=1)
 
@@ -736,7 +726,6 @@ class TestDiscoveryPipelineDB:
         """run_discovery() with API key but no pending cities."""
         with patch("agency_audit.discovery.PlacesAPIClient") as mock_client_cls:
             places_client = PlacesAPIClient(api_key="test")
-            places_client.search_text = AsyncMock()
             places_client.close = AsyncMock()
             mock_client_cls.return_value = places_client
 
@@ -769,18 +758,16 @@ class TestDiscoveryPipelineDB:
         ]
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(
-            side_effect=[TextSearchResult(places=kw1), TextSearchResult(places=kw2)]
-        )
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(side_effect=[kw1, kw2])
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
         # Both keywords MUST have been searched
-        assert places_client.search_text.call_count == 2, (
-            f"Expected 2 search_text calls (one per keyword), got "
-            f"{places_client.search_text.call_count}"
+        assert pipeline.search_tiled.call_count == 2, (
+            f"Expected 2 search_tiled calls (one per keyword), got "
+            f"{pipeline.search_tiled.call_count}"
         )
 
         # Results from BOTH keywords must appear — 40 total, 20 per keyword
@@ -809,19 +796,19 @@ class TestDiscoveryPipelineDB:
 
         # Keyword 1: shared + unique-1; Keyword 2: shared + unique-2
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(
-            side_effect=[
-                TextSearchResult(places=[shared, unique_kw1]),
-                TextSearchResult(places=[shared, unique_kw2]),
-            ]
-        )
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.search_tiled = AsyncMock(
+            side_effect=[
+                [shared, unique_kw1],
+                [shared, unique_kw2],
+            ]
+        )
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
         # Both keywords searched
-        assert places_client.search_text.call_count == 2
+        assert pipeline.search_tiled.call_count == 2
 
         # 3 unique places, not 4 — the shared one deduped
         assert result["agencies_found"] == 3
