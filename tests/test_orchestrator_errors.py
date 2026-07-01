@@ -1,9 +1,11 @@
 """Additional tests for orchestrator error paths. Push coverage further."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlparse
 
 import pytest
 
+from agency_audit.config import settings
 from agency_audit.db import close_pool
 
 
@@ -186,15 +188,33 @@ class TestOrchestratorHappyPaths:
     """
 
     @pytest.mark.asyncio
-    async def test_run_all_countries_default_countries(self):
+    async def test_run_all_countries_default_countries(
+        self,
+        db_conn,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
         """run_all_countries without countries list fetches active countries from DB.
 
         Query-path test: exercises the real database via get_pool() so the
         ``SELECT iso FROM countries WHERE active = true`` query runs against
         PostgreSQL.  run_country is still mocked — we are testing the
         country-fetch path, not the full loop.
+
+        Monkeypatches agency_audit.config.settings so get_pool() connects
+        to the same isolated test database that the db_conn fixture uses.
         """
         from agency_audit.loop.orchestrator import run_all_countries
+
+        # Point get_pool() at the fixture database so every consumer
+        # (run_all_countries → get_pool → asyncpg.create_pool) hits
+        # the same isolated, migrated, seeded database as db_conn.
+        parsed = urlparse(postgres_dsn)
+        monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
+        monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
+        monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
+        monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
+        monkeypatch.setattr(settings, "pg_password", parsed.password or "")
 
         with patch("agency_audit.loop.orchestrator.run_country") as mock_run:
             mock_run.return_value = {
@@ -455,14 +475,30 @@ class TestOrchestratorSkipPaths:
             assert len(result["totals"]["errors"]) == 1
 
     @pytest.mark.asyncio
-    async def test_audit_country_websites_empty(self):
+    async def test_audit_country_websites_empty(
+        self,
+        db_conn,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
         """_audit_country_websites returns zeros when no pending websites.
 
         Query-path test: exercises the real database via get_pool().  The
         seeded test database has no websites, so the pending-websites query
         returns empty and the function returns all zeros.
+
+        Monkeypatches agency_audit.config.settings so get_pool() connects
+        to the same isolated test database that the db_conn fixture uses.
         """
         from agency_audit.loop.orchestrator import _audit_country_websites
+
+        # Point get_pool() at the fixture database.
+        parsed = urlparse(postgres_dsn)
+        monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
+        monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
+        monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
+        monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
+        monkeypatch.setattr(settings, "pg_password", parsed.password or "")
 
         result = await _audit_country_websites("BG")
         assert result == {"audited": 0, "succeeded": 0, "failed": 0}
