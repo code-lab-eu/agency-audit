@@ -193,6 +193,53 @@ class TestSearchIntegration:
         assert len(results) >= 1  # clamped to 1, not -5
 
 
+class TestSearchEdgeCases:
+    """Edge-case behaviour of search_agencies()."""
+
+    async def test_empty_query_returns_empty_list(self, pg_conn):
+        """Blank or whitespace-only query returns [] without querying DB."""
+        for blank in ("", "   ", "\t\n"):
+            results = await search_agencies(blank)
+            assert results == [], f"Expected [] for blank query {blank!r}"
+
+    async def test_limit_zero_clamped_to_minimum(self, pg_conn):
+        """limit=0 is clamped to 1."""
+        results = await search_agencies("Hamburg", limit=0)
+        assert len(results) >= 1  # would be 0 rows if limit wasn't clamped
+
+    async def test_limit_above_maximum_is_clamped(self, pg_conn):
+        """limit=9999 is clamped to 200, still returns results."""
+        results = await search_agencies("Hamburg", limit=9999)
+        # Must return results, and must not explode with an absurd LIMIT
+        assert len(results) >= 1
+
+    async def test_null_description_in_results(self, pg_conn):
+        """A row where description IS NULL is returned with description=None."""
+        row = await pg_conn.fetchrow(
+            "SELECT id FROM websites WHERE url = $1",
+            TEST_AGENCIES[0]["url"],
+        )
+        assert row is not None
+
+        # Temporarily set description to NULL
+        await pg_conn.execute(
+            "UPDATE websites SET description = NULL WHERE id = $1",
+            row["id"],
+        )
+        try:
+            results = await search_agencies(TEST_AGENCIES[0]["label"].split()[0])
+            found = [r for r in results if r["id"] == row["id"]]
+            assert len(found) == 1
+            assert found[0]["description"] is None
+        finally:
+            # Restore original description
+            await pg_conn.execute(
+                "UPDATE websites SET description = $1 WHERE id = $2",
+                TEST_AGENCIES[0]["description"],
+                row["id"],
+            )
+
+
 class TestSetDescriptionIntegration:
     """Real PostgreSQL set_agency_description() tests."""
 
@@ -214,6 +261,43 @@ class TestSetDescriptionIntegration:
 
         # Restore original
         await set_agency_description(row["id"], TEST_AGENCIES[0]["description"])
+
+    async def test_set_description_strips_whitespace(self, pg_conn):
+        """Leading/trailing whitespace is stripped before writing."""
+        row = await pg_conn.fetchrow(
+            "SELECT id FROM websites WHERE url = $1",
+            TEST_AGENCIES[0]["url"],
+        )
+        assert row is not None
+
+        await set_agency_description(row["id"], "  Nice agency  ")
+        desc = await pg_conn.fetchval(
+            "SELECT description FROM websites WHERE id = $1",
+            row["id"],
+        )
+        assert desc == "Nice agency"
+
+        # Restore original
+        await set_agency_description(row["id"], TEST_AGENCIES[0]["description"])
+
+    async def test_set_description_empty_sets_null(self, pg_conn):
+        """Empty or whitespace-only description sets NULL."""
+        row = await pg_conn.fetchrow(
+            "SELECT id FROM websites WHERE url = $1",
+            TEST_AGENCIES[1]["url"],
+        )
+        assert row is not None
+
+        for blank in ("", "   ", "\t\n"):
+            await set_agency_description(row["id"], blank)
+            desc = await pg_conn.fetchval(
+                "SELECT description FROM websites WHERE id = $1",
+                row["id"],
+            )
+            assert desc is None, f"Expected NULL for blank {blank!r}, got {desc!r}"
+
+        # Restore original
+        await set_agency_description(row["id"], TEST_AGENCIES[1]["description"])
 
 
 class TestMigrationApplied:
