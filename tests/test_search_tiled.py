@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agency_audit.config import settings
-from agency_audit.discovery import DiscoveryPipeline, PlaceResult
+from agency_audit.discovery import DiscoveryPipeline, PlaceResult, PlacesAPIClient
 from agency_audit.discovery_geo import Rectangle
 
 
@@ -49,6 +49,28 @@ def _make_city(
         viewport_high_lat=viewport_high_lat,
         viewport_high_lng=viewport_high_lng,
     )
+
+
+def _make_places_client() -> AsyncMock:
+    """Return an AsyncMock PlacesAPIClient with api_call_count tracking."""
+    client = AsyncMock(spec=PlacesAPIClient)
+    client.api_call_count = 0
+    return client
+
+
+def _mock_search_text_wrapper(
+    places_client: AsyncMock,
+    fn,
+):
+    """Wrap a mock search_text function to also increment api_call_count on
+    every call (simulating one HTTP request per non-paginated search)."""
+
+    async def wrapped(*args, **kwargs):
+        result = await fn(*args, **kwargs)
+        places_client.api_call_count += 1
+        return result
+
+    return wrapped
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -105,8 +127,8 @@ class TestSearchTiledSubdivision:
             # Root tile and NW's depth-2 children: return saturated
             return _make_places(5, "root")
 
-        places_client = AsyncMock()
-        places_client.search_text = mock_search_text
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
 
         pipeline = DiscoveryPipeline(places_client=places_client)
         viewport = Rectangle(42.0, 23.0, 43.0, 24.0)
@@ -135,8 +157,8 @@ class TestSearchTiledSubdivision:
             call_count += 1
             return _make_places(5, f"sparse-{call_count}")
 
-        places_client = AsyncMock()
-        places_client.search_text = mock_search_text
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
 
         pipeline = DiscoveryPipeline(places_client=places_client)
         viewport = Rectangle(42.0, 23.0, 43.0, 24.0)
@@ -174,8 +196,8 @@ class TestSearchTiledMaxDepth:
             # Always return saturated to tempt subdivision
             return _make_places(2, f"saturated-{call_count}")
 
-        places_client = AsyncMock()
-        places_client.search_text = mock_search_text
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
 
         pipeline = DiscoveryPipeline(places_client=places_client)
         viewport = Rectangle(42.0, 23.0, 43.0, 24.0)
@@ -229,8 +251,8 @@ class TestSearchTiledDedup:
             # Children of NW (depth 2) — stop here
             return _make_places(2, f"deep-{call_count}")
 
-        places_client = AsyncMock()
-        places_client.search_text = mock_search_text
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
 
         pipeline = DiscoveryPipeline(places_client=places_client)
         viewport = Rectangle(42.0, 23.0, 43.0, 24.0)
@@ -264,8 +286,8 @@ class TestSearchTiledDedup:
                 _make_place("valid-2", "Valid Two"),
             ]
 
-        places_client = AsyncMock()
-        places_client.search_text = mock_search_text
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
 
         pipeline = DiscoveryPipeline(places_client=places_client)
         viewport = Rectangle(42.0, 23.0, 43.0, 24.0)
@@ -306,8 +328,8 @@ class TestSearchTiledCallBudget:
             # Every tile is "saturated" so we always subdivide
             return _make_places(2)
 
-        places_client = AsyncMock()
-        places_client.search_text = mock_search_text
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
 
         pipeline = DiscoveryPipeline(places_client=places_client)
         viewport = Rectangle(42.0, 23.0, 43.0, 24.0)
@@ -315,10 +337,82 @@ class TestSearchTiledCallBudget:
         with patch.object(pipeline, "resolve_city_viewport", return_value=viewport):
             _ = await pipeline.search_tiled(query="test", city=_make_city(label="TestCity"))
 
-        # Budget was hit
+        # Budget was hit — should log the warning
         assert "TestCity" in caplog.text
         assert "budget exhausted" in caplog.text
         assert "tiles skipped" in caplog.text
+
+        await pipeline.close()
+
+    async def test_budget_exhausted_counts_child_tiles(self, monkeypatch, caplog):
+        """When the budget is exhausted by a saturated tile that cannot
+        subdivide, its direct children are counted as skipped (not silently
+        dropped).  Reproduction from the review: max_calls=1 + saturated root."""
+        monkeypatch.setattr(settings, "places_tile_saturation_threshold", 1)
+        monkeypatch.setattr(settings, "places_tile_max_depth", 3)
+        monkeypatch.setattr(settings, "places_max_calls_per_city", 1)
+
+        caplog.set_level(logging.WARNING)
+
+        async def mock_search_text(
+            query: str,
+            location_restriction: Rectangle | None = None,
+            **kwargs,
+        ) -> list[PlaceResult]:
+            return _make_places(2)
+
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
+
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        viewport = Rectangle(42.0, 23.0, 43.0, 24.0)
+
+        with patch.object(pipeline, "resolve_city_viewport", return_value=viewport):
+            _ = await pipeline.search_tiled(query="test", city=_make_city(label="TestCity"))
+
+        # The root tile was searched (1 call, saturated) and its 4 children
+        # are counted as skipped because budget prevents subdivision.
+        assert "budget exhausted" in caplog.text
+        assert "4 tiles skipped" in caplog.text
+
+        await pipeline.close()
+
+    async def test_budget_exhausted_deep_tree_skipped_count(self, monkeypatch, caplog):
+        """Skipped tiles from budget exhaustion at deeper levels are counted
+        correctly.  With max_calls=3, the last saturated call cannot subdivide,
+        so 4 direct children are skipped plus the remaining siblings at all
+        levels."""
+        monkeypatch.setattr(settings, "places_tile_saturation_threshold", 1)
+        monkeypatch.setattr(settings, "places_tile_max_depth", 3)
+        monkeypatch.setattr(settings, "places_max_calls_per_city", 3)
+
+        caplog.set_level(logging.WARNING)
+
+        async def mock_search_text(
+            query: str,
+            location_restriction: Rectangle | None = None,
+            **kwargs,
+        ) -> list[PlaceResult]:
+            return _make_places(2)
+
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
+
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        viewport = Rectangle(42.0, 23.0, 43.0, 24.0)
+
+        with patch.object(pipeline, "resolve_city_viewport", return_value=viewport):
+            _ = await pipeline.search_tiled(query="test", city=_make_city(label="TestCity"))
+
+        # Execution trace (3 calls, depth ≤ 3, always saturated):
+        #   call 1 (root, d=0): saturated → subdivide
+        #   call 2 (NW, d=1):   saturated → subdivide
+        #   call 3 (NW-NW, d=2): saturated, budget exhausted → +4 skipped
+        #   NW-NE, NW-SW, NW-SE (d=2): each +1 skipped (budget guard)
+        #   NE, SW, SE (d=1): each +1 skipped (budget guard)
+        #   Total skipped = 4 + 3 + 3 = 10
+        assert "budget exhausted" in caplog.text
+        assert "10 tiles skipped" in caplog.text
 
         await pipeline.close()
 
@@ -336,8 +430,8 @@ class TestSearchTiledCallBudget:
         ) -> list[PlaceResult]:
             return _make_places(5)
 
-        places_client = AsyncMock()
-        places_client.search_text = mock_search_text
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
 
         pipeline = DiscoveryPipeline(places_client=places_client)
         viewport = Rectangle(42.0, 23.0, 43.0, 24.0)
@@ -346,6 +440,50 @@ class TestSearchTiledCallBudget:
             await pipeline.search_tiled(query="test", city=_make_city())
 
         assert "budget exhausted" not in caplog.text
+
+        await pipeline.close()
+
+    async def test_paginated_search_consumes_multiple_api_calls(self, monkeypatch, caplog):
+        """When search_text paginates (e.g. 3 pages of 20 results each),
+        the budget counter increments by the actual number of HTTP requests,
+        not by 1 per search_text call."""
+        monkeypatch.setattr(settings, "places_tile_saturation_threshold", 1)
+        monkeypatch.setattr(settings, "places_tile_max_depth", 2)
+        monkeypatch.setattr(settings, "places_max_calls_per_city", 5)
+
+        caplog.set_level(logging.WARNING)
+
+        pages_returned = 0
+
+        async def mock_search_text(
+            query: str,
+            location_restriction: Rectangle | None = None,
+            max_results: int | None = None,
+            **kwargs,
+        ) -> list[PlaceResult]:
+            nonlocal pages_returned
+            pages_returned += 1
+            # Simulate 3 paginated API calls by incrementing api_call_count
+            # by 3 total per search_text (mimicking pageSize=20, max_results=60).
+            places_client.api_call_count += 2  # first POST is in wrapper, +2 more
+            return _make_places(60)  # saturated
+
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
+
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        viewport = Rectangle(42.0, 23.0, 43.0, 24.0)
+
+        with patch.object(pipeline, "resolve_city_viewport", return_value=viewport):
+            _ = await pipeline.search_tiled(query="test", city=_make_city(label="TestCity"))
+
+        # Each search_text costs 3 API calls.  Budget=5.
+        # call 1 (root, d=0):  consumes 3 → call_count=3, saturated → subdivide
+        # call 2 (NW, d=1):    consumes 3 → call_count=6, saturated, budget hit →
+        #   +4 skipped children; rest are skipped by guard.
+        # Total calls consumed: 2 search_text → 6 API calls
+        assert "budget exhausted" in caplog.text
+        assert pages_returned == 2
 
         await pipeline.close()
 
@@ -374,8 +512,8 @@ class TestSearchTiledViewportResolution:
             captured_tile = location_restriction
             return _make_places(5)
 
-        places_client = AsyncMock()
-        places_client.search_text = mock_search_text
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
 
         pipeline = DiscoveryPipeline(places_client=places_client)
         viewport = Rectangle(42.5, 23.0, 42.9, 23.8)

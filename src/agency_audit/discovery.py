@@ -119,6 +119,7 @@ class PlacesAPIClient:
         self._client: httpx.AsyncClient | None = None
         self._request_count = 0
         self._last_request_time = 0.0
+        self.api_call_count = 0
 
     def _load_api_key(self) -> str:
         """Load API key from application settings (env var or .env)."""
@@ -216,6 +217,7 @@ class PlacesAPIClient:
 
             try:
                 resp = await client.post(self.BASE_URL, json=body)
+                self.api_call_count += 1
                 resp.raise_for_status()
                 data = resp.json()
             except httpx.HTTPStatusError as e:
@@ -488,11 +490,14 @@ class DiscoveryPipeline:
                 skipped_tiles += 1
                 return []
 
-            call_count += 1
+            before = self.places.api_call_count
             results = await self.places.search_text(
                 query=query,
                 location_restriction=tile,
             )
+            after = self.places.api_call_count
+            consumed = after - before
+            call_count += consumed
 
             if (
                 is_saturated(len(results), sat_threshold)
@@ -503,6 +508,16 @@ class DiscoveryPipeline:
                 for child in subdivide(tile):
                     child_results.extend(await _search_recursive(child, depth + 1))
                 return results + child_results
+
+            if (
+                is_saturated(len(results), sat_threshold)
+                and depth < max_depth
+                and call_count >= max_calls
+            ):
+                # Budget exhausted — children of this saturated tile are skipped.
+                # Each would have hit the top-of-function guard and been counted
+                # individually, so add 4 now.
+                skipped_tiles += 4
 
             return results
 
