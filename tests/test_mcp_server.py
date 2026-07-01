@@ -86,7 +86,7 @@ async def test_report_website_creates_new(fresh_db: asyncpg.Connection) -> None:
         city="sofia",
         place_id="ChIJ1234",
         address="123 Test St",
-        phone="+359****3456",
+        phone="+359 2 123 4567",
     )
     assert result["created"] is True
     assert "website_id" in result
@@ -101,7 +101,7 @@ async def test_report_website_creates_new(fresh_db: asyncpg.Connection) -> None:
     assert row["label"] == "Test Agency"
     assert row["maps_place_id"] == "ChIJ1234"
     assert row["address"] == "123 Test St"
-    assert row["phone"] == "+359****3456"
+    assert row["phone"] == "+359 2 123 4567"
 
     # Verify website_cities link
     link = await fresh_db.fetchrow(
@@ -365,22 +365,36 @@ async def test_full_pipeline(fresh_db: asyncpg.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_concurrent_get_next_city_returns_distinct(fresh_db: asyncpg.Connection) -> None:
-    """Two concurrent get_next_city calls must return different cities.
+async def test_get_next_city_skips_locked_row(fresh_db: asyncpg.Connection) -> None:
+    """FOR UPDATE SKIP LOCKED skips a row locked by another transaction.
 
-    Verifies the FOR UPDATE SKIP LOCKED atomic-claiming behaviour: row-level
-    locks from the first claim prevent the second claim from seeing the same
-    row, so two concurrent workers can never claim the same city.
+    Locks the highest-population pending city in a separate transaction
+    via ``fresh_db`` without changing its ``discovery_status``.  A
+    concurrent ``get_next_city()`` opens its own connection where
+    ``FOR UPDATE SKIP LOCKED`` must skip the locked row and pick the
+    next-highest city — returning promptly instead of blocking.
+    Without SKIP LOCKED this test would time out.
     """
-    result1, result2 = await asyncio.gather(
-        get_next_city(),
-        get_next_city(),
+    top_two = await fresh_db.fetch(
+        "SELECT id, population FROM cities "
+        "WHERE discovery_status = 'pending' "
+        "ORDER BY population DESC LIMIT 2"
     )
-    assert "error" not in result1, f"unexpected error: {result1}"
-    assert "error" not in result2, f"unexpected error: {result2}"
-    assert result1["id"] != result2["id"], (
-        f"Both claims returned city id={result1['id']} — FOR UPDATE SKIP LOCKED failed"
-    )
+    assert len(top_two) == 2
+    top_id = top_two[0]["id"]
+    top_pop = top_two[0]["population"]
+    second_id = top_two[1]["id"]
+
+    async with fresh_db.transaction():
+        await fresh_db.execute("SELECT id FROM cities WHERE id = $1 FOR UPDATE", top_id)
+        # top_id is now row-locked; get_next_city() must skip it.
+        result = await asyncio.wait_for(get_next_city(), timeout=5.0)
+        assert result["id"] == second_id, (
+            f"Expected city {second_id} (skipped locked row), got {result['id']}"
+        )
+        assert result["population"] != top_pop, (
+            f"Got locked-row population {top_pop} — SKIP LOCKED failed"
+        )
 
 
 async def test_get_next_city_no_pending_cities(fresh_db: asyncpg.Connection) -> None:
@@ -395,34 +409,26 @@ async def test_get_next_city_no_pending_cities(fresh_db: asyncpg.Connection) -> 
     assert result == {"error": "no pending cities"}
 
 
-async def test_concurrent_get_unaudited_website_returns_distinct(
+async def test_get_unaudited_website_skips_locked_row(
     fresh_db: asyncpg.Connection,
 ) -> None:
-    """Two concurrent get_unaudited_website calls must return different websites.
+    """FOR UPDATE SKIP LOCKED skips a website row locked by another transaction.
 
-    Verifies the FOR UPDATE SKIP LOCKED atomic-claiming behaviour on the
-    websites table: row-level locks from the first claim prevent the second
-    claim from seeing the same row.
+    Seeds two pending websites via ``report_website()`` (committed, visible
+    to all connections), then locks the earlier-created one in a separate
+    ``fresh_db`` transaction.  ``get_unaudited_website()`` opens its own
+    connection where ``FOR UPDATE SKIP LOCKED`` must skip the locked row
+    and return the other website — promptly, without blocking.
     """
-    # Seed two pending websites via the fresh_db connection (autocommit —
-    # visible to the pool's connections immediately).
-    await report_website(
-        url="https://test-claim-a.example.com",
-        name="Claim A",
-        city="sofia",
-    )
-    await report_website(
-        url="https://test-claim-b.example.com",
-        name="Claim B",
-        city="sofia",
-    )
+    # Seed two pending websites.
+    a = await report_website(url="https://test-claim-a.example.com", name="Claim A", city="sofia")
+    b = await report_website(url="https://test-claim-b.example.com", name="Claim B", city="sofia")
+    assert a["website_id"] != b["website_id"]
 
-    result1, result2 = await asyncio.gather(
-        get_unaudited_website(),
-        get_unaudited_website(),
-    )
-    assert "error" not in result1, f"unexpected error: {result1}"
-    assert "error" not in result2, f"unexpected error: {result2}"
-    assert result1["id"] != result2["id"], (
-        f"Both claims returned website id={result1['id']} — FOR UPDATE SKIP LOCKED failed"
-    )
+    # Lock the earlier-created website (ORDER BY created_at would pick it first).
+    async with fresh_db.transaction():
+        await fresh_db.execute("SELECT id FROM websites WHERE id = $1 FOR UPDATE", a["website_id"])
+        result = await asyncio.wait_for(get_unaudited_website(), timeout=5.0)
+        assert result["id"] == b["website_id"], (
+            f"Expected website {b['website_id']} (skipped locked row), got {result['id']}"
+        )
