@@ -45,3 +45,9 @@ pg_start.sh
 pg/
 pgdata/
 pg_data/
+
+# Ephemeral session notes and prompts
+docs/notes/
+docs/prompts/
+
+docker-compose.override.yml

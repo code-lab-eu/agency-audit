@@ -502,25 +502,17 @@ class TestPlacesAPIClientKeyResolution:
 
     def test_explicit_key_overrides_settings(self):
         """An explicit api_key arg bypasses _load_api_key entirely."""
-        with patch("agency_audit.config.settings") as mock_settings:
-            mock_settings.google_maps_api_key = "from-env"
-            client = PlacesAPIClient(api_key="explicit-key")
-            # Should use the explicit key, not the env one
-            assert client.api_key == "explicit-key"
+        client = PlacesAPIClient(api_key="explicit-key")
+        # Should use the explicit key without touching settings
+        assert client.api_key == "explicit-key"
 
     def test_env_var_goog_maps_api_key_fallback(self):
-        """GOOGLE_MAPS_API_KEY (no prefix) is read by pydantic-settings
-        since google_maps_api_key is the field name, and pydantic-settings
-        checks both AGENCY_AUDIT_GOOGLE_MAPS_API_KEY and GOOGLE_MAPS_API_KEY."""
-        import os
-
-        with (
-            patch.dict(os.environ, {"GOOGLE_MAPS_API_KEY": "bare-env-key"}),
-            patch("agency_audit.config.settings") as mock_settings,
-        ):
-            mock_settings.google_maps_api_key = "bare-env-key"
+        """PlacesAPIClient() with no explicit key uses _load_api_key()
+        which reads settings.google_maps_api_key from the config."""
+        with patch("agency_audit.config.settings") as mock_settings:
+            mock_settings.google_maps_api_key = "from-config"
             client = PlacesAPIClient()
-            assert client.api_key == "bare-env-key"
+            assert client.api_key == "from-config"
             assert client.available is True
 
     async def test_run_discovery_raises_when_no_key(self):
@@ -621,7 +613,7 @@ class TestPlacesAPIClientConfiguration:
         assert "places.location" in field_mask
 
     async def test_content_type_is_json(self):
-        """Content-Type header is application/json."""
+        """Content-Type header is application/json, set by _ensure_client."""
         captured_headers = None
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -629,9 +621,19 @@ class TestPlacesAPIClientConfiguration:
             captured_headers = dict(request.headers)
             return httpx.Response(200, json=build_place_response([]), request=request)
 
-        client = make_mock_client(handler)
-        await client._ensure_client()
-        await client.search_text("test", max_results=20)
+        client = PlacesAPIClient(api_key="mock-key")
+        transport = httpx.MockTransport(handler)
+
+        # Inject mock transport without bypassing ensure_client header setup
+        orig_init = httpx.AsyncClient.__init__
+
+        def patched_init(self_, **kwargs):
+            kwargs["transport"] = transport
+            return orig_init(self_, **kwargs)
+
+        with patch.object(httpx.AsyncClient, "__init__", patched_init):
+            await client.search_text("test", max_results=20)
+
         await client.close()
 
         assert captured_headers is not None

@@ -22,6 +22,18 @@ split well. Read `AGENTS.md` at the repo root first — it is the source of trut
 for agency-audit's commands, layout, conventions, and the test/lint gate, and the
 orientation you bake into the body comes from there.
 
+## Always save the prompt to a file
+
+The deliverable is a file, not chat output — write it to `docs/prompts/` so it can
+be reviewed, edited, and pasted into the board later. Save each prompt as
+`docs/prompts/<slug>.md`, where `<slug>` is a short kebab-case name for the work
+(e.g. `docs/prompts/real-db-test-fixture.md`). Put the title on the first line as
+a top-level `# heading` and the body beneath it. One file per triage task; when a
+goal needs several sequenced triage cards, write one file each and number the
+slugs (`...-1-fixture.md`, `...-2-migration.md`). Create `docs/prompts/` if it
+does not exist. Keep the file to just the prompt — no commentary about the drafting
+session.
+
 ## How the decomposer reads your task
 
 The decomposer is an auxiliary LLM. When a task sits in `triage` (automatically
@@ -76,10 +88,10 @@ Write a body where each unit of work has a clear goal and a checkable bar, kept
 independent of the other units wherever possible.
 
 1. **Lead with orientation (a few sentences).** What agency-audit is, the stack
-   (Python 3.12, asyncpg/PostgreSQL, Typer CLI, FastMCP server, FastAPI/Jinja2
+   (Python 3.14, asyncpg/PostgreSQL, Typer CLI, FastMCP server, FastAPI/Jinja2
    web app, orchestration `loop`), where the checkout is, and the gate every
-   change must pass: `uv run --extra dev pytest` and `uvx ruff check .` both
-   clean, with tests never requiring a live database (mock the pool as
+   change must pass: `scripts/qa.sh` exits green (lint, format check, mypy,
+   tests), with tests never requiring a live database (mock the pool as
    `tests/test_loop.py` does). This is what lets each child stand on its own.
 
 2. **State the standing constraints once.** One small change per unit, on its own
@@ -116,12 +128,12 @@ each unit a checkable bar.
 > **Body:**
 >
 > `agency-audit` ("Real Estate Radar") discovers and audits real estate agency
-> sites: Python 3.12, asyncpg/PostgreSQL, a Typer CLI, a FastMCP server, a
+> sites: Python 3.14, asyncpg/PostgreSQL, a Typer CLI, a FastMCP server, a
 > FastAPI/Jinja2 web app, and an orchestration `loop`. Checkout is the repo root;
 > see `AGENTS.md` for layout and conventions. Every change is one small,
 > single-pass PR on its own `fix/<slug>` or `feat/<slug>` branch off `master`,
-> with unit tests riding along. The gate each PR must pass: `uv run --extra dev
-> pytest` and `uvx ruff check .` both clean, and tests never require a live
+> with unit tests riding along. The gate each PR must pass: `scripts/qa.sh`
+> exits green (lint, format check, mypy, tests), and tests never require a live
 > database — mock the pool as `tests/test_loop.py` does.
 >
 > Do the gate fix first; the coverage work depends on it:
@@ -144,6 +156,7 @@ each unit a checkable bar.
 
 ## Checklist before you submit
 
+- [ ] Saved to `docs/prompts/<slug>.md` with the title as the `# heading` — not left in chat.
 - [ ] Body is self-orienting: stack, checkout, and the pytest + ruff gate are stated.
 - [ ] Standing constraints (one small change, own branch, tests ride along) appear once.
 - [ ] Each unit has a concrete location and a single-unit-testable acceptance bar.

@@ -1,27 +1,24 @@
-"""CLI command tests that execute async bodies by mocking DB dependencies.
+"""CLI command tests exercising Typer commands via CliRunner.
 
-Instead of mocking asyncio.run, we mock the DB pool functions so the real
-asyncio loop can execute the async _run() function bodies.
+Database-backed commands (e.g. stats) connect to the real database
+provisioned by the conftest.py postgres_dsn fixture.  Application-layer
+commands (run, discover, qc, reaudit, progress) mock their domain
+functions and assert on CLI output.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+import asyncio
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
 
+import asyncpg
+import pytest
 from typer.testing import CliRunner
 
 from agency_audit.cli import app
+from agency_audit.config import settings
 
 runner = CliRunner()
-
-
-def _make_pool_mock():
-    """Create a mock pool that returns an async context manager connection."""
-    mock_conn = AsyncMock()
-    mock_ctx = AsyncMock()
-    mock_ctx.__aenter__.return_value = mock_conn
-    mock_pool = MagicMock()
-    mock_pool.acquire.return_value = mock_ctx
-    # Also mock as a plain context manager variant
-    return mock_pool, mock_conn
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -117,30 +114,83 @@ def test_audit_arg_validation():
         mock_asyncio.assert_not_called()
 
 
+def test_audit_output_db_requires_website_id():
+    """audit --output db without --website-id exits non-zero with clear message."""
+    with patch("agency_audit.cli.asyncio.run") as mock_asyncio:
+        result = runner.invoke(app, ["audit", "--output", "db", "--url", "https://example.com"])
+        assert result.exit_code == 1
+        assert "--output db requires --website-id" in result.output
+        mock_asyncio.assert_not_called()
+
+
 # ──────────────────────────────────────────────────────────────────────
 # stats command
-# ──────────────────────────────────────────────────────────────────────
+async def test_stats_command_executes(
+    db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """stats command prints database statistics with real row counts.
 
+    Seeds the exact data this test asserts on via a separate committed
+    connection so the CLI's own connection pool can see it.  Uses
+    ``db_conn`` (the shared fixture) as a sentinel that the database is
+    provisioned and migrated.  The seed SQL uses ON CONFLICT DO NOTHING
+    so the test is idempotent — no per-test cleanup needed.
+    """
+    # Seed on a separate connection that auto-commits (no transaction
+    # wrapper) so the CLI's pool can see the rows.
+    seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+    try:
+        # 44 European countries (the canonical project seed)
+        countries_sql = (
+            Path(__file__).parent.parent / "src" / "agency_audit" / "seed" / "countries.sql"
+        ).read_text(encoding="utf-8")
+        await seed_conn.execute(countries_sql)
 
-def test_stats_command_executes():
-    """stats command prints database statistics table."""
-    mock_pool, mock_conn = _make_pool_mock()
-    # stats uses pool.fetchval() directly, not acquire()
-    mock_pool.fetchval = AsyncMock(return_value=10)
+        # 20 Bulgarian cities (the integration-test fixture)
+        cities_sql = (Path(__file__).parent / "fixtures" / "cities.sql").read_text(encoding="utf-8")
+        await seed_conn.execute(cities_sql)
 
-    mock_get_pool = AsyncMock(return_value=mock_pool)
-    mock_close_pool = AsyncMock()
+        # Read back what we actually have so assertions are dynamic
+        # — they survive fixture changes and uncontrolled pre-existing rows.
+        expected_countries = await seed_conn.fetchval("SELECT COUNT(*) FROM countries")
+        expected_cities = await seed_conn.fetchval("SELECT COUNT(*) FROM cities")
+        expected_websites = await seed_conn.fetchval("SELECT COUNT(*) FROM websites")
+        expected_audited = await seed_conn.fetchval(
+            "SELECT COUNT(*) FROM websites WHERE audit_status = 'audited'"
+        )
+        expected_pending = await seed_conn.fetchval(
+            "SELECT COUNT(*) FROM websites WHERE audit_status = 'pending'"
+        )
 
-    with (
-        patch("agency_audit.cli.get_pool", new=mock_get_pool),
-        patch("agency_audit.cli.close_pool", new=mock_close_pool),
-    ):
-        result = runner.invoke(app, ["stats"])
-        assert result.exit_code == 0
+        # Point the CLI's global settings at the fixture database so
+        # get_pool() connects here, not to the ambient database.
+        parsed = urlparse(postgres_dsn)
+        monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
+        monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
+        monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
+        monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
+        monkeypatch.setattr(settings, "pg_password", parsed.password or "")
+
+        result = await asyncio.to_thread(runner.invoke, app, ["stats"])
+        assert result.exit_code == 0, f"stats command failed:\n{result.output}"
+
+        # Row-specific assertions: each metric name and its expected
+        # value must appear on the same Rich table output line.
         assert "Database Stats" in result.output
-        assert "Countries" in result.output
-        assert "Cities" in result.output
-        assert "Websites" in result.output
+        lines = result.output.splitlines()
+        for metric, expected in [
+            ("Countries", str(expected_countries)),
+            ("Cities", str(expected_cities)),
+            ("Websites", str(expected_websites)),
+            ("Audited", str(expected_audited)),
+            ("Pending", str(expected_pending)),
+        ]:
+            assert any(metric in line and expected in line for line in lines), (
+                f"Expected '{metric}' row to contain '{expected}', "
+                f"but no matching line was found in:\n{result.output}"
+            )
+    finally:
+        await seed_conn.close()
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -177,6 +227,8 @@ def test_run_command_executes():
 
 def test_run_command_with_result_phases():
     """run command prints results for each phase."""
+    from agency_audit.config import settings
+
     with patch("agency_audit.loop.orchestrator.run_country") as mock_run:
         mock_run.return_value = {
             "country": "BG",
@@ -189,7 +241,8 @@ def test_run_command_with_result_phases():
             "errors": [],
             "duration_seconds": 5.5,
         }
-        result = runner.invoke(app, ["run", "--country", "BG"])
+        with patch.object(settings, "google_maps_api_key", "test-key"):
+            result = runner.invoke(app, ["run", "--country", "BG"])
         assert result.exit_code == 0
         assert "Loop Results" in result.output
         assert "BG" in result.output
@@ -435,8 +488,11 @@ def test_progress_command_with_data():
 # ──────────────────────────────────────────────────────────────────────
 
 
-def test_discover_command():
+def test_discover_command(monkeypatch):
     """discover command invokes run_discovery and prints results table."""
+    from agency_audit.config import settings
+
+    monkeypatch.setattr(settings, "google_maps_api_key", "test-key")
     with patch("agency_audit.discovery.run_discovery") as mock_disc:
         mock_disc.return_value = {
             "countries_processed": 1,
@@ -451,8 +507,11 @@ def test_discover_command():
         assert "15" in result.output
 
 
-def test_discover_command_no_results():
+def test_discover_command_no_results(monkeypatch):
     """discover command with no results shows warning message."""
+    from agency_audit.config import settings
+
+    monkeypatch.setattr(settings, "google_maps_api_key", "test-key")
     with patch("agency_audit.discovery.run_discovery") as mock_disc:
         mock_disc.return_value = {
             "countries_processed": 0,
@@ -471,9 +530,32 @@ def test_discover_command_no_results():
 
 
 def test_serve_command_executes():
-    """serve command invokes uvicorn.run (mocked to not block) and prints status."""
-    with patch("uvicorn.run") as mock_run:
-        result = runner.invoke(app, ["serve", "--host", "127.0.0.1", "--port", "9999"])
-        assert result.exit_code == 0
-        assert "Starting Agency Audit dashboard" in result.output
-        mock_run.assert_called_once()
+    """serve command creates a uvicorn.Server and prints status."""
+    with patch("uvicorn.Server") as mock_server_cls:
+        mock_server = mock_server_cls.return_value
+        mock_server.run = MagicMock()  # prevent actual server start
+
+        with patch("agency_audit.cli.asyncio.run"):
+            result = runner.invoke(app, ["serve", "--host", "127.0.0.1", "--port", "9999"])
+            assert result.exit_code == 0
+            assert "Starting Agency Audit dashboard" in result.output
+            mock_server.run.assert_called_once()
+
+
+def test_serve_default_bind_address():
+    """serve defaults to loopback (127.0.0.1)."""
+    with patch("uvicorn.Server") as mock_server_cls:
+        mock_server = mock_server_cls.return_value
+        mock_server.run = MagicMock()
+
+        with patch("agency_audit.cli.asyncio.run"):
+            result = runner.invoke(app, ["serve"])
+            assert result.exit_code == 0
+            # Verify uvicorn.Config received host="127.0.0.1"
+            config_call = mock_server_cls.call_args
+            assert config_call is not None
+            # Config is the first positional arg
+            from uvicorn import Config
+
+            if isinstance(config_call[0][0], Config):
+                assert config_call[0][0].host == "127.0.0.1"

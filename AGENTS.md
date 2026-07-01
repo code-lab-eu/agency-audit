@@ -3,6 +3,15 @@
 Instructions for AI coding agents and human contributors working on this
 codebase. Read this before writing any code.
 
+## Agent rules
+
+Working practices that apply to every session live in `.agents/rules/`. Read and
+follow them:
+
+- [Self-improvement loop](.agents/rules/self-improvement-loop.md) — apply every
+  session: keep a session note in `docs/notes/`, then promote durable learnings
+  into rules, skills, and docs when the loop closes.
+
 ## Project overview
 
 **Real Estate Radar — Website Discovery & Audit System.** Discovers, audits,
@@ -14,9 +23,21 @@ audit each site with 7 checks → score 0–100 → queue re-audits for stale
 entries.  The full loop (`discover → audit → QC → reaudit`) runs
 country-by-country through the orchestrator.
 
+## Branch and PR discipline (non-negotiable)
+
+- ALWAYS create a feature branch off master before touching any code:
+  `git checkout master && git pull && git checkout -b fix/<slug>` or `feat/<slug>`.
+- NEVER push directly to master. Not for small fixes, not for typos, not ever.
+- When your work is complete, push your branch and open a pull request against
+  master. Do NOT merge the PR yourself — the gate runs, a human reviews.
+- A task is NOT complete until the corresponding pull request has been created
+  and all required CI checks pass. Work committed to a branch with no PR is
+  lost work — it will never be reviewed or merged.
+- Use the `gh` CLI for PR creation: `gh pr create --title "..." --body "..."`.
+
 ## Prerequisites
 
-- Python **3.12+** (CI gate enforces ≥3.12; uv lock targets 3.12)
+- Python **3.14+**
 - [uv](https://docs.astral.sh/uv/) for package management (no pip required)
 - **PostgreSQL 16+** with the `agency_audit` database
 - Docker (optional — `docker compose up -d` spins up a disposable PG instance)
@@ -64,26 +85,31 @@ Environment variables (all prefixed `AGENCY_AUDIT_`; see
 ## Common commands
 
 ```bash
+# Full QA gate — run this before every push (lint + format check + mypy + tests).
+# Single source of truth for "is my branch ready"; mirrors the CI quality gates.
+scripts/qa.sh
+
+# Same, but auto-fix lint + formatting first, then re-check
+scripts/qa.sh --fix
+
 # Run the test suite (NOT dependent on a live database — pool is mocked)
 uv run --extra dev pytest
 
 # Run with coverage
 uv run --extra dev pytest --cov=src/agency_audit --cov-report=term
 
-# Lint
-uvx ruff check src/ tests/
-
-# Format check (CI gate, enforce double-quotes)
-uvx ruff format --check src/ tests/
-
-# Type check (CI gate)
-uvx --from mypy mypy src/
+# Individual gates (all run via `uv run --extra dev` so they use the project's
+# Python 3.14 interpreter — do NOT run mypy via `uvx`, which defaults to an
+# older Python that cannot parse PEP 695 generics and reports false syntax errors).
+uv run --extra dev ruff check src/ tests/          # Lint
+uv run --extra dev ruff format --check src/ tests/ # Format check (enforce double-quotes)
+uv run --extra dev mypy src/                       # Type check
 
 # Apply auto-fixes before committing
-uvx ruff check --fix src/ tests/
-uvx ruff format src/ tests/
+uv run --extra dev ruff check --fix src/ tests/
+uv run --extra dev ruff format src/ tests/
 
-# Start the web dashboard (FastAPI + HTMX, http://0.0.0.0:8000)
+# Start the web dashboard (FastAPI + HTMX, binds 127.0.0.1:8000 by default)
 uv run agency-audit serve
 
 # Audit a single URL with the full 7-module pipeline
@@ -114,9 +140,9 @@ agency-audit/
     discovery.py              # Google Maps Places discovery pipeline
     geonames.py               # Cities15000.zip import from Geonames
     mcp_server.py             # FastMCP tools (get_next_city, submit_audit, …)
-    scoring_config.yaml       # Weights for the 0-100 audit score
     audit/                    # Website audit logic (7 modules)
       __init__.py             # Public API: audit_website, audit_websites, AuditData, compute_score
+      scoring_config.yaml     # Weights for the 0-100 audit score (canonical copy)
       models.py               # Dataclasses: RobotsResult, AuditData, TechStackResult, …
       robots.py               # robots.txt fetch & parse
       anti_scraping.py        # Cloudflare/reCAPTCHA/JS-only detection
@@ -146,9 +172,10 @@ agency-audit/
     test_mcp_server.py        # MCP server integration tests (needs live DB)
     test_audit_coverage.py    # Comprehensive audit coverage tests
     integration/test_pipeline.py  # End-to-end pipeline tests
+  scripts/
+    qa.sh                     # Full local QA gate (lint + format + mypy + tests); run before every push
   pyproject.toml              # Project metadata, deps, ruff, pytest, mypy config
   docker-compose.yml          # Local PostgreSQL 16
-  scoring_config.yaml         # Audit scoring weights
   .github/workflows/agency-audit-ci.yml  # CI: lint, format check, mypy
 ```
 
@@ -159,7 +186,7 @@ agency-audit/
 - **Lint rules:** `E, F, I, UP, B, SIM` (pyflakes, import sorting, pyupgrade,
   flake8-bugbear, code simplification)
 - **Imports:** `from __future__ import annotations` at the top of every
-  type-annotated module (targets Python ≥3.12 but keeps compatibility)
+  type-annotated module (targets Python ≥3.14)
   Import order: stdlib → third-party → local (enforced by `I` rule)
 - **Types:** Pydantic `BaseSettings` for config, dataclasses for audit result
   models, type hints on all public functions
@@ -179,8 +206,9 @@ agency-audit/
 - **Test structure:** Module-level test files mirror source layout
   (`test_audit.py` → `src/agency_audit/audit/`, `test_loop.py` →
   `src/agency_audit/loop/`)
-- **Before pushing:** `uv run --extra dev pytest` must be green and
-  `uvx ruff check .` must be clean
+- **Before pushing:** run `scripts/qa.sh` — it must exit green. This runs all
+  CI quality gates (ruff lint, ruff format check, mypy) plus the test suite in
+  one shot, so a green run here means CI should pass too
 
 ## Contribution workflow
 
@@ -192,23 +220,48 @@ merge conflicts.
    `git fetch origin && git checkout -b feat/<slug> origin/master`
    (use `fix/<slug>` for fixes). In a worktree:
    `git fetch origin && git worktree add -b feat/<slug> <path> origin/master`.
-2. Make changes, write tests, run the full suite
+2. Make changes, write tests, run the full QA gate (`scripts/qa.sh`)
 3. Commit with [conventional commit](https://www.conventionalcommits.org/)
    prefixes (`feat:`, `fix:`, `test:`, `refactor:`)
 4. **Re-sync before pushing.** `master` may have moved while you worked:
-   `git fetch origin && git rebase origin/master`, resolve any conflicts, then
-   re-run `uv run --extra dev pytest` and `uvx ruff check .` before continuing.
+   `git fetch origin && git merge origin/master`, resolve any conflicts, then
+   re-run `scripts/qa.sh` before continuing.
 5. Push your branch and open a PR against `master` — CI runs ruff lint,
    ruff format check, and mypy.  A human reviews before merge
-6. **If the PR reports conflicts with `master`**, rebase onto the latest and
-   force-push the branch:
-   `git fetch origin && git rebase origin/master` (fix conflicts, re-run the
-   suite) then `git push --force-with-lease`
+6. **If the PR reports conflicts with `master`**, merge master into your branch:
+   `git fetch origin && git merge origin/master` (resolve conflicts, re-run the
+   suite) then `git push origin <branch-name>`. Do NOT rebase and force-push.
 7. Never push directly to `master`
+
+## Force-push avoidance
+
+**Never rebase, squash, amend, or otherwise rewrite pushed commits on a
+shared branch.** Force-pushes (`git push --force`, `git push --force-with-lease`,
+`git push --force-if-includes`) require manual approval on this repository and
+block progress until a human reviews and grants permission.
+
+Use these alternatives instead:
+
+- **Merge conflicts:** Pull the latest `master` and merge it into your branch
+  (`git fetch origin && git merge origin/master`). Resolve conflicts, re-run
+  the full test suite, and push normally with `git push origin <branch-name>`.
+- **Fixing a mistake in the latest commit:** Make a new commit rather than
+  amending the pushed one. Use `git commit --fixup <sha>` and squash during
+  merge at PR time.
+- **Accidentally committed to the wrong branch:** Create a new branch from the
+  current HEAD (`git checkout -b <correct-branch>`), then push the new branch.
+  The old branch will be cleaned up at PR merge.
+
+If you inadvertently create a situation that would require force-push (e.g. a
+sensitive key in a pushed commit, a large file that should not be in the repo),
+do not proceed — seek human help or abandon the current branch and recreate
+the changes on a fresh branch without rewriting history on the shared one.
 
 ## Additional context
 
-- **Scoring:** Weights live in `scoring_config.yaml` (loaded at runtime).
+- **Scoring:** Weights live in `src/agency_audit/audit/scoring_config.yaml`
+  (loaded at runtime). The file ships inside the wheel. A repo-root copy is
+  also checked for convenience during development.
   Adjust weights there — no code changes needed for tuning
 - **MCP server:** Exposes 5 tools (`get_next_city`, `report_website`,
   `get_unaudited_website`, `submit_audit`, `get_stats`) for agent-driven

@@ -36,13 +36,16 @@ class QCFinding:
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def flag_suspicious_scores() -> list[QCFinding]:
+async def flag_suspicious_scores(country: str | None = None) -> list[QCFinding]:
     """Flag websites with suspicious scores (0 or 100).
 
     Score 0: Usually means the audit didn't gather enough data (no robots.txt,
     no homepage content, etc.) or the site is simply inaccessible.
     Score 100: Could be a legitimate top-tier site, but should be verified
     (potential false positive from default values).
+
+    Args:
+        country: Optional ISO country code to scope the check to.
 
     Returns:
         List of QC findings generated.
@@ -52,13 +55,20 @@ async def flag_suspicious_scores() -> list[QCFinding]:
 
     async with pool.acquire() as conn:
         # Find websites with score 0 or 100 that haven't been QC-checked yet
-        rows = await conn.fetch(
-            """SELECT id, url, score, audit_status
+        query = """SELECT id, url, score, audit_status
                FROM websites
                WHERE (score = 0 OR score = 100)
                  AND audit_status = 'audited'
                  AND (needs_review = false OR qc_checks = '[]'::jsonb)"""
-        )
+        params: list[Any] = []
+        if country:
+            query += (
+                " AND EXISTS (SELECT 1 FROM website_cities wc"
+                " JOIN cities ci ON ci.id = wc.city_id"
+                " WHERE wc.website_id = websites.id AND ci.country = $1)"
+            )
+            params.append(country)
+        rows = await conn.fetch(query, *params)
 
         for row in rows:
             wid = row["id"]
@@ -104,12 +114,15 @@ def _extract_domain(url: str) -> str:
     return domain
 
 
-async def detect_duplicates() -> list[QCFinding]:
+async def detect_duplicates(country: str | None = None) -> list[QCFinding]:
     """Detect websites with the same domain appearing in multiple cities.
 
     A real estate agency might have branches in many cities with the same
     corporate website. This is normal but should be flagged so we don't
     count it as a new discovery each time.
+
+    Args:
+        country: Optional ISO country code to scope the check to.
 
     Returns:
         List of QC findings (one per duplicate group).
@@ -119,19 +132,24 @@ async def detect_duplicates() -> list[QCFinding]:
 
     async with pool.acquire() as conn:
         # Find domains that appear for multiple cities
-        rows = await conn.fetch(
-            """SELECT w.url,
+        query = """SELECT w.url,
                       COUNT(DISTINCT wc.city_id) AS city_count,
                       ARRAY_AGG(DISTINCT c.label ORDER BY c.label) AS cities,
                       ARRAY_AGG(DISTINCT w.id ORDER BY w.id) AS website_ids
                FROM websites w
                JOIN website_cities wc ON wc.website_id = w.id
                JOIN cities c ON c.id = wc.city_id
-               WHERE w.audit_status = 'audited'
-               GROUP BY w.url
-               HAVING COUNT(DISTINCT wc.city_id) > 1
-               ORDER BY city_count DESC"""
+               WHERE w.audit_status = 'audited'"""
+        params: list[Any] = []
+        if country:
+            query += " AND c.country = $1"
+            params.append(country)
+        query += (
+            "\n               GROUP BY w.url"
+            "\n               HAVING COUNT(DISTINCT wc.city_id) > 1"
+            "\n               ORDER BY city_count DESC"
         )
+        rows = await conn.fetch(query, *params)
 
         for row in rows:
             url = row["url"]

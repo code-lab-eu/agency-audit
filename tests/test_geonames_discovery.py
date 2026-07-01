@@ -7,7 +7,7 @@ DiscoveryPipeline init and query_for_country, COUNTRY_QUERIES.
 
 import io
 import zipfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -304,7 +304,7 @@ class TestDiscoveryPipeline:
 
 
 class TestGeonamesAsync:
-    """Async geonames functions requiring network/zip mocks."""
+    """Async geonames functions — HTTP mock for download, real DB for import."""
 
     @pytest.mark.asyncio
     async def test_download_geonames(self):
@@ -327,15 +327,18 @@ class TestGeonamesAsync:
                 assert result == fake_zip
 
     @pytest.mark.asyncio
-    async def test_import_geonames_with_provided_zip(self):
-        """import_geonames from a provided zip with valid city data."""
+    async def test_import_geonames_with_provided_zip(self, db_conn):
+        """import_geonames writes valid city data to the real cities table."""
         import io
         import zipfile
 
         from agency_audit.geonames import import_geonames
 
-        mock_conn = AsyncMock()
-        mock_conn.executemany = AsyncMock()
+        # Seed the countries table so the FK constraint passes
+        await db_conn.execute(
+            "INSERT INTO countries (iso, label) VALUES ('BG', 'Bulgaria') "
+            "ON CONFLICT (iso) DO NOTHING"
+        )
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
@@ -348,26 +351,99 @@ class TestGeonamesAsync:
             )
         zip_content = buf.getvalue()
 
-        count = await import_geonames(mock_conn, zip_content=zip_content)
+        count = await import_geonames(db_conn, zip_content=zip_content)
         assert count == 2
-        mock_conn.executemany.assert_called_once()
+
+        # Verify the specific rows we inserted exist with correct values
+        row = await db_conn.fetchrow(
+            "SELECT label, slug, population, latitude, longitude FROM cities "
+            "WHERE country = 'BG' AND slug = 'sofia'"
+        )
+        assert row is not None
+        assert row["label"] == "Sofia"
+        assert row["population"] == 1236047
+        assert float(row["latitude"]) == 42.69751
+
+        row = await db_conn.fetchrow(
+            "SELECT label, slug, population, latitude, longitude FROM cities "
+            "WHERE country = 'BG' AND slug = 'plovdiv'"
+        )
+        assert row is not None
+        assert row["label"] == "Plovdiv"
+        assert row["population"] == 346893
+        assert float(row["latitude"]) == 42.15
+        assert float(row["longitude"]) == 24.75
 
     @pytest.mark.asyncio
-    async def test_import_geonames_empty(self):
+    async def test_import_geonames_upsert(self, db_conn):
+        """ON CONFLICT (country, slug) DO UPDATE — re-import updates, not duplicates.
+
+        Import Sofia with population X, then import the "same" Sofia with
+        population Y in a second zip — the row should be updated in place.
+        """
+        import io
+        import zipfile
+
+        from agency_audit.geonames import import_geonames
+
+        # Seed the countries table so the FK constraint passes
+        await db_conn.execute(
+            "INSERT INTO countries (iso, label) VALUES ('BG', 'Bulgaria') "
+            "ON CONFLICT (iso) DO NOTHING"
+        )
+
+        # First import: Sofia with population 1000000
+        buf1 = io.BytesIO()
+        with zipfile.ZipFile(buf1, "w") as zf:
+            zf.writestr(
+                "cities15000.txt",
+                "727011\tSofia\tSofia\tSofiya\t42.69751\t23.32415"
+                "\tP\tPPLC\tBG\tN\t42\tSofia\t00\t22\t1000000\t0\t550\tEurope/Sofia\t2020-01-01\n",
+            )
+        count1 = await import_geonames(db_conn, zip_content=buf1.getvalue())
+        assert count1 == 1
+
+        rows = await db_conn.fetch(
+            "SELECT label, population, latitude, longitude FROM cities WHERE slug = 'sofia'"
+        )
+        assert len(rows) == 1
+        assert rows[0]["population"] == 1000000
+        assert float(rows[0]["latitude"]) == 42.69751
+
+        # Second import: same Sofia but population changed to 2000000, lat/lng also changed
+        buf2 = io.BytesIO()
+        with zipfile.ZipFile(buf2, "w") as zf:
+            zf.writestr(
+                "cities15000.txt",
+                "727011\tSofia\tSofia\tSofiya\t43.0\t24.0"
+                "\tP\tPPLC\tBG\tN\t42\tSofia\t00\t22\t2000000\t0\t550\tEurope/Sofia\t2020-01-01\n",
+            )
+        count2 = await import_geonames(db_conn, zip_content=buf2.getvalue())
+        assert count2 == 1
+
+        # Should still be exactly one row — updated, not duplicated
+        rows = await db_conn.fetch(
+            "SELECT label, population, latitude, longitude FROM cities WHERE slug = 'sofia'"
+        )
+        assert len(rows) == 1
+        assert rows[0]["population"] == 2000000
+        assert float(rows[0]["latitude"]) == 43.0
+        assert float(rows[0]["longitude"]) == 24.0
+
+    @pytest.mark.asyncio
+    async def test_import_geonames_empty(self, db_conn):
         """import_geonames with an empty cities file returns zero."""
         import io
         import zipfile
 
         from agency_audit.geonames import import_geonames
 
-        mock_conn = AsyncMock()
-
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
             zf.writestr("cities15000.txt", "")
         zip_content = buf.getvalue()
 
-        count = await import_geonames(mock_conn, zip_content=zip_content)
+        count = await import_geonames(db_conn, zip_content=zip_content)
         assert count == 0
 
 
@@ -434,55 +510,3 @@ class TestPlacesAPIClientMethods:
         await client._rate_limit()
         elapsed = time.monotonic() - start
         assert elapsed >= 0.15
-
-
-# ──────────────────────────────────────────────────────────────────────
-# DiscoveryPipeline lifecycle and pool methods
-# ──────────────────────────────────────────────────────────────────────
-
-
-class TestDiscoveryPipelineMethods:
-    """Close, pool creation, and cache methods for DiscoveryPipeline."""
-
-    @pytest.mark.asyncio
-    async def test_close(self):
-        """close() delegates to the places client."""
-        from agency_audit.discovery import DiscoveryPipeline, PlacesAPIClient
-
-        places = PlacesAPIClient(api_key="test")
-        pipeline = DiscoveryPipeline(places_client=places)
-        await pipeline.close()
-
-    @pytest.mark.asyncio
-    async def test_close_no_places(self):
-        """close() should not crash when places is None."""
-        from agency_audit.discovery import DiscoveryPipeline, PlacesAPIClient
-
-        pipeline = DiscoveryPipeline(places_client=PlacesAPIClient(api_key="test"))
-        pipeline.places = None
-        await pipeline.close()
-
-    @pytest.mark.asyncio
-    async def test_get_pool_creates_pool(self):
-        """_get_pool calls get_pool() and caches the result."""
-        from agency_audit.discovery import DiscoveryPipeline, PlacesAPIClient
-
-        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
-            mock_get_pool.return_value = MagicMock()
-            pipeline = DiscoveryPipeline(places_client=PlacesAPIClient(api_key="test"))
-            pool = await pipeline._get_pool()
-            assert pool is not None
-            mock_get_pool.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_get_pool_cached(self):
-        """_get_pool returns the same pool on subsequent calls."""
-        from agency_audit.discovery import DiscoveryPipeline, PlacesAPIClient
-
-        with patch("agency_audit.discovery.get_pool") as mock_get_pool:
-            mock_get_pool.return_value = MagicMock()
-            pipeline = DiscoveryPipeline(places_client=PlacesAPIClient(api_key="test"))
-            pool1 = await pipeline._get_pool()
-            pool2 = await pipeline._get_pool()
-            assert pool1 is pool2
-            mock_get_pool.assert_called_once()

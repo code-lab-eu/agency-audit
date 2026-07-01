@@ -9,6 +9,7 @@ by country, with timing stats).
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -288,6 +289,4 @@ async def get_progress() -> dict[str, Any]:
 
 def _make_json(obj: Any) -> str:
     """Serialize an object to JSON string for JSONB storage."""
-    import json
-
     return json.dumps(obj, default=str)

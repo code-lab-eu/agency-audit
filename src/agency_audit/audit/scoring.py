@@ -3,14 +3,30 @@
 The scoring config is externalized in a YAML file (scoring_config.yaml)
 so weights can be adjusted without code changes.
 
+At runtime the loader checks paths in this order:
+
+1. ``AGENCY_AUDIT_SCORING_CONFIG_PATH`` env var (explicit override)
+2. ``scoring_config.yaml`` in the current working directory (dev convenience)
+3. ``config/scoring_config.yaml``
+4. Repo root (for development checkouts)
+5. Packaged ``scoring_config.yaml`` inside the package (final fallback)
+
+The first valid dict wins; missing / unparseable files are skipped with a warning.
+
 Score is a signed integer (0-100 typical, negative possible for unsuitable sites).
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+import yaml
+
 from agency_audit.audit.models import AuditData
+from agency_audit.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Default scoring config — used if no YAML config file is found
 DEFAULT_CONFIG: dict = {
@@ -47,37 +63,79 @@ DEFAULT_CONFIG: dict = {
     "max_score": 100,
 }
 
-# Path to the externalized config file
+# Paths tried in order — first match wins.
+# 1. CWD (convenience override during dev)
+# 2. CWD/config/
+# 3. Repo root  (four levels up from src/agency_audit/audit/scoring.py)
+# 4. Package dir (ships with the wheel — final fallback)
 CONFIG_FILE_PATHS = [
     Path("scoring_config.yaml"),
     Path("config/scoring_config.yaml"),
+    Path(__file__).parent.parent.parent.parent / "scoring_config.yaml",
     Path(__file__).parent / "scoring_config.yaml",
-    Path(__file__).parent.parent.parent / "scoring_config.yaml",
 ]
+
+
+def _try_load_config(path: Path) -> dict | None:
+    """Try to load a scoring config dict from a YAML file at *path*.
+
+    Returns the merged config on success, ``None`` if the file cannot
+    be parsed as a dict.  Malformed YAML and non-dict content both
+    produce a warning and return ``None``.
+    """
+    try:
+        with open(path) as f:
+            user_config = yaml.safe_load(f)
+    except yaml.YAMLError, OSError:
+        logger.warning(
+            "Failed to parse %s — skipping",
+            path,
+            exc_info=True,
+        )
+        return None
+
+    if not isinstance(user_config, dict):
+        logger.warning(
+            "Scoring config at %s is not a dict (got %s) — skipping",
+            path,
+            type(user_config).__name__,
+        )
+        return None
+
+    merged = DEFAULT_CONFIG.copy()
+    merged.update(user_config)
+    return merged
 
 
 def load_scoring_config() -> dict:
     """Load scoring config from YAML file, or fall back to defaults.
 
-    Searches standard paths for scoring_config.yaml.
+    Checks ``AGENCY_AUDIT_SCORING_CONFIG_PATH`` first (if configured),
+    then searches standard paths for ``scoring_config.yaml``.  If no
+    usable file is found, returns the hard-coded defaults without an
+    error.  Unparseable YAML or non-dict content in any candidate file
+    produces a warning but does not stop the search — the next path is
+    tried.
     """
-    # Try to load YAML config
-    try:
-        import yaml  # type: ignore[import-untyped]
+    # 1. Explicit path via env var
+    if settings.scoring_config_path:
+        explicit = Path(settings.scoring_config_path)
+        if explicit.exists():
+            config = _try_load_config(explicit)
+            if config is not None:
+                return config
+        else:
+            logger.warning(
+                "AGENCY_AUDIT_SCORING_CONFIG_PATH is set to %s but the file does not exist",
+                settings.scoring_config_path,
+            )
 
-        for path in CONFIG_FILE_PATHS:
-            if path.exists():
-                with open(path) as f:
-                    user_config = yaml.safe_load(f)
-                if user_config:
-                    # Merge with defaults — user config overrides
-                    merged = DEFAULT_CONFIG.copy()
-                    merged.update(user_config)
-                    return merged
-    except ImportError:
-        pass
-    except Exception:
-        pass
+    # 2. Standard search paths
+    for path in CONFIG_FILE_PATHS:
+        if path.exists():
+            config = _try_load_config(path)
+            if config is not None:
+                return config
 
     return DEFAULT_CONFIG.copy()
 

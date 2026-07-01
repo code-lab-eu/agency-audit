@@ -6,7 +6,8 @@ build-backend = "hatchling.build"
 name = "agency-audit"
 version = "0.1.0"
 description = "Real Estate Radar — Website Discovery & Audit System"
-requires-python = ">=3.12"
+license = "AGPL-3.0-only"
+requires-python = ">=3.14"
 dependencies = [
     "asyncpg>=0.30",
     "fastapi>=0.115",
@@ -17,9 +18,11 @@ dependencies = [
     "playwright>=1.49",
     "typer>=0.15",
     "rich>=13.9",
-    "fastmcp>=0.1",
+    "fastmcp>=3.4,<4.0",
     "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
     "pyyaml>=6.0",
+    "python-json-logger>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +30,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.25",
     "pytest-cov>=7.1",
+    "testcontainers[postgres]>=4.14.2",
     "hypothesis>=6.0",
     "ruff>=0.8",
     "mypy>=1.0",
@@ -40,7 +44,7 @@ agency-audit-mcp = "agency_audit.mcp_server:main"
 packages = ["src/agency_audit"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
@@ -54,7 +58,7 @@ testpaths = ["tests"]
 quote-style = "double"
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 namespace_packages = true
 explicit_package_bases = true
 ignore_missing_imports = true
@@ -70,11 +74,12 @@ omit = [
 ]
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 89
 show_missing = true
 skip_covered = false
 
 [dependency-groups]
 dev = [
     "pytest-cov>=7.1.0",
+    "testcontainers[postgres]>=4.14.2",
 ]

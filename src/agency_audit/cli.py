@@ -1,6 +1,7 @@
 """Typer CLI for agency-audit."""
 
 import asyncio
+import json
 from pathlib import Path
 
 import asyncpg
@@ -123,20 +124,68 @@ def import_geonames_cmd(
 
 @app.command("serve")
 def serve(
-    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Bind address"),
-    port: int = typer.Option(8000, "--port", "-p", help="Port number"),
+    host: str = typer.Option(settings.serve_host, "--host", "-h", help="Bind address"),
+    port: int = typer.Option(settings.serve_port, "--port", "-p", help="Port number"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload"),
+    log_level: str = typer.Option(
+        None,
+        "--log-level",
+        help="Override AGENCY_AUDIT_LOG_LEVEL (default: INFO)",
+    ),
 ):
-    """Start the FastAPI + HTMX web dashboard."""
+    """Start the FastAPI + HTMX web dashboard.
+
+    Structured JSON logging is enabled by default (set AGENCY_AUDIT_LOG_FORMAT=console
+    for human-readable output). The server handles SIGTERM/SIGINT gracefully: it stops
+    accepting new requests, finishes in-flight ones, and closes the database pool.
+    """
+    import signal
+
     import uvicorn
 
+    from agency_audit.logging_config import setup_logging
+
+    # Allow CLI flag to override env setting
+    if log_level is not None:
+        settings.log_level = log_level
+
+    setup_logging()
+
     console.print(f"[cyan]Starting Agency Audit dashboard on http://{host}:{port} ...[/]")
-    uvicorn.run(
+    if settings.log_format == "json":
+        console.print("[dim]Logging in JSON format to stdout[/]")
+
+    # Use uvicorn's programmatic config so we can hook into the server lifecycle
+    config = uvicorn.Config(
         "agency_audit.web.app:app",
         host=host,
         port=port,
         reload=reload,
+        log_config=None,  # we manage logging ourselves
+        log_level=settings.log_level.lower(),
     )
+    server = uvicorn.Server(config)
+
+    # Install signal handlers that tell uvicorn to shut down gracefully.
+    # uvicorn will stop accepting new connections, drain in-flight requests,
+    # and then exit.
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda sig_num, frame: server.handle_exit(sig_num, frame))
+
+    # We need to close the pool AFTER uvicorn's shutdown lifecycle completes.
+    # The simplest way: run uvicorn, then close the pool.
+    try:
+        server.run()
+    finally:
+        import asyncio
+
+        async def _close_pool():
+            from agency_audit.db import close_pool as _cp
+
+            await _cp()
+
+        asyncio.run(_close_pool())
+        console.print("[dim]Database pool closed[/]")
 
 
 # --- discover ----------------------------------------------------------------
@@ -166,9 +215,11 @@ def audit(
         console.print("[red]Either --website-id or --url is required.[/]")
         raise typer.Exit(1)
 
-    async def _run():
-        import json
+    if output == "db" and website_id is None:
+        console.print("[red]Error: --output db requires --website-id[/]")
+        raise typer.Exit(1)
 
+    async def _run():
         from agency_audit.audit.auditor import audit_website
 
         target_url = url
@@ -301,8 +352,6 @@ def batch_audit(
     url_list = [u.strip() for u in urls.split(",") if u.strip()]
 
     async def _run():
-        import json
-
         from agency_audit.audit.auditor import audit_websites
 
         console.print(f"[cyan]Auditing {len(url_list)} websites (concurrency={concurrency})...[/]")
@@ -428,6 +477,9 @@ def discover(
     website_cities. All operations are logged in discovery_log.
     """
 
+    # Fail fast if no API key is configured
+    settings.ensure_ready_for("discovery")
+
     async def _run():
         from agency_audit.discovery import run_discovery
 
@@ -489,6 +541,12 @@ def run_cmd(
     skip_reaudit: bool = typer.Option(False, "--skip-reaudit", help="Skip re-audit scheduling"),
 ):
     """Execute full operational loop for one country: discover → audit → QC → re-audit."""
+    # Fail fast if critical configuration is missing
+    if skip_discovery:
+        settings.ensure_ready_for("db")
+    else:
+        settings.ensure_ready_for("all")
+
     from agency_audit.loop.orchestrator import run_country
 
     async def _run():

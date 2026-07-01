@@ -35,6 +35,42 @@ def test_config_dsn_no_password():
     assert s.dsn == "postgresql://testuser@localhost:5432/testdb"
 
 
+def test_config_dsn_special_chars_in_password():
+    """URL-encode special characters (@, :, /, %) in password."""
+
+    from agency_audit.config import Settings
+
+    password = "p@ss:word/with%chars"
+    s = Settings(
+        pg_host="localhost",
+        pg_port=5432,
+        pg_user="agency_audit",
+        pg_password=password,
+        pg_database="agency_audit",
+    )
+    # @ → %40, : → %3A, / → %2F, % → %25
+    expected = "postgresql://agency_audit:p%40ss%3Aword%2Fwith%25chars@localhost:5432/agency_audit"
+    assert s.dsn == expected
+
+
+def test_config_dsn_special_chars_in_user():
+    """URL-encode special characters (@, :, /, %) in username."""
+
+    from agency_audit.config import Settings
+
+    username = "us@r:n/me%"
+    s = Settings(
+        pg_host="localhost",
+        pg_port=5432,
+        pg_user=username,
+        pg_password="plainpass",
+        pg_database="testdb",
+    )
+    # @ → %40, : → %3A, / → %2F, % → %25
+    expected = "postgresql://us%40r%3An%2Fme%25:plainpass@localhost:5432/testdb"
+    assert s.dsn == expected
+
+
 def test_country_count():
     """Verify exactly 44 countries in seed data."""
     seed_path = (
