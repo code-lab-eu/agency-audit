@@ -53,11 +53,8 @@ async def get_reaudit_queue(
 
     query = """SELECT w.id, w.url, w.label, w.score,
                       w.last_audited_at,
-                      EXTRACT(DAY FROM now() - w.last_audited_at)::int AS age_days,
-                      c.country
+                      EXTRACT(DAY FROM now() - w.last_audited_at)::int AS age_days
                FROM websites w
-               JOIN website_cities wc ON wc.website_id = w.id
-               JOIN cities c ON c.id = wc.city_id
                WHERE w.audit_status = 'audited'
                  AND w.needs_review = false
                  AND (w.last_audited_at < $1 OR w.last_audited_at IS NULL)
@@ -65,7 +62,11 @@ async def get_reaudit_queue(
     params: list[Any] = [cutoff]
 
     if country:
-        query += " AND c.country = $2"
+        query += (
+            " AND EXISTS (SELECT 1 FROM website_cities wc"
+            " JOIN cities ci ON ci.id = wc.city_id"
+            " WHERE wc.website_id = w.id AND ci.country = $2)"
+        )
         params.append(country)
 
     query += " ORDER BY w.last_audited_at ASC NULLS FIRST LIMIT $" + str(len(params) + 1)
@@ -84,7 +85,7 @@ async def get_reaudit_queue(
             if row["last_audited_at"]
             else None,
             "age_days": int(row["age_days"]) if row["age_days"] else None,
-            "country": row["country"],
+            "country": country or "",
         }
         for row in rows
     ]
@@ -120,13 +121,15 @@ async def schedule_reaudits(
                 """SELECT w.id, w.url, w.score,
                           EXTRACT(DAY FROM now() - w.last_audited_at)::int AS age_days
                    FROM websites w
-                   JOIN website_cities wc ON wc.website_id = w.id
-                   JOIN cities c ON c.id = wc.city_id
                    WHERE w.audit_status = 'audited'
                      AND w.needs_review = false
                      AND (w.last_audited_at < $1 OR w.last_audited_at IS NULL)
                      AND w.audit_attempts < 3
-                     AND c.country = $2
+                     AND EXISTS (
+                       SELECT 1 FROM website_cities wc
+                       JOIN cities ci ON ci.id = wc.city_id
+                       WHERE wc.website_id = w.id AND ci.country = $2
+                     )
                    ORDER BY w.last_audited_at ASC NULLS FIRST
                    LIMIT $3""",
                 cutoff,

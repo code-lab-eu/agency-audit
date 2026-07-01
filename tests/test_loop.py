@@ -510,6 +510,68 @@ class TestReaudit:
         assert row["audit_status"] == "pending"
         assert row["audit_attempts"] == 0, "re-audit scheduling should reset audit_attempts to 0"
 
+    async def test_schedule_reaudits_deduplicates_multi_city_website(
+        self, db_conn: asyncpg.Connection
+    ):
+        """A website linked to two cities in the same country should be queued once."""
+        from datetime import UTC, datetime, timedelta
+
+        from agency_audit.loop.reaudit import schedule_reaudits
+
+        # Seed one website linked to two test-country cities
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Insert second test city
+            await conn.fetchval(
+                "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
+                "VALUES ($1, 'Test City 2', 'test-city-2', 2000, 1, 1) "
+                "ON CONFLICT (country, slug) DO UPDATE SET id = cities.id "
+                "RETURNING id",
+                TEST_COUNTRY,
+            )
+            old_date = datetime.now(UTC) - timedelta(days=45)
+            url = f"{TEST_URL_PREFIX}multi-city-agency"
+            wid = await conn.fetchval(
+                """INSERT INTO websites (url, label, score, audit_status, last_audited_at)
+                   VALUES ($1, 'Multi-City Agency', 80, 'audited', $2)
+                   ON CONFLICT (url) DO UPDATE
+                   SET score = 80, audit_status = 'audited', last_audited_at = $2
+                   RETURNING id""",
+                url,
+                old_date,
+            )
+            city1_id = await conn.fetchval(
+                "SELECT id FROM cities WHERE country = $1 AND slug = 'test-city'",
+                TEST_COUNTRY,
+            )
+            city2_id = await conn.fetchval(
+                "SELECT id FROM cities WHERE country = $1 AND slug = 'test-city-2'",
+                TEST_COUNTRY,
+            )
+            # Link to both cities
+            await conn.execute(
+                """INSERT INTO website_cities (website_id, city_id)
+                   VALUES ($1, $2), ($1, $3)
+                   ON CONFLICT (website_id, city_id) DO NOTHING""",
+                wid,
+                city1_id,
+                city2_id,
+            )
+
+        result = await schedule_reaudits(interval_days=30, limit=10, country=TEST_COUNTRY)
+
+        # The website is in two cities but should only be queued once
+        assert result["queued"] == 1, (
+            f"Expected 1 website queued (deduplicated), got: {result['queued']}"
+        )
+
+        # Verify the website was reset to pending
+        row = await db_conn.fetchrow(
+            "SELECT audit_status, audit_attempts FROM websites WHERE id = $1", wid
+        )
+        assert row is not None
+        assert row["audit_status"] == "pending"
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Tracking tests
