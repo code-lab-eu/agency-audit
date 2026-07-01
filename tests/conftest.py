@@ -94,18 +94,36 @@ def _ensure_migrations(postgres_dsn: str) -> None:
 
 @pytest.fixture(scope="session")
 def _ensure_seed_data(_ensure_migrations: None, postgres_dsn: str) -> None:
-    """Seed baseline data (countries + sample cities) once per session.
+    """Reset the database to a known, deterministic baseline once per session.
 
-    Mirrors what ``scripts/seed-test-db.py`` does so tests can rely on
-    a known set of countries and cities without depending on external
-    setup.  Uses a committed connection (no transaction wrapper) so the
-    rows are visible to every test's own connections.
+    Clears every mutable table (discovery_log, website_cities, websites,
+    cities), resets country active flags, then loads the canonical seed
+    data.  Uses a committed connection so the clean slate is visible to
+    every test's own connections — no ambient data can leak into
+    assertions.
+
+    After this fixture, the database contains exactly:
+
+    * 44 countries (4 active: BE, BG, ES, RS)
+    * 20 cities (all BG, all ``discovery_status = 'pending'``)
+    * 0 websites, 0 website_cities rows, 0 discovery_log rows
     """
     ROOT = Path(__file__).resolve().parents[1]
 
     async def _seed() -> None:
         conn = await asyncpg.connect(dsn=postgres_dsn)
         try:
+            # Phase 1: Clean — order respects FK constraints so no
+            # cascades mask missing dependent rows.  Delete countries
+            # (not just flip active flags) so the seed INSERT below
+            # creates fresh rows with the correct active values.
+            await conn.execute("DELETE FROM discovery_log")
+            await conn.execute("DELETE FROM website_cities")
+            await conn.execute("DELETE FROM websites")
+            await conn.execute("DELETE FROM cities")
+            await conn.execute("DELETE FROM countries")
+
+            # Phase 2: Seed the canonical data.
             countries_sql = (ROOT / "src" / "agency_audit" / "seed" / "countries.sql").read_text(
                 encoding="utf-8"
             )
