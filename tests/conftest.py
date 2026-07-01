@@ -5,11 +5,11 @@ require a live PostgreSQL database.
 
 Architecture
 ------------
-- ``postgres_dsn`` (session, sync) — starts a disposable PostgreSQL 16
+- ``postgres_dsn`` (session, sync) — starts a disposable PostgreSQL
   container via testcontainers when Docker is available, otherwise falls
   back to a local PostgreSQL instance configured via ``AGENCY_AUDIT_*``
   environment variables.  When Docker is used, the image is
-  ``postgres:16-alpine``.
+  ``postgres:18-alpine``.
 - ``_ensure_migrations`` (session, sync) — applies all project migrations
   exactly once per session.  Any migration failure propagates as a hard
   error.
@@ -94,7 +94,7 @@ def postgres_dsn() -> str:
     if _docker_available():
         from testcontainers.postgres import PostgresContainer
 
-        container = PostgresContainer("postgres:16-alpine")
+        container = PostgresContainer("postgres:18-alpine")
         container.start()
         postgres_dsn._tc_container = container  # type: ignore[attr-defined]
         # testcontainers returns "postgresql+psycopg2://..."; asyncpg
