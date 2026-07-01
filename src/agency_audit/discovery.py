@@ -19,7 +19,7 @@ import httpx
 
 from agency_audit.config import settings
 from agency_audit.db import get_pool
-from agency_audit.discovery_geo import Rectangle, bbox_from_center
+from agency_audit.discovery_geo import Rectangle, bbox_from_center, is_saturated, subdivide
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,23 @@ class PlaceResult:
     user_ratings_total: int | None = None
 
 
+@dataclass
+class TextSearchResult:
+    """Outcome of a (possibly paginated) Places Text Search.
+
+    ``budget_truncated`` is True *only* when pagination stopped because the
+    ``max_requests`` cap was reached while the API had already handed back a
+    ``nextPageToken`` — i.e. a known next page existed but could not be
+    fetched.  It is never set for a search that ran to natural completion or
+    that stopped for any other reason (``max_results``, no further pages, a
+    timeout).  Callers can therefore trust it as an explicit truncation
+    signal rather than inferring truncation from request counts.
+    """
+
+    places: list[PlaceResult]
+    budget_truncated: bool = False
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Places API Client
 # ──────────────────────────────────────────────────────────────────────
@@ -119,6 +136,7 @@ class PlacesAPIClient:
         self._client: httpx.AsyncClient | None = None
         self._request_count = 0
         self._last_request_time = 0.0
+        self.api_call_count = 0
 
     def _load_api_key(self) -> str:
         """Load API key from application settings (env var or .env)."""
@@ -154,7 +172,8 @@ class PlacesAPIClient:
         radius: int = DEFAULT_RADIUS,
         max_results: int | None = None,
         location_restriction: Rectangle | None = None,
-    ) -> list[PlaceResult]:
+        max_requests: int | None = None,
+    ) -> TextSearchResult:
         """Search Google Maps Places API for a text query.
 
         Handles pagination up to max_results (default from settings,
@@ -170,18 +189,37 @@ class PlacesAPIClient:
                 When provided, emits ``locationRestriction.rectangle`` in
                 the POST body and **omits** ``locationBias`` — the two are
                 mutually exclusive in the Places API.
+            max_requests: Maximum number of paginated HTTP requests this
+                call is allowed to make.  When set, the pagination loop
+                stops after this many POSTs even if more results are
+                available.  A value of 0 means the call is a no-op that
+                returns an empty result without touching the API.
 
-        Returns up to max_results PlaceResult objects.
+        Returns a TextSearchResult holding up to max_results PlaceResult
+        objects and a ``budget_truncated`` flag (see TextSearchResult).
         """
         if max_results is None:
             max_results = settings.places_max_results
+
+        if max_requests is not None and max_requests <= 0:
+            return TextSearchResult(places=[])
+
         await self._rate_limit()
 
         client = await self._ensure_client()
         results: list[PlaceResult] = []
         next_page_token: str | None = None
+        requests_made = 0
+        budget_truncated = False
 
         while len(results) < max_results:
+            if max_requests is not None and requests_made >= max_requests:
+                # We only re-enter the loop when the previous page returned a
+                # nextPageToken (otherwise we'd have broken below), so hitting
+                # the request cap here means a known next page exists that we
+                # are deliberately not fetching — a genuine budget truncation.
+                budget_truncated = True
+                break
             body: dict[str, Any] = {
                 "textQuery": query,
                 "pageSize": min(20, max_results - len(results)),
@@ -216,6 +254,8 @@ class PlacesAPIClient:
 
             try:
                 resp = await client.post(self.BASE_URL, json=body)
+                self.api_call_count += 1
+                requests_made += 1
                 resp.raise_for_status()
                 data = resp.json()
             except httpx.HTTPStatusError as e:
@@ -247,7 +287,7 @@ class PlacesAPIClient:
                 break
 
         logger.info(f"Places API search '{query}': got {len(results)} results")
-        return results[:max_results]
+        return TextSearchResult(places=results[:max_results], budget_truncated=budget_truncated)
 
     async def _rate_limit(self):
         """Simple rate limiting — max 5 QPS for Text Search."""
@@ -452,6 +492,114 @@ class DiscoveryPipeline:
             half_extent_m=settings.places_city_half_extent_meters,
         )
 
+    async def search_tiled(
+        self,
+        query: str,
+        city: dict[str, Any],
+    ) -> list[PlaceResult]:
+        """Search the city's viewport recursively via tiled Text Search.
+
+        The city's viewport is subdivided into a quadtree.  A tile whose
+        result count meets or exceeds ``places_tile_saturation_threshold``
+        is subdivided into 4 quadrants and each is searched independently
+        — up to ``places_tile_max_depth`` levels deep.  Tiles that return
+        fewer results are kept as-is.
+
+        A per-city API-call counter stops subdivision once
+        ``places_max_calls_per_city`` is reached; skipped tiles are logged
+        explicitly (not silently truncated).  Results are deduplicated by
+        ``place_id``.
+        """
+        viewport = await self.resolve_city_viewport(city)
+        call_count = 0
+        skipped_tiles = 0
+        truncated_tiles = 0
+        max_calls = settings.places_max_calls_per_city
+        max_depth = settings.places_tile_max_depth
+        sat_threshold = settings.places_tile_saturation_threshold
+        city_label = str(city.get("label", "unknown"))
+
+        async def _search_recursive(
+            tile: Rectangle,
+            depth: int,
+        ) -> list[PlaceResult]:
+            nonlocal call_count, skipped_tiles, truncated_tiles
+
+            if call_count >= max_calls:
+                skipped_tiles += 1
+                return []
+
+            remaining = max_calls - call_count
+            before = self.places.api_call_count
+            search = await self.places.search_text(
+                query=query,
+                location_restriction=tile,
+                max_requests=remaining,
+            )
+            after = self.places.api_call_count
+            call_count += after - before
+            results = search.places
+
+            # search_text tells us explicitly whether pagination was cut off
+            # because the request budget ran out with another page pending.
+            # The saturation signal below is unreliable for such tiles, so
+            # surface the truncation instead of guessing from request counts.
+            if search.budget_truncated:
+                truncated_tiles += 1
+                logger.debug(
+                    "Tiled search for %s: budget truncated pagination for tile "
+                    "(depth=%d, %d results kept — more were available)",
+                    city_label,
+                    depth,
+                    len(results),
+                )
+
+            if (
+                is_saturated(len(results), sat_threshold)
+                and depth < max_depth
+                and call_count < max_calls
+            ):
+                child_results: list[PlaceResult] = []
+                for child in subdivide(tile):
+                    child_results.extend(await _search_recursive(child, depth + 1))
+                return results + child_results
+
+            if (
+                is_saturated(len(results), sat_threshold)
+                and depth < max_depth
+                and call_count >= max_calls
+            ):
+                # Budget exhausted — children of this saturated tile are skipped.
+                # Each would have hit the top-of-function guard and been counted
+                # individually, so add 4 now.
+                skipped_tiles += 4
+
+            return results
+
+        all_results = await _search_recursive(viewport, 0)
+
+        if skipped_tiles > 0 or truncated_tiles > 0:
+            parts = []
+            if skipped_tiles > 0:
+                parts.append(f"{skipped_tiles} tiles skipped")
+            if truncated_tiles > 0:
+                parts.append(f"{truncated_tiles} tiles budget-truncated")
+            logger.warning(
+                "Tiled search for %s: budget exhausted — %s",
+                city_label,
+                ", ".join(parts),
+            )
+
+        # Deduplicate by place_id, preserving first occurrence
+        seen: set[str] = set()
+        deduped: list[PlaceResult] = []
+        for r in all_results:
+            if r.place_id and r.place_id not in seen:
+                deduped.append(r)
+                seen.add(r.place_id)
+
+        return deduped
+
     async def query_for_country(self, country_iso: str) -> list[str]:
         """Get search query templates for a country."""
         return COUNTRY_QUERIES.get(country_iso, ["real estate agent"])
@@ -482,10 +630,11 @@ class DiscoveryPipeline:
 
             try:
                 if self.places.available:
-                    places = await self.places.search_text(
+                    search = await self.places.search_text(
                         query=search_query,
                         location_bias=location,
                     )
+                    places = search.places
                 else:
                     logger.warning(f"Places API not available for {city_label}")
                     break
