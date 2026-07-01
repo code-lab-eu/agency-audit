@@ -201,3 +201,47 @@ class TestMigrationSkip:
         mock_tx.__aenter__.assert_called()
         # ...and the failure causes __aexit__ to be called with exception info
         mock_tx.__aexit__.assert_called()
+
+
+# ── migration-specific tests ─────────────────────────────────────────────────
+
+
+class TestViewportMigration:
+    """Prove 005_add_city_viewport.sql is registered and applies correctly."""
+
+    @pytest.mark.asyncio
+    async def test_viewport_migration_applies(self):
+        """The real 005 migration adds four NUMERIC(9,6) columns to cities."""
+
+        # Simulate a DB where migrations 000-004 are already applied and
+        # only 005 remains unapplied.  Point run_migrations at the *real*
+        # migrations directory so the test proves the file on disk is correct.
+        def _fetchval_side_effect(_sql, version):
+            # True = already applied (skip); False = apply it.
+            # Only 005 is unapplied in this simulated database.
+            return version != "005_add_city_viewport.sql"
+
+        mock_conn, _mock_tx = _make_connection(
+            fetchval_side_effect=_fetchval_side_effect,
+        )
+
+        migrations_dir = Path(__file__).parent.parent / "src/agency_audit/migrations"
+        result = await run_migrations(mock_conn, migrations_dir)
+
+        assert result == ["005_add_city_viewport.sql"]
+
+        # The SQL + the INSERT into schema_migrations = 2 execute calls
+        assert mock_conn.execute.call_count == 2
+
+        # Verify the SQL content was passed to execute
+        sql_call = mock_conn.execute.call_args_list[0]
+        assert "viewport_low_lat" in sql_call.args[0]
+        assert "viewport_low_lng" in sql_call.args[0]
+        assert "viewport_high_lat" in sql_call.args[0]
+        assert "viewport_high_lng" in sql_call.args[0]
+        assert "NUMERIC(9, 6)" in sql_call.args[0]
+
+        # Verify the version was recorded
+        insert_call = mock_conn.execute.call_args_list[1]
+        assert "schema_migrations" in insert_call.args[0]
+        assert insert_call.args[1] == "005_add_city_viewport.sql"
