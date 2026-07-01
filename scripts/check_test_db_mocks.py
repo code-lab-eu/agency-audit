@@ -60,7 +60,6 @@ ALLOWED: dict[str, str] = {
 KNOWN_DEBT: set[str] = {
     "test_loop.py",
     "test_loop_coverage.py",
-    "test_orchestrator_errors.py",
 }
 
 IGNORE_MARKER = "db-mock-check: ignore"
