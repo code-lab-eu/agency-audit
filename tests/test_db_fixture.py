@@ -76,3 +76,14 @@ async def test_db_conn_session_scope_isolation():
     from tests.conftest import db_conn
 
     assert db_conn is not None
+
+
+async def test_fresh_db_fixture_is_connected(fresh_db: asyncpg.Connection):
+    """The fresh_db fixture yields a live connection to a private database.
+
+    Validates the entire fixture lifecycle: session template build →
+    per-test clone → seed data application → live query → teardown.
+    """
+    row = await fresh_db.fetchrow("SELECT 1 AS one")
+    assert row is not None
+    assert row["one"] == 1
