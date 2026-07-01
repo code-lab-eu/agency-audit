@@ -62,7 +62,6 @@ KNOWN_DEBT: set[str] = {
     "test_loop.py",
     "test_loop_coverage.py",
     "test_orchestrator_errors.py",
-    "test_web_app.py",
 }
 
 IGNORE_MARKER = "db-mock-check: ignore"
