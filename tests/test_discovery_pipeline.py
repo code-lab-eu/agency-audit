@@ -8,9 +8,9 @@ Real-database tests follow the pattern from test_cli_commands.py:
 accept the shared db_conn (sentinel), postgres_dsn (fixture DB), and
 monkeypatch (to point get_pool() at the same DB).  Each test seeds its
 own cities on a separate auto-committing postgres_dsn connection so the
-pipeline's pool connections can see them.  The per-task database is
-disposable (created fresh, torn down after all tests), so no per-test
-cleanup is needed — each test uses unique slugs and country codes.
+pipeline's pool connections can see them.  A per-test cleanup fixture
+removes test-owned rows after each test so the developer's database
+stays clean on the non-Docker fallback path.
 """
 
 from __future__ import annotations
@@ -228,8 +228,35 @@ class TestDiscoveryPipelineDB:
     Each test seeds its own cities on a separate auto-committing
     connection (postgres_dsn) so the pipeline's pool connections can
     see them, and monkeypatches settings so get_pool() connects to the
-    fixture database.
+    fixture database.  A per-test cleanup fixture removes test-owned
+    rows after each test so the developer's database stays clean on
+    the non-Docker fallback path.
     """
+
+    @pytest.fixture(autouse=True)
+    async def _cleanup_test_data(self, postgres_dsn: str):  # type: ignore[return-type]
+        """Remove test-owned rows that outlive db_conn's rollback.
+
+        Tests seed data via auto-committing connections so the pipeline's
+        pool connections can see committed rows.  This fixture deletes
+        them on teardown: cities by slug pattern (CASCADE removes
+        website_cities, SET NULL on discovery_log), then orphaned
+        websites, then test-owned countries.
+        """
+        yield
+        cleanup_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            await cleanup_conn.execute(
+                "DELETE FROM cities WHERE slug LIKE 'test-%' OR slug LIKE 'done-city-%'"
+            )
+            await cleanup_conn.execute(
+                "DELETE FROM websites "
+                "WHERE id NOT IN (SELECT DISTINCT website_id FROM website_cities) "
+                "AND url LIKE 'https://test-%'"
+            )
+            await cleanup_conn.execute("DELETE FROM countries WHERE iso IN ('ZZ', 'YY')")
+        finally:
+            await cleanup_conn.close()
 
     # ── Basic flow ───────────────────────────────────────────────────
 
