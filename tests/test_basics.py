@@ -89,3 +89,30 @@ def test_geonames_slugify():
     assert _slugify("Veliko Turnovo") == "veliko-turnovo"
     assert _slugify("São Paulo") == "sao-paulo"
     assert _slugify("Düsseldorf") == "dusseldorf"
+
+
+def test_places_tiling_config_defaults() -> None:
+    """Places tiling knobs load with their documented defaults."""
+    from agency_audit.config import Settings
+
+    s = Settings()
+    assert s.places_tile_max_depth == 3
+    assert s.places_tile_saturation_threshold == 60
+    assert s.places_max_calls_per_city == 200
+    assert s.places_city_half_extent_meters == 15000
+
+
+def test_places_tiling_config_env_override(monkeypatch) -> None:
+    """Places tiling knobs honour AGENCY_AUDIT_* environment overrides."""
+    from agency_audit.config import Settings
+
+    monkeypatch.setenv("AGENCY_AUDIT_PLACES_TILE_MAX_DEPTH", "7")
+    monkeypatch.setenv("AGENCY_AUDIT_PLACES_TILE_SATURATION_THRESHOLD", "80")
+    monkeypatch.setenv("AGENCY_AUDIT_PLACES_MAX_CALLS_PER_CITY", "500")
+    monkeypatch.setenv("AGENCY_AUDIT_PLACES_CITY_HALF_EXTENT_METERS", "25000")
+
+    s = Settings()
+    assert s.places_tile_max_depth == 7
+    assert s.places_tile_saturation_threshold == 80
+    assert s.places_max_calls_per_city == 500
+    assert s.places_city_half_extent_meters == 25000
