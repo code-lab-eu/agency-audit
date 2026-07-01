@@ -530,6 +530,20 @@ class TestOrchestratorSkipPaths:
         monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
         monkeypatch.setattr(settings, "pg_password", parsed.password or "")
 
+        # Capture the original state of every website that _audit_country_websites
+        # will touch.  _audit_country_websites writes through its own get_pool()
+        # connection, outside the db_conn fixture's rollback transaction, so we
+        # need to restore each row's exact pre-test values in the finally block.
+        original_state: list[dict[str, object]] = []
+        if pending_ids:
+            original_rows = await db_conn.fetch(
+                """SELECT id, audit_status, audit_data, score, last_audited_at,
+                          audit_attempts, audit_last_error
+                   FROM websites WHERE id = ANY($1::int[])""",
+                pending_ids,
+            )
+            original_state = [dict(r) for r in original_rows]
+
         # Mock audit_website so we never make real HTTP calls, regardless
         # of how many pending websites exist in the fixture database.
         mock_audit_data = MagicMock()
@@ -551,26 +565,36 @@ class TestOrchestratorSkipPaths:
             assert result["failed"] == 0
             assert mock_audit.call_count == pending_count
         finally:
-            # _audit_country_websites writes through its own get_pool()
-            # connection, which is outside the db_conn fixture's rollback
-            # transaction.  Reset any modified websites back to 'pending'
-            # so the test database stays clean for downstream tests.
-            if pending_ids:
+            # Restore each touched row to its exact original state, so the
+            # fixture database remains unchanged regardless of what state the
+            # rows were in before the test (pending, retry, error, etc.).
+            if original_state:
                 from agency_audit.loop.orchestrator import get_pool
 
                 pool = await get_pool()
                 try:
                     async with pool.acquire() as conn:
-                        await conn.execute(
+                        await conn.executemany(
                             """UPDATE websites
-                               SET audit_status = 'pending',
-                                   audit_data = NULL,
-                                   score = NULL,
-                                   last_audited_at = NULL,
-                                   audit_attempts = 0,
-                                   audit_last_error = NULL
-                               WHERE id = ANY($1::int[])""",
-                            pending_ids,
+                               SET audit_status = $2,
+                                   audit_data = $3,
+                                   score = $4,
+                                   last_audited_at = $5,
+                                   audit_attempts = $6,
+                                   audit_last_error = $7
+                               WHERE id = $1""",
+                            [
+                                (
+                                    row["id"],
+                                    row["audit_status"],
+                                    row["audit_data"],
+                                    row["score"],
+                                    row["last_audited_at"],
+                                    row["audit_attempts"],
+                                    row["audit_last_error"],
+                                )
+                                for row in original_state
+                            ],
                         )
                 finally:
                     await pool.close()
