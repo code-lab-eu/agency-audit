@@ -155,6 +155,7 @@ class PlacesAPIClient:
         radius: int = DEFAULT_RADIUS,
         max_results: int | None = None,
         location_restriction: Rectangle | None = None,
+        max_requests: int | None = None,
     ) -> list[PlaceResult]:
         """Search Google Maps Places API for a text query.
 
@@ -171,18 +172,30 @@ class PlacesAPIClient:
                 When provided, emits ``locationRestriction.rectangle`` in
                 the POST body and **omits** ``locationBias`` — the two are
                 mutually exclusive in the Places API.
+            max_requests: Maximum number of paginated HTTP requests this
+                call is allowed to make.  When set, the pagination loop
+                stops after this many POSTs even if more results are
+                available.  A value of 0 means the call is a no-op that
+                returns an empty list without touching the API.
 
         Returns up to max_results PlaceResult objects.
         """
         if max_results is None:
             max_results = settings.places_max_results
+
+        if max_requests is not None and max_requests <= 0:
+            return []
+
         await self._rate_limit()
 
         client = await self._ensure_client()
         results: list[PlaceResult] = []
         next_page_token: str | None = None
+        requests_made = 0
 
         while len(results) < max_results:
+            if max_requests is not None and requests_made >= max_requests:
+                break
             body: dict[str, Any] = {
                 "textQuery": query,
                 "pageSize": min(20, max_results - len(results)),
@@ -218,6 +231,7 @@ class PlacesAPIClient:
             try:
                 resp = await client.post(self.BASE_URL, json=body)
                 self.api_call_count += 1
+                requests_made += 1
                 resp.raise_for_status()
                 data = resp.json()
             except httpx.HTTPStatusError as e:
@@ -490,10 +504,12 @@ class DiscoveryPipeline:
                 skipped_tiles += 1
                 return []
 
+            remaining = max_calls - call_count
             before = self.places.api_call_count
             results = await self.places.search_text(
                 query=query,
                 location_restriction=tile,
+                max_requests=remaining,
             )
             after = self.places.api_call_count
             consumed = after - before

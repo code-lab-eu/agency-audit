@@ -443,30 +443,26 @@ class TestSearchTiledCallBudget:
 
         await pipeline.close()
 
-    async def test_paginated_search_consumes_multiple_api_calls(self, monkeypatch, caplog):
-        """When search_text paginates (e.g. 3 pages of 20 results each),
-        the budget counter increments by the actual number of HTTP requests,
-        not by 1 per search_text call."""
+    async def test_max_requests_bounds_tile_search(self, monkeypatch, caplog):
+        """max_requests limits each tile search to the remaining budget,
+        preventing overrun.  Captured max_requests values decrease as the
+        budget is consumed, and the last call receives exactly 1."""
         monkeypatch.setattr(settings, "places_tile_saturation_threshold", 1)
         monkeypatch.setattr(settings, "places_tile_max_depth", 2)
-        monkeypatch.setattr(settings, "places_max_calls_per_city", 5)
+        monkeypatch.setattr(settings, "places_max_calls_per_city", 3)
 
         caplog.set_level(logging.WARNING)
 
-        pages_returned = 0
+        captured_max_requests: list[int | None] = []
 
         async def mock_search_text(
             query: str,
             location_restriction: Rectangle | None = None,
-            max_results: int | None = None,
+            max_requests: int | None = None,
             **kwargs,
         ) -> list[PlaceResult]:
-            nonlocal pages_returned
-            pages_returned += 1
-            # Simulate 3 paginated API calls by incrementing api_call_count
-            # by 3 total per search_text (mimicking pageSize=20, max_results=60).
-            places_client.api_call_count += 2  # first POST is in wrapper, +2 more
-            return _make_places(60)  # saturated
+            captured_max_requests.append(max_requests)
+            return _make_places(2)
 
         places_client = _make_places_client()
         places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
@@ -477,13 +473,13 @@ class TestSearchTiledCallBudget:
         with patch.object(pipeline, "resolve_city_viewport", return_value=viewport):
             _ = await pipeline.search_tiled(query="test", city=_make_city(label="TestCity"))
 
-        # Each search_text costs 3 API calls.  Budget=5.
-        # call 1 (root, d=0):  consumes 3 → call_count=3, saturated → subdivide
-        # call 2 (NW, d=1):    consumes 3 → call_count=6, saturated, budget hit →
-        #   +4 skipped children; rest are skipped by guard.
-        # Total calls consumed: 2 search_text → 6 API calls
+        # Budget=3, always saturated, depth≤2:
+        # call 1 (root, d=0): remaining=3 → max_requests=3
+        # call 2 (NW, d=1):   remaining=2 → max_requests=2
+        # call 3 (NW-NW, d=2): remaining=1 → max_requests=1, depth==max_depth
+        # Budget exhausted → leaf siblings + NE/SW/SE skipped
+        assert captured_max_requests == [3, 2, 1]
         assert "budget exhausted" in caplog.text
-        assert pages_returned == 2
 
         await pipeline.close()
 
