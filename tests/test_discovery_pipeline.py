@@ -246,6 +246,19 @@ class TestDiscoveryPipelineDB:
         yield
         cleanup_conn = await asyncpg.connect(dsn=postgres_dsn)
         try:
+            # Delete discovery_log rows first — the FKs are ON DELETE SET NULL,
+            # so deleting cities/websites first would orphan the log rows.
+            await cleanup_conn.execute(
+                "DELETE FROM discovery_log "
+                "WHERE city_id IN ("
+                "    SELECT id FROM cities WHERE slug LIKE 'test-%' OR slug LIKE 'done-city-%'"
+                ")"
+                "   OR website_id IN ("
+                "       SELECT id FROM websites WHERE url LIKE 'https://test-%'"
+                "   )"
+                "   OR city_id IS NULL AND website_id IS NULL"
+            )
+            # Now safe to delete parent rows.
             await cleanup_conn.execute(
                 "DELETE FROM cities WHERE slug LIKE 'test-%' OR slug LIKE 'done-city-%'"
             )
