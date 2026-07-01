@@ -120,41 +120,30 @@ async def schedule_reaudits(
     cutoff = datetime.now(UTC) - timedelta(days=interval_days)
 
     async with pool.acquire() as conn:
-        # Get the websites to re-audit
+        # Get the websites to re-audit — dynamic query pattern so the
+        # country EXISTS clause is appended only when scoping is requested,
+        # avoiding duplicated SQL branches.
+        query = """SELECT w.id, w.url, w.score,
+                          EXTRACT(DAY FROM now() - w.last_audited_at)::int AS age_days
+                   FROM websites w
+                   WHERE w.audit_status = 'audited'
+                     AND w.needs_review = false
+                     AND (w.last_audited_at < $1 OR w.last_audited_at IS NULL)
+                     AND w.audit_attempts < 3"""
+        params: list[Any] = [cutoff]
+
         if country:
-            rows = await conn.fetch(
-                """SELECT w.id, w.url, w.score,
-                          EXTRACT(DAY FROM now() - w.last_audited_at)::int AS age_days
-                   FROM websites w
-                   WHERE w.audit_status = 'audited'
-                     AND w.needs_review = false
-                     AND (w.last_audited_at < $1 OR w.last_audited_at IS NULL)
-                     AND w.audit_attempts < 3
-                     AND EXISTS (
-                       SELECT 1 FROM website_cities wc
-                       JOIN cities ci ON ci.id = wc.city_id
-                       WHERE wc.website_id = w.id AND ci.country = $2
-                     )
-                   ORDER BY w.last_audited_at ASC NULLS FIRST
-                   LIMIT $3""",
-                cutoff,
-                country,
-                limit,
+            query += (
+                " AND EXISTS (SELECT 1 FROM website_cities wc"
+                " JOIN cities ci ON ci.id = wc.city_id"
+                " WHERE wc.website_id = w.id AND ci.country = $2)"
             )
-        else:
-            rows = await conn.fetch(
-                """SELECT w.id, w.url, w.score,
-                          EXTRACT(DAY FROM now() - w.last_audited_at)::int AS age_days
-                   FROM websites w
-                   WHERE w.audit_status = 'audited'
-                     AND w.needs_review = false
-                     AND (w.last_audited_at < $1 OR w.last_audited_at IS NULL)
-                     AND w.audit_attempts < 3
-                   ORDER BY w.last_audited_at ASC NULLS FIRST
-                   LIMIT $2""",
-                cutoff,
-                limit,
-            )
+            params.append(country)
+
+        query += " ORDER BY w.last_audited_at ASC NULLS FIRST LIMIT $" + str(len(params) + 1)
+        params.append(limit)
+
+        rows = await conn.fetch(query, *params)
 
         if not rows:
             logger.info("No websites overdue for re-audit")
