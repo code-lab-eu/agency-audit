@@ -144,11 +144,21 @@ async def _cleanup_loop_data():
             "(SELECT id FROM websites WHERE url LIKE $1)",
             TEST_URL_PREFIX + "%",
         )
+        # Clean up test cities (before country due to FK)
+        await conn.execute(
+            "DELETE FROM cities WHERE country = $1 AND slug LIKE 'test-city%'",
+            TEST_COUNTRY,
+        )
         await conn.execute(
             "DELETE FROM audit_log WHERE country = $1",
             TEST_COUNTRY,
         )
         await conn.execute("DELETE FROM websites WHERE url LIKE $1", TEST_URL_PREFIX + "%")
+        # Clean up test country
+        await conn.execute(
+            "DELETE FROM countries WHERE iso = $1",
+            TEST_COUNTRY,
+        )
     await close_pool()
 
 
@@ -301,10 +311,9 @@ class TestQC:
         """flag_suspicious_scores should not flag any test-owned websites after cleanup."""
         from agency_audit.loop.qc import flag_suspicious_scores
 
-        findings = await flag_suspicious_scores()
-        # Filter to test-owned data — pre-existing committed rows may exist.
-        test_findings = [f for f in findings if f.url.startswith(TEST_URL_PREFIX)]
-        assert test_findings == [], f"Should not flag any test websites, got: {test_findings}"
+        findings = await flag_suspicious_scores(country=TEST_COUNTRY)
+        # Scoped to test country — only test-owned data is in scope.
+        assert findings == [], f"Should not flag any test websites, got: {findings}"
 
     async def test_flag_suspicious_scores_found(self, db_conn: asyncpg.Connection):
         """flag_suspicious_scores should detect scores of 0 and 100."""
@@ -314,12 +323,11 @@ class TestQC:
         ws_zero = await _seed_website("zero", score=0, audit_status="audited")
         ws_hundred = await _seed_website("hundred", score=100, audit_status="audited")
 
-        findings = await flag_suspicious_scores()
+        findings = await flag_suspicious_scores(country=TEST_COUNTRY)
 
-        # Filter to test-owned data — pre-existing rows may add extra findings.
-        test_findings = [f for f in findings if f.url.startswith(TEST_URL_PREFIX)]
-        assert len(test_findings) == 2, f"Expected exactly 2 test findings, got: {test_findings}"
-        finding_ids = {f.website_id for f in test_findings}
+        # Scoped to test country — only test-owned data is in scope.
+        assert len(findings) == 2, f"Expected exactly 2 test findings, got: {findings}"
+        finding_ids = {f.website_id for f in findings}
         assert ws_zero["id"] in finding_ids
         assert ws_hundred["id"] in finding_ids
 
@@ -342,10 +350,9 @@ class TestQC:
         """detect_duplicates should not flag any test-owned websites after cleanup."""
         from agency_audit.loop.qc import detect_duplicates
 
-        findings = await detect_duplicates()
-        # Filter to test-owned data — pre-existing committed rows may exist.
-        test_findings = [f for f in findings if f.url.startswith(TEST_URL_PREFIX)]
-        assert test_findings == []
+        findings = await detect_duplicates(country=TEST_COUNTRY)
+        # Scoped to test country — only test-owned data is in scope.
+        assert findings == []
 
     async def test_detect_duplicates_found(self, db_conn: asyncpg.Connection):
         """detect_duplicates should flag a domain appearing in multiple cities."""
@@ -386,7 +393,7 @@ class TestQC:
                 city2_id,
             )
 
-        findings = await detect_duplicates()
+        findings = await detect_duplicates(country=TEST_COUNTRY)
 
         assert len(findings) >= 1
         # At least one finding for our duplicate-domain website
@@ -408,7 +415,7 @@ class TestQC:
         # Single-city website (linked to just one city in the test country)
         await _seed_website("single-city", audit_status="audited")
 
-        findings = await detect_duplicates()
+        findings = await detect_duplicates(country=TEST_COUNTRY)
 
         # None of the findings should be for a single-city website
         single_city_findings = [f for f in findings if f.url == f"{TEST_URL_PREFIX}single-city"]

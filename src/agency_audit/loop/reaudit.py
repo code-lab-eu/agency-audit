@@ -46,14 +46,19 @@ async def get_reaudit_queue(
         country: Optional country ISO code to filter by.
 
     Returns:
-        List of website dicts with id, url, score, last_audited_at, age_days.
+        List of website dicts with id, url, score, last_audited_at, age_days, country.
     """
     pool = await get_pool()
     cutoff = datetime.now(UTC) - timedelta(days=interval_days)
 
     query = """SELECT w.id, w.url, w.label, w.score,
                       w.last_audited_at,
-                      EXTRACT(DAY FROM now() - w.last_audited_at)::int AS age_days
+                      EXTRACT(DAY FROM now() - w.last_audited_at)::int AS age_days,
+                      (SELECT ci.country
+                       FROM website_cities wc
+                       JOIN cities ci ON ci.id = wc.city_id
+                       WHERE wc.website_id = w.id
+                       LIMIT 1) AS country
                FROM websites w
                WHERE w.audit_status = 'audited'
                  AND w.needs_review = false
@@ -85,7 +90,7 @@ async def get_reaudit_queue(
             if row["last_audited_at"]
             else None,
             "age_days": int(row["age_days"]) if row["age_days"] else None,
-            "country": country or "",
+            "country": row["country"] or "",
         }
         for row in rows
     ]
