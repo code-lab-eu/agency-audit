@@ -211,22 +211,22 @@ class TestViewportMigration:
 
     @pytest.mark.asyncio
     async def test_viewport_migration_applies(self):
-        """The viewport migration adds four NUMERIC(9,6) columns to cities."""
+        """The real 005 migration adds four NUMERIC(9,6) columns to cities."""
+
+        # Simulate a DB where migrations 000-004 are already applied and
+        # only 005 remains unapplied.  Point run_migrations at the *real*
+        # migrations directory so the test proves the file on disk is correct.
+        def _fetchval_side_effect(_sql, version):
+            # True = already applied (skip); False = apply it.
+            # Only 005 is unapplied in this simulated database.
+            return version != "005_add_city_viewport.sql"
+
         mock_conn, _mock_tx = _make_connection(
-            fetchval_side_effect=UndefinedTableError("first run")
+            fetchval_side_effect=_fetchval_side_effect,
         )
 
-        viewport_sql = (
-            "ALTER TABLE cities ADD COLUMN IF NOT EXISTS viewport_low_lat  NUMERIC(9, 6);\n"
-            "ALTER TABLE cities ADD COLUMN IF NOT EXISTS viewport_low_lng  NUMERIC(9, 6);\n"
-            "ALTER TABLE cities ADD COLUMN IF NOT EXISTS viewport_high_lat NUMERIC(9, 6);\n"
-            "ALTER TABLE cities ADD COLUMN IF NOT EXISTS viewport_high_lng NUMERIC(9, 6);\n"
-        )
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            (Path(tmpdir) / "005_add_city_viewport.sql").write_text(viewport_sql)
-
-            result = await run_migrations(mock_conn, Path(tmpdir))
+        migrations_dir = Path(__file__).parent.parent / "src/agency_audit/migrations"
+        result = await run_migrations(mock_conn, migrations_dir)
 
         assert result == ["005_add_city_viewport.sql"]
 
