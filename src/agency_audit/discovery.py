@@ -674,16 +674,15 @@ class DiscoveryPipeline:
                 )
                 break
 
+            calls_before = self.places.api_call_count
+            places: list[PlaceResult] = []
             try:
                 if self.places.available:
-                    calls_before = self.places.api_call_count
                     places = await self.search_tiled(
                         query=search_query,
                         city=city,
                         max_calls=city_max_calls,
                     )
-                    calls_after = self.places.api_call_count
-                    city_max_calls -= calls_after - calls_before
                 else:
                     logger.warning(f"Places API not available for {city_label}")
                     break
@@ -702,6 +701,8 @@ class DiscoveryPipeline:
             except Exception as e:
                 logger.error(f"Error searching '{search_query}': {e}")
                 continue
+            finally:
+                city_max_calls -= self.places.api_call_count - calls_before
 
         # Report to database
         reported = 0
