@@ -13,7 +13,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agency_audit.config import settings
-from agency_audit.discovery import DiscoveryPipeline, PlaceResult, PlacesAPIClient
+from agency_audit.discovery import (
+    DiscoveryPipeline,
+    PlaceResult,
+    PlacesAPIClient,
+    TextSearchResult,
+)
 from agency_audit.discovery_geo import Rectangle
 
 
@@ -63,11 +68,17 @@ def _mock_search_text_wrapper(
     fn,
 ):
     """Wrap a mock search_text function to also increment api_call_count on
-    every call (simulating one HTTP request per non-paginated search)."""
+    every call (simulating one HTTP request per non-paginated search).
+
+    Mocks may return either a bare ``list[PlaceResult]`` (wrapped into a
+    non-truncated ``TextSearchResult`` here) or a ``TextSearchResult`` when
+    they need to signal ``budget_truncated``."""
 
     async def wrapped(*args, **kwargs):
         result = await fn(*args, **kwargs)
         places_client.api_call_count += 1
+        if isinstance(result, list):
+            return TextSearchResult(places=result)
         return result
 
     return wrapped
@@ -484,8 +495,12 @@ class TestSearchTiledCallBudget:
         await pipeline.close()
 
     async def test_budget_truncated_tile_is_observable(self, monkeypatch, caplog):
-        """When a tile consumes its full remaining budget, the truncation is
-        logged and tracked — the caller knows the results may be partial."""
+        """When search_text reports budget_truncated, search_tiled logs and
+        counts the truncation — the caller knows the tile is partial.
+
+        Truncation is taken from search_text's explicit signal, not inferred
+        from request counts.  Here every search_text call reports that it
+        stopped with a page still pending."""
         monkeypatch.setattr(settings, "places_tile_saturation_threshold", 1)
         monkeypatch.setattr(settings, "places_tile_max_depth", 2)
         monkeypatch.setattr(settings, "places_max_calls_per_city", 2)
@@ -496,8 +511,9 @@ class TestSearchTiledCallBudget:
             query: str,
             location_restriction: Rectangle | None = None,
             **kwargs,
-        ) -> list[PlaceResult]:
-            return _make_places(2)
+        ) -> TextSearchResult:
+            # Explicitly signal that pagination was cut off with more available.
+            return TextSearchResult(places=_make_places(2), budget_truncated=True)
 
         places_client = _make_places_client()
         places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
@@ -508,17 +524,53 @@ class TestSearchTiledCallBudget:
         with patch.object(pipeline, "resolve_city_viewport", return_value=viewport):
             await pipeline.search_tiled(query="test", city=_make_city(label="Varna"))
 
-        # max_calls=2, always saturated:
-        # call 1 (root): remaining=2, consumed=1 → not truncated
-        # call 2 (NW, d=1): remaining=1, consumed=1 → BUDGET-TRUNCATED
-        # → saturated + call_count==max_calls → +4 skipped for NW children
-        # NE, SW, SE (d=1): each +1 skipped (budget guard)
-        # Truncated: 1, Skipped: 4 + 3 = 7
+        # max_calls=2, always saturated (threshold=1):
+        # call 1 (root, d=0): truncated → +1 truncated; saturated, call_count=1<2 → subdivide
+        # call 2 (NW, d=1):   truncated → +1 truncated; saturated, call_count=2>=2 → +4 skipped
+        # NE, SW, SE (d=1): each +1 skipped (top-of-function budget guard)
+        # Truncated: 2, Skipped: 4 + 3 = 7
         assert "budget exhausted" in caplog.text
-        assert "budget-truncated" in caplog.text
         assert "Varna" in caplog.text
         assert "7 tiles skipped" in caplog.text
-        assert "1 tiles budget-truncated" in caplog.text
+        assert "2 tiles budget-truncated" in caplog.text
+
+        await pipeline.close()
+
+    async def test_complete_last_tile_not_flagged_as_truncated(self, monkeypatch, caplog):
+        """A complete response on the last allowed call must NOT be reported as
+        budget-truncated.
+
+        Regression for the count-based heuristic: previously a sparse, complete
+        one-page tile that happened to spend the final request unit was accused
+        of truncation.  Now truncation comes only from search_text's explicit
+        flag, so a complete tile (budget_truncated=False) is never flagged."""
+        monkeypatch.setattr(settings, "places_tile_saturation_threshold", 60)
+        monkeypatch.setattr(settings, "places_tile_max_depth", 2)
+        monkeypatch.setattr(settings, "places_max_calls_per_city", 1)
+
+        caplog.set_level(logging.WARNING)
+
+        async def mock_search_text(
+            query: str,
+            location_restriction: Rectangle | None = None,
+            **kwargs,
+        ) -> TextSearchResult:
+            # One complete page, no pending next page → not truncated.
+            return TextSearchResult(places=_make_places(1), budget_truncated=False)
+
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
+
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        viewport = Rectangle(42.0, 23.0, 43.0, 24.0)
+
+        with patch.object(pipeline, "resolve_city_viewport", return_value=viewport):
+            await pipeline.search_tiled(query="test", city=_make_city(label="Sofia"))
+
+        # max_calls=1, sparse (1 < threshold 60) → no subdivision, no skips.
+        # The single call completed cleanly, so nothing is truncated.
+        assert "budget-truncated" not in caplog.text
+        assert "budget exhausted" not in caplog.text
 
         await pipeline.close()
 

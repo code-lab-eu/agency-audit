@@ -24,6 +24,7 @@ from agency_audit.discovery import (
     DiscoveryPipeline,
     PlaceResult,
     PlacesAPIClient,
+    TextSearchResult,
     run_discovery,
 )
 
@@ -219,8 +220,8 @@ class TestDiscoveryPipelineDB:
             _make_place("pid2", "Agency Two", "https://test-a2.example.com"),
         ]
 
-        async def mock_search_text(*args: Any, **kwargs: Any) -> list[PlaceResult]:
-            return places
+        async def mock_search_text(*args: Any, **kwargs: Any) -> TextSearchResult:
+            return TextSearchResult(places=places)
 
         places_client = PlacesAPIClient(api_key="test")
         places_client.search_text = mock_search_text
@@ -287,7 +288,7 @@ class TestDiscoveryPipelineDB:
         city_id = await _seed_test_city(fresh_db, "test-no-agencies")
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=[])
+        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
@@ -354,7 +355,7 @@ class TestDiscoveryPipelineDB:
         c3 = await _seed_test_city(fresh_db, "test-max-cities-3", population=9_999_997)
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=[_make_place()])
+        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[_make_place()]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
@@ -392,7 +393,9 @@ class TestDiscoveryPipelineDB:
         ro_place = _make_place("ro-pid", "RO Agency", "https://test-ro.example.com")
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(side_effect=[[bg_place], [ro_place]])
+        places_client.search_text = AsyncMock(
+            side_effect=[TextSearchResult(places=[bg_place]), TextSearchResult(places=[ro_place])]
+        )
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
@@ -448,7 +451,7 @@ class TestDiscoveryPipelineDB:
 
         ro_place = _make_place("ro-pid", "RO Agency", "https://test-ro.example.com")
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=[ro_place])
+        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[ro_place]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
@@ -486,7 +489,9 @@ class TestDiscoveryPipelineDB:
         ro_place = _make_place("ro-pid", "RO Agency", "https://test-ro.example.com")
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(side_effect=[[bg_place], [ro_place]])
+        places_client.search_text = AsyncMock(
+            side_effect=[TextSearchResult(places=[bg_place]), TextSearchResult(places=[ro_place])]
+        )
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
@@ -563,7 +568,7 @@ class TestDiscoveryPipelineDB:
 
         place = _make_place("new-place-id", "New Agency", "https://test-new.example.com")
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=[place])
+        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[place]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
@@ -611,7 +616,7 @@ class TestDiscoveryPipelineDB:
             "https://test-existing.example.com",
         )
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=[place])
+        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[place]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
@@ -640,7 +645,7 @@ class TestDiscoveryPipelineDB:
         # First run: insert with pid-first
         place1 = _make_place("pid-first", "First Agency", "https://test-upsert.example.com")
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=[place1])
+        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[place1]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
@@ -650,13 +655,15 @@ class TestDiscoveryPipelineDB:
         # Second run: same URL, different place_id → UPSERT
         places_client2 = PlacesAPIClient(api_key="test")
         places_client2.search_text = AsyncMock(
-            return_value=[
-                _make_place(
-                    "pid-second",
-                    "Second Agency Updated",
-                    "https://test-upsert.example.com",
-                )
-            ]
+            return_value=TextSearchResult(
+                places=[
+                    _make_place(
+                        "pid-second",
+                        "Second Agency Updated",
+                        "https://test-upsert.example.com",
+                    )
+                ]
+            )
         )
         places_client2.close = AsyncMock()
 
@@ -682,7 +689,7 @@ class TestDiscoveryPipelineDB:
         city_id = await _seed_test_city(fresh_db, "test-status-lifecycle")
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(return_value=[])
+        places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[]))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
@@ -706,7 +713,7 @@ class TestDiscoveryPipelineDB:
 
         with patch("agency_audit.discovery.PlacesAPIClient") as mock_client_cls:
             places_client = PlacesAPIClient(api_key="test")
-            places_client.search_text = AsyncMock(return_value=[place])
+            places_client.search_text = AsyncMock(return_value=TextSearchResult(places=[place]))
             places_client.close = AsyncMock()
             mock_client_cls.return_value = places_client
 
@@ -762,7 +769,9 @@ class TestDiscoveryPipelineDB:
         ]
 
         places_client = PlacesAPIClient(api_key="test")
-        places_client.search_text = AsyncMock(side_effect=[kw1, kw2])
+        places_client.search_text = AsyncMock(
+            side_effect=[TextSearchResult(places=kw1), TextSearchResult(places=kw2)]
+        )
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
@@ -801,7 +810,10 @@ class TestDiscoveryPipelineDB:
         # Keyword 1: shared + unique-1; Keyword 2: shared + unique-2
         places_client = PlacesAPIClient(api_key="test")
         places_client.search_text = AsyncMock(
-            side_effect=[[shared, unique_kw1], [shared, unique_kw2]]
+            side_effect=[
+                TextSearchResult(places=[shared, unique_kw1]),
+                TextSearchResult(places=[shared, unique_kw2]),
+            ]
         )
         places_client.close = AsyncMock()
 

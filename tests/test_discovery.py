@@ -191,7 +191,7 @@ class TestPlacesAPIClientSearchTextResponse:
             return httpx.Response(200, json=build_place_response([place_json]), request=request)
 
         client = make_mock_client(handler)
-        results = await client.search_text("test query", max_results=20)
+        results = (await client.search_text("test query", max_results=20)).places
         await client.close()
 
         assert len(results) == 1
@@ -217,7 +217,7 @@ class TestPlacesAPIClientSearchTextResponse:
             return httpx.Response(200, json=build_place_response([place_json]), request=request)
 
         client = make_mock_client(handler)
-        results = await client.search_text("test", max_results=20)
+        results = (await client.search_text("test", max_results=20)).places
         await client.close()
 
         r = results[0]
@@ -243,7 +243,7 @@ class TestPlacesAPIClientSearchTextResponse:
             return httpx.Response(200, json=build_place_response([place_json]), request=request)
 
         client = make_mock_client(handler)
-        results = await client.search_text("test", max_results=20)
+        results = (await client.search_text("test", max_results=20)).places
         await client.close()
 
         assert results[0].latitude is None
@@ -261,7 +261,7 @@ class TestPlacesAPIClientSearchTextResponse:
             return httpx.Response(200, json=build_place_response([place_json]), request=request)
 
         client = make_mock_client(handler)
-        results = await client.search_text("test", max_results=20)
+        results = (await client.search_text("test", max_results=20)).places
         await client.close()
 
         assert results[0].rating == 0
@@ -278,7 +278,7 @@ class TestPlacesAPIClientSearchTextResponse:
             return httpx.Response(200, json=build_place_response(places_json), request=request)
 
         client = make_mock_client(handler)
-        results = await client.search_text("test", max_results=20)
+        results = (await client.search_text("test", max_results=20)).places
         await client.close()
 
         assert len(results) == 3
@@ -293,7 +293,7 @@ class TestPlacesAPIClientSearchTextResponse:
             return httpx.Response(200, json=build_place_response([]), request=request)
 
         client = make_mock_client(handler)
-        results = await client.search_text("nonexistent", max_results=20)
+        results = (await client.search_text("nonexistent", max_results=20)).places
         await client.close()
 
         assert results == []
@@ -345,7 +345,7 @@ class TestPlacesAPIClientSearchTextPagination:
                 )
 
         client = make_mock_client(handler)
-        results = await client.search_text("test", max_results=30)
+        results = (await client.search_text("test", max_results=30)).places
         await client.close()
 
         assert len(results) == 20
@@ -373,7 +373,7 @@ class TestPlacesAPIClientSearchTextPagination:
             )
 
         client = make_mock_client(handler)
-        results = await client.search_text("test", max_results=25)
+        results = (await client.search_text("test", max_results=25)).places
         await client.close()
 
         assert len(results) == 25
@@ -395,7 +395,7 @@ class TestPlacesAPIClientSearchTextPagination:
             )
 
         client = make_mock_client(handler)
-        results = await client.search_text("test", max_results=60)
+        results = (await client.search_text("test", max_results=60)).places
         await client.close()
 
         assert len(results) == 1
@@ -464,7 +464,7 @@ class TestPlacesAPIClientSearchTextErrors:
         client = make_mock_client(handler)
 
         # TimeoutException is caught and breaks the loop, returning empty results
-        results = await client.search_text("test", max_results=20)
+        results = (await client.search_text("test", max_results=20)).places
         await client.close()
 
         assert results == []
@@ -489,7 +489,7 @@ class TestPlacesAPIClientSearchTextErrors:
                 raise httpx.TimeoutException("timed out on page 2")
 
         client = make_mock_client(handler)
-        results = await client.search_text("test", max_results=60)
+        results = (await client.search_text("test", max_results=60)).places
         await client.close()
 
         assert len(results) == 1

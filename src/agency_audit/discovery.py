@@ -97,6 +97,23 @@ class PlaceResult:
     user_ratings_total: int | None = None
 
 
+@dataclass
+class TextSearchResult:
+    """Outcome of a (possibly paginated) Places Text Search.
+
+    ``budget_truncated`` is True *only* when pagination stopped because the
+    ``max_requests`` cap was reached while the API had already handed back a
+    ``nextPageToken`` — i.e. a known next page existed but could not be
+    fetched.  It is never set for a search that ran to natural completion or
+    that stopped for any other reason (``max_results``, no further pages, a
+    timeout).  Callers can therefore trust it as an explicit truncation
+    signal rather than inferring truncation from request counts.
+    """
+
+    places: list[PlaceResult]
+    budget_truncated: bool = False
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Places API Client
 # ──────────────────────────────────────────────────────────────────────
@@ -156,7 +173,7 @@ class PlacesAPIClient:
         max_results: int | None = None,
         location_restriction: Rectangle | None = None,
         max_requests: int | None = None,
-    ) -> list[PlaceResult]:
+    ) -> TextSearchResult:
         """Search Google Maps Places API for a text query.
 
         Handles pagination up to max_results (default from settings,
@@ -176,15 +193,16 @@ class PlacesAPIClient:
                 call is allowed to make.  When set, the pagination loop
                 stops after this many POSTs even if more results are
                 available.  A value of 0 means the call is a no-op that
-                returns an empty list without touching the API.
+                returns an empty result without touching the API.
 
-        Returns up to max_results PlaceResult objects.
+        Returns a TextSearchResult holding up to max_results PlaceResult
+        objects and a ``budget_truncated`` flag (see TextSearchResult).
         """
         if max_results is None:
             max_results = settings.places_max_results
 
         if max_requests is not None and max_requests <= 0:
-            return []
+            return TextSearchResult(places=[])
 
         await self._rate_limit()
 
@@ -192,9 +210,15 @@ class PlacesAPIClient:
         results: list[PlaceResult] = []
         next_page_token: str | None = None
         requests_made = 0
+        budget_truncated = False
 
         while len(results) < max_results:
             if max_requests is not None and requests_made >= max_requests:
+                # We only re-enter the loop when the previous page returned a
+                # nextPageToken (otherwise we'd have broken below), so hitting
+                # the request cap here means a known next page exists that we
+                # are deliberately not fetching — a genuine budget truncation.
+                budget_truncated = True
                 break
             body: dict[str, Any] = {
                 "textQuery": query,
@@ -263,7 +287,7 @@ class PlacesAPIClient:
                 break
 
         logger.info(f"Places API search '{query}': got {len(results)} results")
-        return results[:max_results]
+        return TextSearchResult(places=results[:max_results], budget_truncated=budget_truncated)
 
     async def _rate_limit(self):
         """Simple rate limiting — max 5 QPS for Text Search."""
@@ -507,26 +531,26 @@ class DiscoveryPipeline:
 
             remaining = max_calls - call_count
             before = self.places.api_call_count
-            results = await self.places.search_text(
+            search = await self.places.search_text(
                 query=query,
                 location_restriction=tile,
                 max_requests=remaining,
             )
             after = self.places.api_call_count
-            consumed = after - before
-            call_count += consumed
+            call_count += after - before
+            results = search.places
 
-            # If this tile used its full remaining budget, the pagination loop
-            # was cut short — results may be incomplete.  Log and track so the
-            # caller knows not to trust the saturation signal blindly.
-            if consumed > 0 and consumed == remaining:
+            # search_text tells us explicitly whether pagination was cut off
+            # because the request budget ran out with another page pending.
+            # The saturation signal below is unreliable for such tiles, so
+            # surface the truncation instead of guessing from request counts.
+            if search.budget_truncated:
                 truncated_tiles += 1
                 logger.debug(
-                    "Tiled search for %s: budget truncated results for tile "
-                    "(depth=%d, consumed=%d requests, %d results kept)",
+                    "Tiled search for %s: budget truncated pagination for tile "
+                    "(depth=%d, %d results kept — more were available)",
                     city_label,
                     depth,
-                    consumed,
                     len(results),
                 )
 
@@ -606,10 +630,11 @@ class DiscoveryPipeline:
 
             try:
                 if self.places.available:
-                    places = await self.places.search_text(
+                    search = await self.places.search_text(
                         query=search_query,
                         location_bias=location,
                     )
+                    places = search.places
                 else:
                     logger.warning(f"Places API not available for {city_label}")
                     break
