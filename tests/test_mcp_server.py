@@ -2,20 +2,26 @@
 
 All tests run against a live PostgreSQL database.
 
-The ``committed_db_conn`` fixture provides a COMMITTED connection with explicit
-cleanup — required for concurrent FOR UPDATE SKIP LOCKED tests where writes
-must be visible across multiple connections.  Simple single-connection tests
-also use it for consistency within this module.
+Each test receives a private, pristine database via the ``fresh_db`` fixture
+(conftest.py).  ``fresh_db`` clones a schema-only session template, redirects
+``get_pool()`` onto the private database, seeds it with the canonical reference
+data (44 countries + 20 BG cities), and drops the database on teardown.  No
+manual cleanup is required, and exact-count assertions are safe because the
+database is pristine.
+
+The MCP tools (``get_next_city``, ``get_unaudited_website``, ``report_website``,
+``submit_audit``, ``get_stats``) all open their own connections via
+``get_pool()``, so the transaction-rollback isolation of the shared ``db_conn``
+fixture cannot reach them — ``fresh_db`` is the correct fit for this module.
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
 
 import asyncpg
-import pytest
 
-from agency_audit.config import settings
-from agency_audit.db import close_pool
 from agency_audit.mcp_server import (
     get_next_city,
     get_stats,
@@ -25,60 +31,11 @@ from agency_audit.mcp_server import (
 )
 
 # ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def committed_db_conn():
-    """Committed connection for test setup/teardown and cross-connection visibility.
-
-    Uses a fresh committed connection (not the pool) for explicit setup
-    and teardown.  Writes are immediately visible to other connections
-    (including pool connections used by the MCP tools).  Required for
-    concurrent FOR UPDATE SKIP LOCKED tests where two pool connections
-    must see each other's committed rows.
-
-    When no database is reachable, the whole module is skipped rather
-    than failing.
-    """
-    try:
-        conn = await asyncpg.connect(dsn=settings.dsn)
-    except OSError as exc:
-        pytest.skip(f"PostgreSQL not available for integration tests: {exc}")
-    try:
-        yield conn
-    finally:
-        await conn.close()
-
-
-@pytest.fixture(autouse=True)
-async def cleanup_test_data(committed_db_conn):
-    """Reset relevant state before and after each test.
-
-    Also closes the shared pool after each test so the next test gets
-    a fresh pool on its own event loop.
-    """
-    await committed_db_conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-    await committed_db_conn.execute(
-        "UPDATE cities SET discovery_status = 'pending' WHERE discovery_status = 'in_progress'"
-    )
-    yield
-    await committed_db_conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-    await committed_db_conn.execute(
-        "UPDATE cities SET discovery_status = 'pending' WHERE discovery_status = 'in_progress'"
-    )
-    # Reset the module-level pool so the next test creates a fresh one
-    # on its own event loop
-    await close_pool()
-
-
-# ---------------------------------------------------------------------------
 # get_next_city
 # ---------------------------------------------------------------------------
 
 
-async def test_get_next_city_returns_pending_city():
+async def test_get_next_city_returns_pending_city(fresh_db: asyncpg.Connection) -> None:
     result = await get_next_city()
     assert "error" not in result
     assert "id" in result
@@ -88,31 +45,29 @@ async def test_get_next_city_returns_pending_city():
     assert "population" in result
 
 
-async def test_get_next_city_marks_in_progress(committed_db_conn):
+async def test_get_next_city_marks_in_progress(fresh_db: asyncpg.Connection) -> None:
     result = await get_next_city()
     city_id = result["id"]
-    status = await committed_db_conn.fetchval(
-        "SELECT discovery_status FROM cities WHERE id = $1", city_id
-    )
+    status = await fresh_db.fetchval("SELECT discovery_status FROM cities WHERE id = $1", city_id)
     assert status == "in_progress"
 
 
-async def test_get_next_city_by_country():
+async def test_get_next_city_by_country(fresh_db: asyncpg.Connection) -> None:
     # Bulgaria has cities seeded from geonames
     result = await get_next_city(country="BG")
     assert "error" not in result
     assert result["country"] == "BG"
 
 
-async def test_get_next_city_unknown_country():
+async def test_get_next_city_unknown_country(fresh_db: asyncpg.Connection) -> None:
     result = await get_next_city(country="ZZ")
     assert "error" in result
 
 
-async def test_get_next_city_highest_population_first(committed_db_conn):
+async def test_get_next_city_highest_population_first(fresh_db: asyncpg.Connection) -> None:
     """City with highest population should be returned first."""
     # Get the max population city from pending cities BEFORE calling get_next_city
-    max_pop = await committed_db_conn.fetchval(
+    max_pop = await fresh_db.fetchval(
         "SELECT MAX(population) FROM cities WHERE discovery_status = 'pending'"
     )
     result = await get_next_city()
@@ -124,7 +79,7 @@ async def test_get_next_city_highest_population_first(committed_db_conn):
 # ---------------------------------------------------------------------------
 
 
-async def test_report_website_creates_new(committed_db_conn):
+async def test_report_website_creates_new(fresh_db: asyncpg.Connection) -> None:
     result = await report_website(
         url="https://test-agency.example.com",
         name="Test Agency",
@@ -138,7 +93,7 @@ async def test_report_website_creates_new(committed_db_conn):
     assert "city_id" in result
 
     # Verify website was inserted
-    row = await committed_db_conn.fetchrow(
+    row = await fresh_db.fetchrow(
         "SELECT url, label, maps_place_id, address, phone FROM websites WHERE id = $1",
         result["website_id"],
     )
@@ -149,7 +104,7 @@ async def test_report_website_creates_new(committed_db_conn):
     assert row["phone"] == "+359****3456"
 
     # Verify website_cities link
-    link = await committed_db_conn.fetchrow(
+    link = await fresh_db.fetchrow(
         "SELECT * FROM website_cities WHERE website_id = $1 AND city_id = $2",
         result["website_id"],
         result["city_id"],
@@ -157,7 +112,7 @@ async def test_report_website_creates_new(committed_db_conn):
     assert link is not None
 
 
-async def test_report_website_idempotent_url(committed_db_conn):
+async def test_report_website_idempotent_url(fresh_db: asyncpg.Connection) -> None:
     """Reporting the same URL twice should not create a duplicate website."""
     r1 = await report_website(
         url="https://test-dup.example.com",
@@ -174,7 +129,7 @@ async def test_report_website_idempotent_url(committed_db_conn):
     assert r2["created"] is False
 
 
-async def test_report_website_unknown_city():
+async def test_report_website_unknown_city(fresh_db: asyncpg.Connection) -> None:
     result = await report_website(
         url="https://test-unknown.example.com",
         name="Unknown City Agency",
@@ -183,9 +138,9 @@ async def test_report_website_unknown_city():
     assert "error" in result
 
 
-async def test_report_website_city_by_id(committed_db_conn):
+async def test_report_website_city_by_id(fresh_db: asyncpg.Connection) -> None:
     """Report website using numeric city ID."""
-    city_id = await committed_db_conn.fetchval("SELECT id FROM cities LIMIT 1")
+    city_id = await fresh_db.fetchval("SELECT id FROM cities LIMIT 1")
     result = await report_website(
         url="https://test-byid.example.com",
         name="ByID Agency",
@@ -199,8 +154,8 @@ async def test_report_website_city_by_id(committed_db_conn):
 # ---------------------------------------------------------------------------
 
 
-async def test_get_unaudited_website_returns_pending(committed_db_conn):
-    # First report a website
+async def test_get_unaudited_website_returns_pending(fresh_db: asyncpg.Connection) -> None:
+    # First report a website (must be visible to the pool's connections)
     await report_website(
         url="https://test-unaudited.example.com",
         name="Unaudited Agency",
@@ -214,23 +169,20 @@ async def test_get_unaudited_website_returns_pending(committed_db_conn):
     assert result["url"] == "https://test-unaudited.example.com"
 
     # Verify it was marked as auditing
-    status = await committed_db_conn.fetchval(
+    status = await fresh_db.fetchval(
         "SELECT audit_status FROM websites WHERE id = $1", result["id"]
     )
     assert status == "auditing"
 
 
-async def test_get_unaudited_website_none_pending(committed_db_conn):
-    """When no pending websites exist, return error."""
-    # Mark any pending test websites as audited
-    await committed_db_conn.execute(
-        "UPDATE websites SET audit_status = 'audited' "
-        "WHERE audit_status = 'pending' AND url LIKE 'https://test-%'"
-    )
+async def test_get_unaudited_website_none_pending(fresh_db: asyncpg.Connection) -> None:
+    """When no pending websites exist, return error.
+
+    The pristine database has zero websites, so there are no unaudited
+    ones — the tool must return the expected error immediately.
+    """
     result = await get_unaudited_website()
-    # There might be non-test pending websites, but in test env there shouldn't be any
-    if "error" in result:
-        assert result["error"] == "no pending websites"
+    assert result == {"error": "no pending websites"}
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +190,7 @@ async def test_get_unaudited_website_none_pending(committed_db_conn):
 # ---------------------------------------------------------------------------
 
 
-async def test_submit_audit_stores_results(committed_db_conn):
+async def test_submit_audit_stores_results(fresh_db: asyncpg.Connection) -> None:
     # Create a website to audit
     ws = await report_website(
         url="https://test-audit.example.com",
@@ -262,7 +214,7 @@ async def test_submit_audit_stores_results(committed_db_conn):
     assert result["website_id"] == website_id
 
     # Verify stored data
-    row = await committed_db_conn.fetchrow(
+    row = await fresh_db.fetchrow(
         "SELECT audit_data, score, audit_status, last_audited_at FROM websites WHERE id = $1",
         website_id,
     )
@@ -280,7 +232,7 @@ async def test_submit_audit_stores_results(committed_db_conn):
     assert audit["notes"] == "Good site, clean structure"
 
 
-async def test_submit_audit_nonexistent_website():
+async def test_submit_audit_nonexistent_website(fresh_db: asyncpg.Connection) -> None:
     result = await submit_audit(
         website_id=999999,
         robots_txt_ok=True,
@@ -293,7 +245,7 @@ async def test_submit_audit_nonexistent_website():
     assert "error" in result
 
 
-async def test_submit_audit_negative_score(committed_db_conn):
+async def test_submit_audit_negative_score(fresh_db: asyncpg.Connection) -> None:
     """Score can be negative for unsuitable sites."""
     ws = await report_website(
         url="https://test-negative.example.com",
@@ -311,9 +263,7 @@ async def test_submit_audit_negative_score(committed_db_conn):
     )
     assert result["status"] == "audited"
 
-    score = await committed_db_conn.fetchval(
-        "SELECT score FROM websites WHERE id = $1", ws["website_id"]
-    )
+    score = await fresh_db.fetchval("SELECT score FROM websites WHERE id = $1", ws["website_id"])
     assert score == -50
 
 
@@ -322,7 +272,8 @@ async def test_submit_audit_negative_score(committed_db_conn):
 # ---------------------------------------------------------------------------
 
 
-async def test_get_stats_returns_all_fields():
+async def test_get_stats_returns_all_fields(fresh_db: asyncpg.Connection) -> None:
+    """Stats on a pristine seed: 0 countries processed, 20 pending cities, 0 websites."""
     result = await get_stats()
     assert "countries_processed" in result
     assert "cities_processed" in result
@@ -332,12 +283,17 @@ async def test_get_stats_returns_all_fields():
     assert "websites_audited" in result
     assert "websites_pending" in result
     assert "average_score" in result
-    assert isinstance(result["countries_processed"], int)
-    assert isinstance(result["websites_discovered"], int)
-    assert isinstance(result["average_score"], float)
+    assert result["countries_processed"] == 0
+    assert result["cities_processed"] == 0
+    assert result["cities_in_progress"] == 0
+    assert result["cities_pending"] == 20
+    assert result["websites_discovered"] == 0
+    assert result["websites_audited"] == 0
+    assert result["websites_pending"] == 0
+    assert result["average_score"] == 0.0
 
 
-async def test_get_stats_reflects_audit(committed_db_conn):
+async def test_get_stats_reflects_audit(fresh_db: asyncpg.Connection) -> None:
     # Report and audit a website
     ws = await report_website(
         url="https://test-stats.example.com",
@@ -355,10 +311,9 @@ async def test_get_stats_reflects_audit(committed_db_conn):
     )
 
     stats = await get_stats()
-    assert stats["websites_discovered"] >= 1
-    assert stats["websites_audited"] >= 1
-    # Average score should reflect at least our 42
-    assert stats["average_score"] > 0
+    assert stats["websites_discovered"] == 1
+    assert stats["websites_audited"] == 1
+    assert stats["average_score"] == 42.0
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +321,7 @@ async def test_get_stats_reflects_audit(committed_db_conn):
 # ---------------------------------------------------------------------------
 
 
-async def test_full_pipeline(committed_db_conn):
+async def test_full_pipeline(fresh_db: asyncpg.Connection) -> None:
     """Test the full discovery → audit pipeline flow."""
     # 1. Get next city
     city = await get_next_city(country="BG")
@@ -401,8 +356,8 @@ async def test_full_pipeline(committed_db_conn):
 
     # 5. Check stats reflect the work
     stats = await get_stats()
-    assert stats["websites_discovered"] >= 1
-    assert stats["websites_audited"] >= 1
+    assert stats["websites_discovered"] == 1
+    assert stats["websites_audited"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +365,7 @@ async def test_full_pipeline(committed_db_conn):
 # ---------------------------------------------------------------------------
 
 
-async def test_concurrent_get_next_city_returns_distinct():
+async def test_concurrent_get_next_city_returns_distinct(fresh_db: asyncpg.Connection) -> None:
     """Two concurrent get_next_city calls must return different cities.
 
     Verifies the FOR UPDATE SKIP LOCKED atomic-claiming behaviour: row-level
@@ -428,41 +383,29 @@ async def test_concurrent_get_next_city_returns_distinct():
     )
 
 
-async def test_get_next_city_no_pending_cities(committed_db_conn):
-    """When no pending cities exist, get_next_city returns an error."""
-    # Capture the IDs of cities we'll mutate so we can restore ONLY those rows.
-    # A blanket UPDATE of all 'done' → 'pending' in the finally block would
-    # corrupt pre-existing completed discovery state because this module uses
-    # committed writes (not transaction rollback).
-    rows = await committed_db_conn.fetch("SELECT id FROM cities WHERE discovery_status = 'pending'")
-    changed_ids = [row["id"] for row in rows]
+async def test_get_next_city_no_pending_cities(fresh_db: asyncpg.Connection) -> None:
+    """When no pending cities exist, get_next_city returns an error.
 
-    # Temporarily mark those specific cities as done
-    if changed_ids:
-        await committed_db_conn.execute(
-            "UPDATE cities SET discovery_status = 'done' WHERE id = ANY($1)",
-            changed_ids,
-        )
-    try:
-        result = await get_next_city()
-        assert result == {"error": "no pending cities"}
-    finally:
-        # Restore only the rows this test mutated — not every 'done' city
-        if changed_ids:
-            await committed_db_conn.execute(
-                "UPDATE cities SET discovery_status = 'pending' WHERE id = ANY($1)",
-                changed_ids,
-            )
+    With fresh_db each test owns a private database that is dropped on
+    teardown, so we can safely mark every city as done without snapshotting
+    or restoring — no other test can see the mutation.
+    """
+    await fresh_db.execute("UPDATE cities SET discovery_status = 'done'")
+    result = await get_next_city()
+    assert result == {"error": "no pending cities"}
 
 
-async def test_concurrent_get_unaudited_website_returns_distinct(committed_db_conn):
+async def test_concurrent_get_unaudited_website_returns_distinct(
+    fresh_db: asyncpg.Connection,
+) -> None:
     """Two concurrent get_unaudited_website calls must return different websites.
 
     Verifies the FOR UPDATE SKIP LOCKED atomic-claiming behaviour on the
     websites table: row-level locks from the first claim prevent the second
     claim from seeing the same row.
     """
-    # Seed two pending websites (must be committed so both pool connections see them)
+    # Seed two pending websites via the fresh_db connection (autocommit —
+    # visible to the pool's connections immediately).
     await report_website(
         url="https://test-claim-a.example.com",
         name="Claim A",
