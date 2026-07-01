@@ -737,3 +737,84 @@ class TestDiscoveryPipelineDB:
 
         assert result["cities_processed"] == 0
         assert result["agencies_found"] == 0
+
+    # ── Keyword loop: every query runs, no early stop ─────────────────────
+
+    async def test_all_keywords_searched_no_early_stop(
+        self,
+        fresh_db: asyncpg.Connection,
+    ) -> None:
+        """Every COUNTRY_QUERIES keyword is searched; no early break at 20 results.
+
+        BG has two keywords.  When the first keyword returns 20 places the
+        loop MUST continue to the second keyword instead of breaking early.
+        """
+        _city_id = await _seed_test_city(fresh_db, "test-all-keywords")
+
+        # 20 distinct places for keyword 1, 20 for keyword 2
+        kw1 = [
+            _make_place(f"kw1-{i}", f"KW1 Agency {i}", f"https://kw1-{i}.example.com")
+            for i in range(20)
+        ]
+        kw2 = [
+            _make_place(f"kw2-{i}", f"KW2 Agency {i}", f"https://kw2-{i}.example.com")
+            for i in range(20)
+        ]
+
+        places_client = PlacesAPIClient(api_key="test")
+        places_client.search_text = AsyncMock(side_effect=[kw1, kw2])
+        places_client.close = AsyncMock()
+
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
+
+        # Both keywords MUST have been searched
+        assert places_client.search_text.call_count == 2, (
+            f"Expected 2 search_text calls (one per keyword), got "
+            f"{places_client.search_text.call_count}"
+        )
+
+        # Results from BOTH keywords must appear — 40 total, 20 per keyword
+        assert result["agencies_found"] == 40
+
+        rows = await fresh_db.fetch("SELECT maps_place_id FROM websites")
+        place_ids = {row["maps_place_id"] for row in rows}
+
+        assert any(pid.startswith("kw1-") for pid in place_ids), (
+            "Keyword 1 places not found in database"
+        )
+        assert any(pid.startswith("kw2-") for pid in place_ids), (
+            "Keyword 2 places not found in database"
+        )
+
+    async def test_dedup_across_keywords(
+        self,
+        fresh_db: asyncpg.Connection,
+    ) -> None:
+        """Same place_id from different keywords is only inserted once."""
+        _city_id = await _seed_test_city(fresh_db, "test-dedup-keywords")
+
+        shared = _make_place("shared-pid", "Shared Agency", "https://shared.example.com")
+        unique_kw1 = _make_place("unique-1", "Unique One", "https://unique-1.example.com")
+        unique_kw2 = _make_place("unique-2", "Unique Two", "https://unique-2.example.com")
+
+        # Keyword 1: shared + unique-1; Keyword 2: shared + unique-2
+        places_client = PlacesAPIClient(api_key="test")
+        places_client.search_text = AsyncMock(
+            side_effect=[[shared, unique_kw1], [shared, unique_kw2]]
+        )
+        places_client.close = AsyncMock()
+
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
+
+        # Both keywords searched
+        assert places_client.search_text.call_count == 2
+
+        # 3 unique places, not 4 — the shared one deduped
+        assert result["agencies_found"] == 3
+
+        count = await fresh_db.fetchval(
+            "SELECT COUNT(*) FROM websites WHERE maps_place_id = 'shared-pid'"
+        )
+        assert count == 1, "Shared place_id should be inserted exactly once"

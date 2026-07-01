@@ -317,10 +317,6 @@ class DiscoveryPipeline:
                 logger.error(f"Error searching '{search_query}': {e}")
                 continue
 
-            # If we already have enough results from the primary query, stop
-            if len(found_places) >= 20:
-                break
-
         # Report to database
         reported = 0
         pool = await self._get_pool()
