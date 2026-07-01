@@ -4,20 +4,20 @@ Covers: run_for_countries contract, max_cities_per_country honoring,
 discovery_status lifecycle, multi-country runs, DB writes verification,
 close delegation, and error handling.
 
-Real database tests use a local db_conn fixture (no transaction wrapper)
-because the pipeline acquires its own pool connections; data seeded via
-a transactional connection would be invisible to those pool connections.
-The autouse cleanup fixture and close_pool() call follow the same pattern
-as tests/test_mcp_server.py.
-
-All Places API mocks use real PlacesAPIClient instances with patched
-search_text/close, not MagicMock(spec=...), to avoid property descriptor
-issues with the `available` property.
+Real-database tests follow the pattern from test_cli_commands.py:
+accept the shared db_conn (sentinel), postgres_dsn (fixture DB), and
+monkeypatch (to point get_pool() at the same DB).  Each test seeds its
+own cities on a separate auto-committing postgres_dsn connection so the
+pipeline's pool connections can see them.  The per-task database is
+disposable (created fresh, torn down after all tests), so no per-test
+cleanup is needed — each test uses unique slugs and country codes.
 """
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlparse
 
 import asyncpg
 import pytest
@@ -30,61 +30,6 @@ from agency_audit.discovery import (
     PlacesAPIClient,
     run_discovery,
 )
-
-# ──────────────────────────────────────────────────────────────────────
-# Local fixtures — real database, no transaction wrapper
-# ──────────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-async def db_conn():
-    """Direct connection for test setup/teardown — no transaction wrapper.
-
-    Uses a fresh connection (not the pool) so it works reliably across
-    pytest-asyncio's per-function event loops.  No transaction is started
-    so data inserted via this connection is immediately visible to the
-    pipeline's own pool connections.
-    """
-    conn = await asyncpg.connect(dsn=settings.dsn)
-    try:
-        yield conn
-    finally:
-        await conn.close()
-
-
-@pytest.fixture(autouse=True)
-async def _cleanup_test_data(db_conn):
-    """Reset city discovery status and remove test websites after each test.
-
-    Also closes the shared pool so the next test gets a fresh pool on its
-    own event loop.
-    """
-    # Reset any cities that got marked in_progress/done
-    await db_conn.execute(
-        "UPDATE cities SET discovery_status = 'pending' "
-        "WHERE discovery_status IN ('in_progress', 'done')"
-    )
-    # Remove test website/city links and websites
-    await db_conn.execute(
-        "DELETE FROM discovery_log WHERE agent IN ('google_maps', 'google_maps_places_api')"
-    )
-    await db_conn.execute("DELETE FROM website_cities WHERE discovered_via = 'google_maps'")
-    await db_conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-    yield
-    # Clean up again after the test
-    await db_conn.execute(
-        "UPDATE cities SET discovery_status = 'pending' "
-        "WHERE discovery_status IN ('in_progress', 'done')"
-    )
-    await db_conn.execute(
-        "DELETE FROM discovery_log WHERE agent IN ('google_maps', 'google_maps_places_api')"
-    )
-    await db_conn.execute("DELETE FROM website_cities WHERE discovered_via = 'google_maps'")
-    await db_conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-    # Reset the module-level pool so the next test creates a fresh one
-    # on its own event loop
-    await close_pool()
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Helpers
@@ -110,6 +55,62 @@ def _make_place(
     )
 
 
+def _point_settings_at_fixture_db(monkeypatch: pytest.MonkeyPatch, postgres_dsn: str) -> None:
+    """Monkeypatch agency_audit.config.settings so get_pool() connects to the fixture DB."""
+    parsed = urlparse(postgres_dsn)
+    monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
+    monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
+    monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
+    monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
+    monkeypatch.setattr(settings, "pg_password", parsed.password or "")
+
+
+async def _seed_test_city(
+    conn: asyncpg.Connection,
+    slug: str,
+    country: str = "BG",
+    population: int = 9_999_999,
+) -> int:
+    """Insert a test city that the pipeline will pick first (high population).
+
+    Uses ON CONFLICT DO NOTHING so a previously-processed city
+    (from a prior test or seed data) is never re-activated.
+
+    Returns the city's id.
+    """
+    await conn.execute(
+        "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
+        "VALUES ($1, $2, $3, $4, 42.0, 23.0) "
+        "ON CONFLICT (country, slug) DO NOTHING",
+        country,
+        slug.replace("-", " ").title(),
+        slug,
+        population,
+    )
+    result = await conn.fetchval(
+        "SELECT id FROM cities WHERE country = $1 AND slug = $2", country, slug
+    )
+    assert result is not None
+    return result
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Per-test fixtures
+# ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+async def _close_pool_after_test():
+    """Close the global pool after each test so the next test starts fresh.
+
+    The pipeline's _get_pool() caches the pool at module level in db.py;
+    pytest-asyncio creates a new event loop per test, so a stale pool
+    from a previous loop would fail on the next test.
+    """
+    yield
+    await close_pool()
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Pool plumbing tests — legitimately mock get_pool, no DB needed
 # ──────────────────────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ class TestDiscoveryPipelinePoolPlumbing:
     """
 
     @pytest.mark.asyncio
-    async def test_get_pool_creates_pool(self):
+    async def test_get_pool_creates_pool(self) -> None:
         """_get_pool calls get_pool() and caches the result."""
         with patch("agency_audit.discovery.get_pool") as mock_get_pool:  # db-mock-check: ignore
             mock_get_pool.return_value = MagicMock()
@@ -133,7 +134,7 @@ class TestDiscoveryPipelinePoolPlumbing:
             mock_get_pool.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_get_pool_cached(self):
+    async def test_get_pool_cached(self) -> None:
         """_get_pool returns the same pool on subsequent calls."""
         with patch("agency_audit.discovery.get_pool") as mock_get_pool:  # db-mock-check: ignore
             mock_get_pool.return_value = MagicMock()
@@ -152,7 +153,7 @@ class TestDiscoveryPipelinePoolPlumbing:
 class TestCloseLifecycle:
     """Tests for DiscoveryPipeline.close() and PlacesAPIClient lifecycle."""
 
-    async def test_close_delegates_to_places_client(self):
+    async def test_close_delegates_to_places_client(self) -> None:
         """close() calls places.close()."""
         places_client = PlacesAPIClient(api_key="test")
         places_client.close = AsyncMock()
@@ -162,15 +163,14 @@ class TestCloseLifecycle:
 
         places_client.close.assert_called_once()
 
-    async def test_close_no_places(self):
+    async def test_close_no_places(self) -> None:
         """close() handles None places gracefully."""
         pipeline = DiscoveryPipeline(places_client=PlacesAPIClient(api_key="test"))
         pipeline.places = None
-        # Should not raise
         await pipeline.close()
 
     @pytest.mark.asyncio
-    async def test_close_lifecycle_closes_places_client(self):
+    async def test_close_lifecycle_closes_places_client(self) -> None:
         """close() calls places.close() which calls aclose on the HTTP client."""
         mock_http = AsyncMock()
         places_client = PlacesAPIClient(api_key="test")
@@ -183,7 +183,7 @@ class TestCloseLifecycle:
         assert places_client._client is None
 
     @pytest.mark.asyncio
-    async def test_close_lifecycle_idempotent(self):
+    async def test_close_lifecycle_idempotent(self) -> None:
         """close() can be called multiple times safely."""
         mock_http = AsyncMock()
         places_client = PlacesAPIClient(api_key="test")
@@ -191,7 +191,7 @@ class TestCloseLifecycle:
 
         pipeline = DiscoveryPipeline(places_client=places_client)
         await pipeline.close()
-        await pipeline.close()  # Second call: places_client._client is None, no crash
+        await pipeline.close()
 
         mock_http.aclose.assert_called_once()
         assert places_client._client is None
@@ -206,7 +206,7 @@ class TestRunDiscoveryErrors:
     """Error paths for the run_discovery() CLI helper."""
 
     @pytest.mark.asyncio
-    async def test_run_discovery_no_api_key_raises(self):
+    async def test_run_discovery_no_api_key_raises(self) -> None:
         """run_discovery without an API key raises RuntimeError."""
         with patch("agency_audit.discovery.PlacesAPIClient") as mock_client_cls:
             places_client = PlacesAPIClient(api_key="")
@@ -223,18 +223,37 @@ class TestRunDiscoveryErrors:
 
 
 class TestDiscoveryPipelineDB:
-    """Tests for DiscoveryPipeline against a live PostgreSQL database."""
+    """Tests for DiscoveryPipeline against a live PostgreSQL database.
+
+    Each test seeds its own cities on a separate auto-committing
+    connection (postgres_dsn) so the pipeline's pool connections can
+    see them, and monkeypatches settings so get_pool() connects to the
+    fixture database.
+    """
 
     # ── Basic flow ───────────────────────────────────────────────────
 
-    async def test_single_country_single_city_two_agencies(self, db_conn):
+    async def test_single_country_single_city_two_agencies(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Single country, one city, two agencies found — verify summary + DB writes."""
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            city_id = await _seed_test_city(seed_conn, "test-two-agencies")
+        finally:
+            await seed_conn.close()
+
         places = [
             _make_place("pid1", "Agency One", "https://test-a1.example.com"),
             _make_place("pid2", "Agency Two", "https://test-a2.example.com"),
         ]
 
-        async def mock_search_text(*args, **kwargs):
+        async def mock_search_text(*args: Any, **kwargs: Any) -> list[PlaceResult]:
             return places
 
         places_client = PlacesAPIClient(api_key="test")
@@ -242,13 +261,8 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
-        result = await pipeline.run_for_countries(
-            country_codes=["BG"],
-            max_cities_per_country=1,
-        )
-
-        # Contract: return structure
         assert result["cities_processed"] == 1
         assert result["agencies_found"] == 2
         assert result["countries_processed"] == 1
@@ -256,7 +270,6 @@ class TestDiscoveryPipelineDB:
         assert result["results"]["BG"]["cities"] == 1
         assert result["results"]["BG"]["agencies"] == 2
 
-        # Verify DB: websites were inserted
         w1 = await db_conn.fetchrow(
             "SELECT id, url, label, maps_place_id FROM websites WHERE maps_place_id = $1",
             "pid1",
@@ -273,120 +286,173 @@ class TestDiscoveryPipelineDB:
         assert w2["url"] == "https://test-a2.example.com"
         assert w2["label"] == "Agency Two"
 
-        # Verify DB: website_cities links
         links = await db_conn.fetch(
-            "SELECT website_id, city_id FROM website_cities WHERE website_id IN ($1, $2)",
+            "SELECT website_id, city_id FROM website_cities "
+            "WHERE city_id = $1 AND website_id IN ($2, $3)",
+            city_id,
             w1["id"],
             w2["id"],
         )
         assert len(links) == 2
 
-        # Verify DB: city marked 'done'
         city_status = await db_conn.fetchval(
-            "SELECT discovery_status FROM cities WHERE id = $1",
-            links[0]["city_id"],
+            "SELECT discovery_status FROM cities WHERE id = $1", city_id
         )
         assert city_status == "done"
 
-        # Verify DB: discovery_log has 'found' entries
         found_count = await db_conn.fetchval(
-            "SELECT COUNT(*) FROM discovery_log WHERE status = 'found'"
+            "SELECT COUNT(*) FROM discovery_log WHERE website_id IN ($1, $2) AND status = 'found'",
+            w1["id"],
+            w2["id"],
         )
         assert found_count == 2
 
-        # Verify DB: discovery_log has 'searched' entry
         searched_count = await db_conn.fetchval(
-            "SELECT COUNT(*) FROM discovery_log WHERE status = 'searched'"
+            "SELECT COUNT(*) FROM discovery_log WHERE city_id = $1 AND status = 'searched'",
+            city_id,
         )
         assert searched_count == 1
 
-    async def test_single_country_no_agencies(self, db_conn):
+    async def test_single_country_no_agencies(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """City processed but search returns empty — city still marked done."""
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            city_id = await _seed_test_city(seed_conn, "test-no-agencies")
+        finally:
+            await seed_conn.close()
+
         places_client = PlacesAPIClient(api_key="test")
         places_client.search_text = AsyncMock(return_value=[])
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
-
-        result = await pipeline.run_for_countries(
-            country_codes=["BG"],
-            max_cities_per_country=1,
-        )
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
         assert result["cities_processed"] == 1
         assert result["agencies_found"] == 0
         assert result["results"]["BG"]["cities"] == 1
         assert result["results"]["BG"]["agencies"] == 0
 
-        # Verify city marked done
-        city_id = await db_conn.fetchval(
-            "SELECT id FROM cities WHERE discovery_status = 'done' LIMIT 1"
+        status = await db_conn.fetchval(
+            "SELECT discovery_status FROM cities WHERE id = $1", city_id
         )
-        assert city_id is not None
+        assert status == "done"
 
-    async def test_no_pending_cities(self, db_conn):
-        """All cities already done — zero cities processed, zero agencies."""
-        # Mark all cities as done
-        await db_conn.execute("UPDATE cities SET discovery_status = 'done'")
+    async def test_no_pending_cities(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """All cities already done — zero cities processed, zero agencies.
+
+        Uses a synthetic country (ZZ) with a single city pre-marked 'done'
+        so the test only mutates its own rows, not the seed data.
+        """
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        test_country = "ZZ"
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            await seed_conn.execute(
+                "INSERT INTO countries (iso, label) VALUES ($1, $2) ON CONFLICT (iso) DO NOTHING",
+                test_country,
+                "Testland",
+            )
+            await seed_conn.execute(
+                "INSERT INTO cities "
+                "(country, label, slug, population, latitude, longitude, discovery_status) "
+                "VALUES ($1, 'Done City', 'done-city-zz', 1000, 42.0, 23.0, 'done') "
+                "ON CONFLICT (country, slug) DO NOTHING",
+                test_country,
+            )
+        finally:
+            await seed_conn.close()
 
         places_client = PlacesAPIClient(api_key="test")
         places_client.search_text = AsyncMock()
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
-
         result = await pipeline.run_for_countries(
-            country_codes=["BG"],
-            max_cities_per_country=3,
+            country_codes=[test_country], max_cities_per_country=3
         )
 
         assert result["cities_processed"] == 0
         assert result["agencies_found"] == 0
         assert result["countries_processed"] == 0
-        assert "BG" in result["results"]
-        assert result["results"]["BG"]["cities"] == 0
+        assert test_country in result["results"]
+        assert result["results"][test_country]["cities"] == 0
         places_client.search_text.assert_not_called()
 
     # ── max_cities_per_country honoring ──────────────────────────────
 
-    async def test_honors_max_cities(self, db_conn):
+    async def test_honors_max_cities(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """max_cities_per_country=2 with many pending cities → only 2 processed."""
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            c1 = await _seed_test_city(seed_conn, "test-max-cities-1", population=9_999_999)
+            c2 = await _seed_test_city(seed_conn, "test-max-cities-2", population=9_999_998)
+            c3 = await _seed_test_city(seed_conn, "test-max-cities-3", population=9_999_997)
+        finally:
+            await seed_conn.close()
+
         places_client = PlacesAPIClient(api_key="test")
         places_client.search_text = AsyncMock(return_value=[_make_place()])
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
-
-        result = await pipeline.run_for_countries(
-            country_codes=["BG"],
-            max_cities_per_country=2,
-        )
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=2)
 
         assert result["cities_processed"] == 2
-        assert result["agencies_found"] == 2  # 1 per city
+        assert result["agencies_found"] == 2
         assert result["results"]["BG"]["cities"] == 2
         assert result["results"]["BG"]["agencies"] == 2
 
-        # Verify exactly 2 cities marked done
-        done_count = await db_conn.fetchval(
-            "SELECT COUNT(*) FROM cities WHERE discovery_status = 'done'"
-        )
-        assert done_count == 2
+        for cid in (c1, c2):
+            status = await db_conn.fetchval(
+                "SELECT discovery_status FROM cities WHERE id = $1", cid
+            )
+            assert status == "done"
+
+        status3 = await db_conn.fetchval("SELECT discovery_status FROM cities WHERE id = $1", c3)
+        assert status3 == "pending"
 
     # ── Multi-country ────────────────────────────────────────────────
 
-    async def test_multi_country(self, db_conn):
+    async def test_multi_country(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Two countries (BG + RO), one city each, one agency per city."""
-        # Insert a RO city since seed only has BG cities
-        await db_conn.execute(
-            "INSERT INTO countries (iso, label) VALUES ('RO', 'Romania') "
-            "ON CONFLICT (iso) DO NOTHING"
-        )
-        await db_conn.execute(
-            "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
-            "VALUES ('RO', 'Bucuresti', 'bucuresti', 1883425, 44.4268, 26.1025) "
-            "ON CONFLICT (country, slug) DO NOTHING"
-        )
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            await seed_conn.execute(
+                "INSERT INTO countries (iso, label) VALUES ('RO', 'Romania') "
+                "ON CONFLICT (iso) DO NOTHING"
+            )
+            bg_id = await _seed_test_city(seed_conn, "test-multi-bg", country="BG")
+            ro_id = await _seed_test_city(seed_conn, "test-multi-ro", country="RO")
+        finally:
+            await seed_conn.close()
 
         bg_place = _make_place("bg-pid", "BG Agency", "https://test-bg.example.com")
         ro_place = _make_place("ro-pid", "RO Agency", "https://test-ro.example.com")
@@ -396,10 +462,8 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
-
         result = await pipeline.run_for_countries(
-            country_codes=["BG", "RO"],
-            max_cities_per_country=1,
+            country_codes=["BG", "RO"], max_cities_per_country=1
         )
 
         assert result["cities_processed"] == 2
@@ -410,26 +474,51 @@ class TestDiscoveryPipelineDB:
         assert result["results"]["BG"]["cities"] == 1
         assert result["results"]["RO"]["cities"] == 1
 
-        # Verify both websites inserted with correct country links
         bg_web = await db_conn.fetchrow("SELECT id FROM websites WHERE maps_place_id = 'bg-pid'")
         assert bg_web is not None
         ro_web = await db_conn.fetchrow("SELECT id FROM websites WHERE maps_place_id = 'ro-pid'")
         assert ro_web is not None
 
-    async def test_one_country_no_cities_one_with(self, db_conn):
+        for cid in (bg_id, ro_id):
+            status = await db_conn.fetchval(
+                "SELECT discovery_status FROM cities WHERE id = $1", cid
+            )
+            assert status == "done"
+
+    async def test_one_country_no_cities_one_with(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """One country has no pending cities, the other has one."""
-        # Mark all BG cities as done
-        await db_conn.execute("UPDATE cities SET discovery_status = 'done' WHERE country = 'BG'")
-        # Insert RO country + city
-        await db_conn.execute(
-            "INSERT INTO countries (iso, label) VALUES ('RO', 'Romania') "
-            "ON CONFLICT (iso) DO NOTHING"
-        )
-        await db_conn.execute(
-            "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
-            "VALUES ('RO', 'Bucuresti', 'bucuresti', 1883425, 44.4268, 26.1025) "
-            "ON CONFLICT (country, slug) DO NOTHING"
-        )
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        no_city_iso = "YY"
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            # Country with a city already done — no pending cities
+            await seed_conn.execute(
+                "INSERT INTO countries (iso, label) VALUES ($1, $2) ON CONFLICT (iso) DO NOTHING",
+                no_city_iso,
+                "Nocitiesland",
+            )
+            await seed_conn.execute(
+                "INSERT INTO cities "
+                "(country, label, slug, population, latitude, longitude, discovery_status) "
+                "VALUES ($1, 'Done City', 'done-city-yy', 1000, 42.0, 23.0, 'done') "
+                "ON CONFLICT (country, slug) DO NOTHING",
+                no_city_iso,
+            )
+
+            # Country with a pending city
+            await seed_conn.execute(
+                "INSERT INTO countries (iso, label) VALUES ('RO', 'Romania') "
+                "ON CONFLICT (iso) DO NOTHING"
+            )
+            ro_id = await _seed_test_city(seed_conn, "test-one-pending", country="RO")
+        finally:
+            await seed_conn.close()
 
         ro_place = _make_place("ro-pid", "RO Agency", "https://test-ro.example.com")
         places_client = PlacesAPIClient(api_key="test")
@@ -437,36 +526,43 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
-
         result = await pipeline.run_for_countries(
-            country_codes=["BG", "RO"],
-            max_cities_per_country=1,
+            country_codes=[no_city_iso, "RO"], max_cities_per_country=1
         )
 
         assert result["cities_processed"] == 1
         assert result["agencies_found"] == 1
         assert result["countries_processed"] == 1
-        # Both countries always get an entry
-        assert "BG" in result["results"]
+        assert no_city_iso in result["results"]
         assert "RO" in result["results"]
-        assert result["results"]["BG"]["cities"] == 0
-        assert result["results"]["BG"]["agencies"] == 0
+        assert result["results"][no_city_iso]["cities"] == 0
+        assert result["results"][no_city_iso]["agencies"] == 0
         assert result["results"]["RO"]["cities"] == 1
+
+        status = await db_conn.fetchval("SELECT discovery_status FROM cities WHERE id = $1", ro_id)
+        assert status == "done"
 
     # ── country_codes=None (auto-discovery) ──────────────────────────
 
-    async def test_auto_discovers_countries_from_db(self, db_conn):
+    async def test_auto_discovers_countries_from_db(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """When country_codes=None, pending countries are fetched from DB."""
-        # Insert RO with pending city so two countries have pending cities
-        await db_conn.execute(
-            "INSERT INTO countries (iso, label) VALUES ('RO', 'Romania') "
-            "ON CONFLICT (iso) DO NOTHING"
-        )
-        await db_conn.execute(
-            "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
-            "VALUES ('RO', 'Bucuresti', 'bucuresti', 1883425, 44.4268, 26.1025) "
-            "ON CONFLICT (country, slug) DO NOTHING"
-        )
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            await seed_conn.execute(
+                "INSERT INTO countries (iso, label) VALUES ('RO', 'Romania') "
+                "ON CONFLICT (iso) DO NOTHING"
+            )
+            bg_id = await _seed_test_city(seed_conn, "test-auto-bg", country="BG")
+            ro_id = await _seed_test_city(seed_conn, "test-auto-ro", country="RO")
+        finally:
+            await seed_conn.close()
 
         bg_place = _make_place("bg-pid", "BG Agency", "https://test-bg.example.com")
         ro_place = _make_place("ro-pid", "RO Agency", "https://test-ro.example.com")
@@ -476,84 +572,109 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
-
-        result = await pipeline.run_for_countries(
-            country_codes=None,
-            max_cities_per_country=1,
-        )
+        result = await pipeline.run_for_countries(country_codes=None, max_cities_per_country=1)
 
         assert result["cities_processed"] == 2
         assert result["agencies_found"] == 2
         assert "BG" in result["results"]
         assert "RO" in result["results"]
 
+        for cid in (bg_id, ro_id):
+            status = await db_conn.fetchval(
+                "SELECT discovery_status FROM cities WHERE id = $1", cid
+            )
+            assert status == "done"
+
     # ── Places API unavailable ────────────────────────────────────────
 
-    async def test_places_unavailable(self, db_conn):
+    async def test_places_unavailable(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """When PlacesAPIClient.available is False, city still marked done."""
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            city_id = await _seed_test_city(seed_conn, "test-places-unavail")
+        finally:
+            await seed_conn.close()
+
         places_client = PlacesAPIClient(api_key="")  # Empty key → not available
         places_client.search_text = AsyncMock()
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
-
-        result = await pipeline.run_for_countries(
-            country_codes=["BG"],
-            max_cities_per_country=1,
-        )
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
         assert result["cities_processed"] == 1
         assert result["agencies_found"] == 0
         places_client.search_text.assert_not_called()
 
-        # City should still be marked done
-        done_count = await db_conn.fetchval(
-            "SELECT COUNT(*) FROM cities WHERE discovery_status = 'done'"
+        status = await db_conn.fetchval(
+            "SELECT discovery_status FROM cities WHERE id = $1", city_id
         )
-        assert done_count == 1
+        assert status == "done"
 
     # ── Error handling ───────────────────────────────────────────────
 
-    async def test_search_text_error_handled(self, db_conn):
+    async def test_search_text_error_handled(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """When search_text raises, the error is caught and city is marked done."""
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            city_id = await _seed_test_city(seed_conn, "test-search-error")
+        finally:
+            await seed_conn.close()
+
         places_client = PlacesAPIClient(api_key="test")
         places_client.search_text = AsyncMock(side_effect=RuntimeError("API error"))
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
-
-        # Should not crash
-        result = await pipeline.run_for_countries(
-            country_codes=["BG"],
-            max_cities_per_country=1,
-        )
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
         assert result["cities_processed"] == 1
         assert result["agencies_found"] == 0
 
-        # City should still be marked done
-        done_count = await db_conn.fetchval(
-            "SELECT COUNT(*) FROM cities WHERE discovery_status = 'done'"
+        status = await db_conn.fetchval(
+            "SELECT discovery_status FROM cities WHERE id = $1", city_id
         )
-        assert done_count == 1
+        assert status == "done"
 
     # ── DB writes — upsert & reuse ───────────────────────────────────
 
-    async def test_upsert_new_website(self, db_conn):
+    async def test_upsert_new_website(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """New agency triggers INSERT INTO websites, website_cities, discovery_log."""
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            city_id = await _seed_test_city(seed_conn, "test-upsert-new")
+        finally:
+            await seed_conn.close()
+
         place = _make_place("new-place-id", "New Agency", "https://test-new.example.com")
         places_client = PlacesAPIClient(api_key="test")
         places_client.search_text = AsyncMock(return_value=[place])
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
-        await pipeline.run_for_countries(
-            country_codes=["BG"],
-            max_cities_per_country=1,
-        )
-
-        # Verify website row
         web = await db_conn.fetchrow(
             "SELECT id, url, label, maps_place_id FROM websites "
             "WHERE maps_place_id = 'new-place-id'"
@@ -562,125 +683,163 @@ class TestDiscoveryPipelineDB:
         assert web["url"] == "https://test-new.example.com"
         assert web["label"] == "New Agency"
 
-        # Verify website_cities link
         link = await db_conn.fetchrow(
             "SELECT city_id, discovered_via FROM website_cities WHERE website_id = $1",
             web["id"],
         )
         assert link is not None
         assert link["discovered_via"] == "google_maps"
+        assert link["city_id"] == city_id
 
-        # Verify discovery_log 'found' entry
         found = await db_conn.fetchrow(
-            "SELECT status FROM discovery_log WHERE website_id = $1 AND status = 'found'",
+            "SELECT status FROM discovery_log "
+            "WHERE website_id = $1 AND city_id = $2 AND status = 'found'",
             web["id"],
+            city_id,
         )
         assert found is not None
 
-    async def test_reuse_existing_website(self, db_conn):
+    async def test_reuse_existing_website(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """When website already exists by maps_place_id, reuse its id."""
-        # Pre-insert an existing website
-        existing_id = await db_conn.fetchval(
-            "INSERT INTO websites (url, label, maps_place_id) "
-            "VALUES ('https://test-existing.example.com', 'Existing Agency', 'existing-pid') "
-            "RETURNING id"
-        )
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            _city_id = await _seed_test_city(seed_conn, "test-reuse-existing")
+            existing_id = await seed_conn.fetchval(
+                "INSERT INTO websites (url, label, maps_place_id) "
+                "VALUES ('https://test-existing.example.com', 'Existing Agency', "
+                "'existing-pid') RETURNING id"
+            )
+        finally:
+            await seed_conn.close()
 
         place = _make_place(
-            "existing-pid", "Existing Agency Updated", "https://test-existing.example.com"
+            "existing-pid",
+            "Existing Agency Updated",
+            "https://test-existing.example.com",
         )
         places_client = PlacesAPIClient(api_key="test")
         places_client.search_text = AsyncMock(return_value=[place])
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
-        result = await pipeline.run_for_countries(
-            country_codes=["BG"],
-            max_cities_per_country=1,
-        )
+        assert result["agencies_found"] == 1
 
-        assert result["agencies_found"] == 1  # Still counted as found
-
-        # Should NOT have created a duplicate website
         count = await db_conn.fetchval(
             "SELECT COUNT(*) FROM websites WHERE maps_place_id = 'existing-pid'"
         )
         assert count == 1
 
-        # website_cities should link to existing website
         link = await db_conn.fetchrow(
-            "SELECT website_id FROM website_cities WHERE website_id = $1",
-            existing_id,
+            "SELECT website_id FROM website_cities WHERE website_id = $1", existing_id
         )
         assert link is not None
 
-    async def test_upsert_on_conflict_url(self, db_conn):
+    async def test_upsert_on_conflict_url(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """ON CONFLICT (url) DO UPDATE — same URL updates label, NOT maps_place_id."""
-        # First, insert through the pipeline
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            _city1 = await _seed_test_city(seed_conn, "test-upsert-url-1")
+            _city2 = await _seed_test_city(seed_conn, "test-upsert-url-2")
+        finally:
+            await seed_conn.close()
+
+        # First run: insert with pid-first
         place1 = _make_place("pid-first", "First Agency", "https://test-upsert.example.com")
         places_client = PlacesAPIClient(api_key="test")
         places_client.search_text = AsyncMock(return_value=[place1])
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
-        result1 = await pipeline.run_for_countries(
-            country_codes=["BG"],
-            max_cities_per_country=1,
-        )
+        result1 = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
         assert result1["agencies_found"] == 1
 
-        # Second run with same URL but different place_id — should UPSERT
+        # Second run: same URL, different place_id → UPSERT
         places_client2 = PlacesAPIClient(api_key="test")
         places_client2.search_text = AsyncMock(
             return_value=[
                 _make_place(
-                    "pid-second", "Second Agency Updated", "https://test-upsert.example.com"
+                    "pid-second",
+                    "Second Agency Updated",
+                    "https://test-upsert.example.com",
                 )
             ]
         )
         places_client2.close = AsyncMock()
 
         pipeline2 = DiscoveryPipeline(places_client=places_client2)
-        result2 = await pipeline2.run_for_countries(
-            country_codes=["BG"],
-            max_cities_per_country=1,
-        )
+        result2 = await pipeline2.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
         assert result2["agencies_found"] == 1
 
-        # Only one website row should exist
         rows = await db_conn.fetch(
-            "SELECT id, label, maps_place_id FROM websites WHERE url = 'https://test-upsert.example.com'"
+            "SELECT id, label, maps_place_id FROM websites "
+            "WHERE url = 'https://test-upsert.example.com'"
         )
         assert len(rows) == 1
-        # ON CONFLICT (url) DO UPDATE SET label = EXCLUDED.label — maps_place_id stays
-        assert rows[0]["label"] == "Second Agency Updated"  # Updated label
-        assert rows[0]["maps_place_id"] == "pid-first"  # NOT updated by ON CONFLICT
+        assert rows[0]["label"] == "Second Agency Updated"
+        assert rows[0]["maps_place_id"] == "pid-first"
 
     # ── Status lifecycle ─────────────────────────────────────────────
 
-    async def test_discovery_status_lifecycle(self, db_conn):
+    async def test_discovery_status_lifecycle(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """City goes from 'pending' to 'done' after pipeline processes it."""
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            city_id = await _seed_test_city(seed_conn, "test-status-lifecycle")
+        finally:
+            await seed_conn.close()
+
         places_client = PlacesAPIClient(api_key="test")
         places_client.search_text = AsyncMock(return_value=[])
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
-        await pipeline.run_for_countries(
-            country_codes=["BG"],
-            max_cities_per_country=1,
-        )
+        await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
-        # At least one city (the one the pipeline processed) should now be 'done'
-        done_count = await db_conn.fetchval(
-            "SELECT COUNT(*) FROM cities WHERE discovery_status = 'done'"
+        status = await db_conn.fetchval(
+            "SELECT discovery_status FROM cities WHERE id = $1", city_id
         )
-        assert done_count == 1, f"Expected exactly 1 done city, got {done_count}"
+        assert status == "done"
 
     # ── run_discovery() CLI helper (real DB path) ────────────────────
 
-    async def test_run_discovery_cli_helper(self, db_conn):
+    async def test_run_discovery_cli_helper(
+        self,
+        db_conn: asyncpg.Connection,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """run_discovery() with API key and real DB works end-to-end."""
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
+        seed_conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            _city_id = await _seed_test_city(seed_conn, "test-cli-helper")
+        finally:
+            await seed_conn.close()
+
         place = _make_place("cli-pid", "CLI Agency", "https://test-cli.example.com")
 
         with patch("agency_audit.discovery.PlacesAPIClient") as mock_client_cls:
@@ -695,13 +854,16 @@ class TestDiscoveryPipelineDB:
         assert result["agencies_found"] == 1
         places_client.close.assert_called()
 
-        # Verify data in DB
         web = await db_conn.fetchrow("SELECT id, url FROM websites WHERE maps_place_id = 'cli-pid'")
         assert web is not None
         assert web["url"] == "https://test-cli.example.com"
 
-    async def test_run_discovery_cli_helper_no_cities(self):
+    async def test_run_discovery_cli_helper_no_cities(
+        self, monkeypatch: pytest.MonkeyPatch, postgres_dsn: str
+    ) -> None:
         """run_discovery() with API key but no pending cities."""
+        _point_settings_at_fixture_db(monkeypatch, postgres_dsn)
+
         with patch("agency_audit.discovery.PlacesAPIClient") as mock_client_cls:
             places_client = PlacesAPIClient(api_key="test")
             places_client.search_text = AsyncMock()
