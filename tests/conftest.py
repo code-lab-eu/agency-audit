@@ -9,11 +9,10 @@ Architecture
   container via testcontainers when Docker is available, otherwise falls
   back to a local PostgreSQL instance configured via ``AGENCY_AUDIT_*``
   environment variables.  When Docker is used, the image is
-  ``postgis/postgis:16-3.4-alpine`` so the PostGIS extension is included.
+  ``postgres:16-alpine``.
 - ``_ensure_migrations`` (session, sync) — applies all project migrations
   exactly once per session.  Any migration failure propagates as a hard
-  error — PostGIS is a hard project dependency and its absence causes
-  the fixture to fail.
+  error.
 - ``db_conn`` (function, async) — creates a fresh asyncpg connection for
   each test function, bound to the test's own event loop with migrations
   already applied.  Rollback-only isolation; the default for most tests.
@@ -95,7 +94,7 @@ def postgres_dsn() -> str:
     if _docker_available():
         from testcontainers.postgres import PostgresContainer
 
-        container = PostgresContainer("postgis/postgis:16-3.4-alpine")
+        container = PostgresContainer("postgres:16-alpine")
         container.start()
         postgres_dsn._tc_container = container  # type: ignore[attr-defined]
         # testcontainers returns "postgresql+psycopg2://..."; asyncpg
@@ -113,8 +112,7 @@ def _ensure_migrations(postgres_dsn: str) -> None:
     Uses ``asyncio.run`` so the temporary connection lives in its own
     event loop — no interference with the test functions' event loops.
 
-    Any migration failure propagates as a hard error — PostGIS is a
-    hard project dependency and there is no graceful degradation path.
+    Any migration failure propagates as a hard error.
     """
 
     async def _migrate() -> None:
@@ -187,8 +185,8 @@ def _ensure_seed_data(_ensure_migrations: None, postgres_dsn: str) -> None:
 def _db_template(postgres_dsn: str) -> Generator[str]:
     """Build a schema-only template database once per session.
 
-    The template holds the slow, invariant part — all migrations including
-    the PostGIS extension — so each per-test clone is a fast file copy
+    The template holds the slow, invariant part — all migrations — so each
+    per-test clone is a fast file copy
     (``CREATE DATABASE ... TEMPLATE``) rather than a fresh migration run.
     Seed data is applied per test (see ``seed_reference``) so it stays
     overridable.  Nothing may connect to the template while clones are
