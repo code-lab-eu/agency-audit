@@ -57,9 +57,7 @@ ALLOWED: dict[str, str] = {
 # Files that already mock the database and are scheduled for migration to the
 # real DB. Grandfathered so the check passes today. Remove an entry once its
 # file no longer mocks the database (the check enforces that — see below).
-KNOWN_DEBT: set[str] = {
-    "test_loop.py",
-}
+KNOWN_DEBT: set[str] = set()
 
 IGNORE_MARKER = "db-mock-check: ignore"
 

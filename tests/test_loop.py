@@ -2,11 +2,105 @@
 
 Tests cover: QC checks, re-audit scheduling, retry logic, progress tracking,
 and orchestrator integration.
+
+Each database-backed test runs against a private, pristine database provided
+by the ``fresh_db`` fixture (conftest.py): the canonical countries + 20 BG
+cities are present, mutable tables start empty, and the database is dropped on
+teardown.  ``fresh_db`` redirects ``get_pool()`` onto this private database so
+production functions that open their own pool (QC, reaudit, orchestrator) see
+only the data the test seeds — no manual cleanup, no prefix filtering, and
+exact-count assertions are safe.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
+import asyncpg
 import pytest
+
+# ──────────────────────────────────────────────────────────────────────
+# Test data helpers
+# ──────────────────────────────────────────────────────────────────────
+
+TEST_URL_PREFIX = "https://test-loop.example.com/"
+TEST_COUNTRY = "XB"  # Non-existent ISO code — walled-off test-only country
+
+
+@pytest.fixture
+async def seed_test_country(fresh_db: asyncpg.Connection) -> None:
+    """Ensure the XB test country and its city exist in the private database."""
+    await fresh_db.execute(
+        "INSERT INTO countries (iso, label, active) VALUES ($1, 'Testland', false) "
+        "ON CONFLICT (iso) DO NOTHING",
+        TEST_COUNTRY,
+    )
+    await fresh_db.execute(
+        "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
+        "VALUES ($1, 'Test City', 'test-city', 1000, 0, 0) "
+        "ON CONFLICT (country, slug) DO NOTHING",
+        TEST_COUNTRY,
+    )
+
+
+async def _seed_website(
+    conn: asyncpg.Connection,
+    url_suffix: str = "001",
+    country: str = TEST_COUNTRY,
+    **overrides,
+) -> dict:
+    """Insert a test website linked to the first city in *country* and return its row.
+
+    Writes directly on *conn* (the ``fresh_db`` connection) so the row is
+    committed and visible to production functions that use ``get_pool()``.
+    """
+    url = f"{TEST_URL_PREFIX}{url_suffix}"
+    defaults: dict = {
+        "url": url,
+        "score": 0,
+        "audit_status": "pending",
+        "audit_attempts": 0,
+    }
+    defaults.update(overrides)
+    defaults["url"] = url  # URL always has the prefix
+
+    website_id = await conn.fetchval(
+        """INSERT INTO websites (url, label, score, audit_status,
+                                 audit_attempts, audit_last_error,
+                                 needs_review, review_reason,
+                                 last_audited_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (url) DO UPDATE
+           SET score = $3, audit_status = $4,
+               audit_attempts = $5, audit_last_error = $6,
+               needs_review = $7, review_reason = $8,
+               last_audited_at = $9
+           RETURNING id""",
+        defaults["url"],
+        defaults.get("label", f"Test Agency {url_suffix}"),
+        defaults["score"],
+        defaults["audit_status"],
+        defaults["audit_attempts"],
+        defaults.get("audit_last_error"),
+        defaults.get("needs_review", False),
+        defaults.get("review_reason"),
+        defaults.get("last_audited_at"),
+    )
+
+    # Link to the first city in the requested country
+    city_id = await conn.fetchval(
+        "SELECT id FROM cities WHERE country = $1 ORDER BY id LIMIT 1", country
+    )
+    await conn.execute(
+        """INSERT INTO website_cities (website_id, city_id)
+           VALUES ($1, $2)
+           ON CONFLICT (website_id, city_id) DO NOTHING""",
+        website_id,
+        city_id,
+    )
+
+    return {"id": website_id, "url": url, "city_id": city_id}
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Retry tests
@@ -65,9 +159,6 @@ class TestRetry:
         async def raises_type_error():
             raise TypeError("not retryable")
 
-        # TypeError is not in the default retryable set (all exceptions),
-        # but our default is Exception, so it WILL retry.
-        # Test with a restricted set instead.
         with pytest.raises(TypeError, match="not retryable"):
             await retry(
                 raises_type_error,
@@ -99,68 +190,47 @@ class TestRetry:
         # With base_delay=0.05, backoff=2x: delays = 0.05, 0.10 = 0.15s minimum
         assert elapsed >= 0.10  # at least two delays
 
-    @pytest.mark.asyncio
-    async def test_mark_failed_website_updates_status(self):
-        """mark_failed_website should update website status to 'failed'."""
+    async def test_mark_failed_website_updates_status(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """mark_failed_website should update website status to 'failed' in real DB."""
         from agency_audit.loop.retry import mark_failed_website
 
-        with patch("agency_audit.loop.retry.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
+        ws = await _seed_website(fresh_db, "mark-fail", audit_attempts=1, audit_last_error=None)
 
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
+        await mark_failed_website(ws["id"], "test error message")
 
-            await mark_failed_website(42, "test error message")
+        row = await fresh_db.fetchrow(
+            "SELECT audit_status, audit_last_error, audit_attempts FROM websites WHERE id = $1",
+            ws["id"],
+        )
+        assert row["audit_status"] == "failed"
+        assert row["audit_last_error"] == "test error message"
+        # audit_attempts was 1, should now be 2 (incremented)
+        assert row["audit_attempts"] == 2
 
-            assert mock_conn.execute.call_count == 2
-
-            # First call: UPDATE websites
-            update_call = mock_conn.execute.call_args_list[0]
-            update_sql = update_call.args[0]
-            assert "UPDATE websites" in update_sql
-            assert "audit_status = 'failed'" in update_sql
-            assert update_call.args[1] == "test error message"
-            assert update_call.args[2] == 42
-
-    @pytest.mark.asyncio
-    async def test_mark_failed_website_audit_log_joins_cities(self):
+    async def test_mark_failed_website_audit_log_joins_cities(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
         """audit_log INSERT must resolve country via cities JOIN, not website_cities."""
         from agency_audit.loop.retry import mark_failed_website
 
-        with patch("agency_audit.loop.retry.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
+        ws = await _seed_website(fresh_db, "audit-log-join")
 
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
+        await mark_failed_website(ws["id"], "test network timeout")
 
-            await mark_failed_website(7, "network timeout")
-
-            assert mock_conn.execute.call_count == 2
-
-            # Second call: INSERT INTO audit_log via SELECT … JOIN
-            insert_call = mock_conn.execute.call_args_list[1]
-            insert_sql = insert_call.args[0]
-
-            # The query must JOIN through cities to get the country
-            assert "JOIN cities c ON wc.city_id = c.id" in insert_sql, (
-                "Expected JOIN through cities table, got: " + insert_sql
-            )
-
-            # The SELECT must reference c.country, NOT wc.country
-            assert "c.country" in insert_sql, "Expected c.country (from cities), got: " + insert_sql
-            assert "wc.country" not in insert_sql, (
-                "website_cities has no country column — must use c.country from cities JOIN"
-            )
-
-            # Verify the parameters
-            assert insert_call.args[1] == "network timeout"
-            assert insert_call.args[2] == 7
+        # The audit_log row should have country resolved via JOIN through cities
+        log_row = await fresh_db.fetchrow(
+            "SELECT country, run_type, error FROM audit_log "
+            "WHERE error = $1 ORDER BY id DESC LIMIT 1",
+            "test network timeout",
+        )
+        assert log_row is not None, "Expected an audit_log row to be inserted"
+        assert log_row["country"] == TEST_COUNTRY, (
+            f"Country should be '{TEST_COUNTRY}' (resolved via cities JOIN), "
+            f"got: {log_row['country']}"
+        )
+        assert log_row["run_type"] == "audit"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -181,68 +251,121 @@ class TestQC:
         assert _extract_domain("https://subdomain.example.com") == "subdomain.example.com"
         assert _extract_domain("HTTP://WWW.EXAMPLE.COM") == "example.com"
 
-    @pytest.mark.asyncio
-    async def test_flag_suspicious_scores_empty(self):
-        """flag_suspicious_scores should handle empty database gracefully."""
+    async def test_flag_suspicious_scores_empty(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """flag_suspicious_scores should find nothing on a pristine database."""
         from agency_audit.loop.qc import flag_suspicious_scores
 
-        # We mock the database pool
-        with patch("agency_audit.loop.qc.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
+        findings = await flag_suspicious_scores(country=TEST_COUNTRY)
+        # Pristine per-test database — no test-owned data exists yet.
+        assert findings == [], f"Should not flag any websites, got: {findings}"
 
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
-            # No suspicious websites
-            mock_conn.fetch.return_value = []
-
-            findings = await flag_suspicious_scores()
-            assert findings == []
-
-    @pytest.mark.asyncio
-    async def test_flag_suspicious_scores_found(self):
+    async def test_flag_suspicious_scores_found(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
         """flag_suspicious_scores should detect scores of 0 and 100."""
         from agency_audit.loop.qc import flag_suspicious_scores
 
-        with patch("agency_audit.loop.qc.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
+        # Seed two websites with suspicious scores
+        ws_zero = await _seed_website(fresh_db, "zero", score=0, audit_status="audited")
+        ws_hundred = await _seed_website(fresh_db, "hundred", score=100, audit_status="audited")
 
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
-            mock_conn.fetch.return_value = [
-                {"id": 1, "url": "https://example.com", "score": 0, "audit_status": "audited"},
-                {"id": 2, "url": "https://example.org", "score": 100, "audit_status": "audited"},
-            ]
+        findings = await flag_suspicious_scores(country=TEST_COUNTRY)
 
-            findings = await flag_suspicious_scores()
-            assert len(findings) == 2
-            assert findings[0].website_id == 1
-            assert "score 0" in findings[0].reason.lower()
-            assert findings[1].website_id == 2
-            assert "score 100" in findings[1].reason.lower()
+        assert len(findings) == 2, f"Expected exactly 2 findings, got: {findings}"
+        finding_ids = {f.website_id for f in findings}
+        assert ws_zero["id"] in finding_ids
+        assert ws_hundred["id"] in finding_ids
 
-    @pytest.mark.asyncio
-    async def test_detect_duplicates_empty(self):
-        """detect_duplicates should handle empty results."""
+        # Verify DB was updated
+        zero_row = await fresh_db.fetchrow(
+            "SELECT needs_review, review_reason, qc_checks FROM websites WHERE id = $1",
+            ws_zero["id"],
+        )
+        assert zero_row["needs_review"] is True
+        assert "score 0" in zero_row["review_reason"].lower()
+
+        hundred_row = await fresh_db.fetchrow(
+            "SELECT needs_review, review_reason, qc_checks FROM websites WHERE id = $1",
+            ws_hundred["id"],
+        )
+        assert hundred_row["needs_review"] is True
+        assert "score 100" in hundred_row["review_reason"].lower()
+
+    async def test_detect_duplicates_empty(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """detect_duplicates should find nothing on a pristine database."""
         from agency_audit.loop.qc import detect_duplicates
 
-        with patch("agency_audit.loop.qc.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
+        findings = await detect_duplicates(country=TEST_COUNTRY)
+        # Pristine per-test database — no websites to flag.
+        assert findings == []
 
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
-            mock_conn.fetch.return_value = []
+    async def test_detect_duplicates_found(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """detect_duplicates should flag a domain appearing in multiple cities."""
+        from agency_audit.loop.qc import detect_duplicates
 
-            findings = await detect_duplicates()
-            assert findings == []
+        # Insert second test city
+        city2_id = await fresh_db.fetchval(
+            "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
+            "VALUES ($1, 'Test City 2', 'test-city-2', 2000, 1, 1) "
+            "ON CONFLICT (country, slug) DO UPDATE SET id = cities.id "
+            "RETURNING id",
+            TEST_COUNTRY,
+        )
+        url = f"{TEST_URL_PREFIX}duplicate-agency"
+        wid = await fresh_db.fetchval(
+            """INSERT INTO websites (url, label, audit_status)
+               VALUES ($1, 'Dup Agency', 'audited')
+               ON CONFLICT (url) DO UPDATE SET audit_status = 'audited'
+               RETURNING id""",
+            url,
+        )
+        # Get the first test city ID
+        city1_id = await fresh_db.fetchval(
+            "SELECT id FROM cities WHERE country = $1 AND slug = 'test-city'",
+            TEST_COUNTRY,
+        )
+        # Link to both test cities
+        await fresh_db.execute(
+            """INSERT INTO website_cities (website_id, city_id)
+               VALUES ($1, $2), ($1, $3)
+               ON CONFLICT (website_id, city_id) DO NOTHING""",
+            wid,
+            city1_id,
+            city2_id,
+        )
+
+        findings = await detect_duplicates(country=TEST_COUNTRY)
+
+        assert len(findings) == 1, f"Expected exactly 1 finding, got: {findings}"
+        assert findings[0].url == url
+        assert findings[0].severity == "info"
+        assert "2 cities" in findings[0].reason
+
+        # Verify DB was updated with needs_review
+        row = await fresh_db.fetchrow(
+            "SELECT needs_review, review_reason FROM websites WHERE id = $1", wid
+        )
+        assert row["needs_review"] is True
+
+    async def test_detect_duplicates_skips_single_city(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """A website in only one city should NOT be flagged as duplicate."""
+        from agency_audit.loop.qc import detect_duplicates
+
+        # Single-city website (linked to just one city in the test country)
+        await _seed_website(fresh_db, "single-city", audit_status="audited")
+
+        findings = await detect_duplicates(country=TEST_COUNTRY)
+
+        # Pristine database — only our single-city website exists, so no duplicates.
+        assert findings == []
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -253,41 +376,150 @@ class TestQC:
 class TestReaudit:
     """Tests for re-audit scheduling."""
 
-    @pytest.mark.asyncio
-    async def test_get_reaudit_queue_empty(self):
-        """get_reaudit_queue should return empty when no overdue websites."""
+    async def test_get_reaudit_queue_empty(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """get_reaudit_queue should return empty list on a pristine database."""
         from agency_audit.loop.reaudit import get_reaudit_queue
 
-        with patch("agency_audit.loop.reaudit.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
+        queue = await get_reaudit_queue(country=TEST_COUNTRY)
+        # Pristine per-test database — no audited websites exist.
+        assert queue == []
 
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
-            mock_conn.fetch.return_value = []
-
-            queue = await get_reaudit_queue()
-            assert queue == []
-
-    @pytest.mark.asyncio
-    async def test_schedule_reaudits_empty(self):
-        """schedule_reaudits should return zero when nothing to queue."""
+    async def test_schedule_reaudits_empty(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """schedule_reaudits should find nothing to queue on a pristine database."""
         from agency_audit.loop.reaudit import schedule_reaudits
 
-        with patch("agency_audit.loop.reaudit.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
+        result = await schedule_reaudits(country=TEST_COUNTRY)
 
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
-            mock_conn.fetch.return_value = []
+        # Pristine database — no websites to re-audit.
+        assert result["queued"] == 0
+        assert result["oldest_age_days"] is None
 
-            result = await schedule_reaudits()
-            assert result["queued"] == 0
+    async def test_schedule_reaudits_queues_overdue(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """schedule_reaudits should queue a website audited long ago."""
+        from datetime import UTC, datetime, timedelta
+
+        from agency_audit.loop.reaudit import schedule_reaudits
+
+        # Seed a test-owned website audited 45 days ago
+        old_date = datetime.now(UTC) - timedelta(days=45)
+        ws = await _seed_website(
+            fresh_db,
+            "overdue",
+            audit_status="audited",
+            score=75,
+            last_audited_at=old_date,
+        )
+
+        result = await schedule_reaudits(interval_days=30, limit=10, country=TEST_COUNTRY)
+
+        # Pristine database — exactly one test website.
+        assert result["queued"] == 1, f"Expected exactly 1 website queued, got: {result['queued']}"
+
+        # Verify the website was reset to pending with audit_attempts=0
+        row = await fresh_db.fetchrow(
+            "SELECT audit_status, audit_attempts, last_audited_at FROM websites WHERE id = $1",
+            ws["id"],
+        )
+        assert row["audit_status"] == "pending"
+        assert row["audit_attempts"] == 0
+        assert row["last_audited_at"] is None
+
+    async def test_reaudit_scheduling_resets_attempts_to_zero(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """Re-audit scheduling should reset audit_attempts to 0, not increment."""
+        from datetime import UTC, datetime, timedelta
+
+        from agency_audit.loop.reaudit import schedule_reaudits
+
+        # Website with some prior failed attempts, audited 45 days ago
+        old_date = datetime.now(UTC) - timedelta(days=45)
+        ws = await _seed_website(
+            fresh_db,
+            "reset-attempts",
+            audit_status="audited",
+            score=75,
+            audit_attempts=2,
+            last_audited_at=old_date,
+        )
+
+        result = await schedule_reaudits(interval_days=30, limit=10, country=TEST_COUNTRY)
+
+        # Pristine database — exactly one test website.
+        assert result["queued"] == 1, f"Expected exactly 1 website queued, got: {result['queued']}"
+
+        row = await fresh_db.fetchrow(
+            "SELECT audit_status, audit_attempts FROM websites WHERE id = $1",
+            ws["id"],
+        )
+        assert row is not None
+        assert row["audit_status"] == "pending"
+        assert row["audit_attempts"] == 0, "re-audit scheduling should reset audit_attempts to 0"
+
+    async def test_schedule_reaudits_deduplicates_multi_city_website(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """A website linked to two cities in the same country should be queued once."""
+        from datetime import UTC, datetime, timedelta
+
+        from agency_audit.loop.reaudit import schedule_reaudits
+
+        # Insert second test city
+        await fresh_db.fetchval(
+            "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
+            "VALUES ($1, 'Test City 2', 'test-city-2', 2000, 1, 1) "
+            "ON CONFLICT (country, slug) DO UPDATE SET id = cities.id "
+            "RETURNING id",
+            TEST_COUNTRY,
+        )
+        old_date = datetime.now(UTC) - timedelta(days=45)
+        url = f"{TEST_URL_PREFIX}multi-city-agency"
+        wid = await fresh_db.fetchval(
+            """INSERT INTO websites (url, label, score, audit_status, last_audited_at)
+               VALUES ($1, 'Multi-City Agency', 80, 'audited', $2)
+               ON CONFLICT (url) DO UPDATE
+               SET score = 80, audit_status = 'audited', last_audited_at = $2
+               RETURNING id""",
+            url,
+            old_date,
+        )
+        city1_id = await fresh_db.fetchval(
+            "SELECT id FROM cities WHERE country = $1 AND slug = 'test-city'",
+            TEST_COUNTRY,
+        )
+        city2_id = await fresh_db.fetchval(
+            "SELECT id FROM cities WHERE country = $1 AND slug = 'test-city-2'",
+            TEST_COUNTRY,
+        )
+        # Link to both cities
+        await fresh_db.execute(
+            """INSERT INTO website_cities (website_id, city_id)
+               VALUES ($1, $2), ($1, $3)
+               ON CONFLICT (website_id, city_id) DO NOTHING""",
+            wid,
+            city1_id,
+            city2_id,
+        )
+
+        result = await schedule_reaudits(interval_days=30, limit=10, country=TEST_COUNTRY)
+
+        # The website is in two cities but should only be queued once
+        assert result["queued"] == 1, (
+            f"Expected 1 website queued (deduplicated), got: {result['queued']}"
+        )
+
+        # Verify the website was reset to pending
+        row = await fresh_db.fetchrow(
+            "SELECT audit_status, audit_attempts FROM websites WHERE id = $1", wid
+        )
+        assert row is not None
+        assert row["audit_status"] == "pending"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -315,31 +547,57 @@ class TestTracking:
         assert entry.items_processed == 0
         assert entry.summary == {}
 
-    @pytest.mark.asyncio
-    async def test_get_progress_empty_db(self):
-        """get_progress should handle empty database."""
+    async def test_get_progress_empty_db(self, fresh_db: asyncpg.Connection):
+        """get_progress should return reference counts on a pristine database.
+
+        The database is seeded with 44 countries (4 active) and 20 BG cities.
+        Mutable tables (websites, website_cities, discovery_log) are empty, so
+        website counts are exactly zero.
+        """
         from agency_audit.loop.tracking import get_progress
 
-        with patch("agency_audit.loop.tracking.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
+        data = await get_progress()
 
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
-            # Return 0 for all counts
-            mock_conn.fetchval = AsyncMock(return_value=0)
-            mock_conn.fetch = AsyncMock(return_value=[])
+        assert "overview" in data
+        assert "per_country" in data
+        assert "recent_runs" in data
 
-            data = await get_progress()
-            assert "overview" in data
-            assert data["overview"]["cities_total"] == 0
-            assert data["overview"]["websites_total"] == 0
+        overview = data["overview"]
+        assert overview["countries"] == 4  # 4 active countries in seed data
+        assert overview["cities_total"] == 20
+        # Pristine database — no websites exist.
+        assert overview["websites_total"] == 0
+        assert overview["websites_audited"] == 0
+        assert overview["websites_failed"] == 0
+
+    async def test_log_discovery_run_inserts_row(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """log_discovery_run should insert an audit_log row with correct values."""
+        from agency_audit.loop.tracking import log_discovery_run
+
+        log_id = await log_discovery_run(
+            country=TEST_COUNTRY,
+            cities_processed=5,
+            agencies_found=12,
+            duration_seconds=3.5,
+        )
+
+        row = await fresh_db.fetchrow(
+            "SELECT country, run_type, items_processed, items_succeeded, "
+            "duration_seconds, summary FROM audit_log WHERE id = $1",
+            log_id,
+        )
+        assert row is not None
+        assert row["country"] == TEST_COUNTRY
+        assert row["run_type"] == "discovery"
+        assert row["items_processed"] == 5
+        assert row["items_succeeded"] == 12
+        assert float(row["duration_seconds"]) == 3.5
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Orchestrator import tests
+# Orchestrator import / formatting tests
 # ──────────────────────────────────────────────────────────────────────
 
 
@@ -402,142 +660,73 @@ class TestAuditAttemptsCounter:
     total lifetime attempts.
     """
 
-    @pytest.mark.asyncio
-    async def test_successful_audit_resets_attempts_to_zero(self):
+    async def test_successful_audit_resets_attempts_to_zero(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
         """On audit success, the UPDATE must set audit_attempts = 0."""
         from agency_audit.loop.orchestrator import _audit_country_websites
 
-        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
+        # Seed a pending website with prior attempts in the test country
+        ws = await _seed_website(
+            fresh_db, "success-reset", audit_status="pending", audit_attempts=2
+        )
 
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
+        # Mock retry to return a fake successful audit result
+        class FakeAuditResult:
+            score = 85
 
-            # Return one website to audit
-            mock_conn.fetch.return_value = [{"id": 1, "url": "https://example.com"}]
+            @staticmethod
+            def to_dict():
+                return {"score": 85}
 
-            # Mock retry to succeed — returns a fake audit result
-            class FakeAuditResult:
-                @staticmethod
-                def to_dict():
-                    return {"score": 85}
+        with patch("agency_audit.loop.orchestrator.retry", new_callable=AsyncMock) as mock_retry:
+            mock_retry.return_value = FakeAuditResult()
 
-                score = 85
+            result = await _audit_country_websites(TEST_COUNTRY, concurrency=1)
 
-            with patch(
-                "agency_audit.loop.orchestrator.retry", new_callable=AsyncMock
-            ) as mock_retry:
-                mock_retry.return_value = FakeAuditResult()
+        # Pristine database — exactly one test website.
+        assert result["succeeded"] == 1, (
+            f"Expected exactly 1 website to succeed, got succeeded={result['succeeded']}"
+        )
 
-                result = await _audit_country_websites("BG", concurrency=1)
+        row = await fresh_db.fetchrow(
+            "SELECT audit_status, audit_attempts, score FROM websites WHERE id = $1",
+            ws["id"],
+        )
+        assert row is not None
+        assert row["audit_status"] == "audited"
+        assert row["audit_attempts"] == 0, "successful audit should reset audit_attempts to 0"
+        assert row["score"] == 85
 
-            assert result["succeeded"] == 1
-            assert result["failed"] == 0
-
-            # Collect all UPDATE calls on the mock connection
-            update_calls = [
-                call
-                for call in mock_conn.execute.call_args_list
-                if "UPDATE websites" in str(call.args[0])
-            ]
-            assert len(update_calls) >= 1, "Expected at least one UPDATE call"
-
-            success_update = str(update_calls[0].args[0])
-            assert "audit_attempts = 0" in success_update, (
-                "successful audit should reset audit_attempts to 0, got: " + success_update
-            )
-            assert "audit_attempts = audit_attempts + 1" not in success_update, (
-                "successful audit should NOT increment audit_attempts"
-            )
-
-    @pytest.mark.asyncio
-    async def test_failed_audit_increments_attempts(self):
-        """On audit failure, the UPDATE must keep audit_attempts = audit_attempts + 1."""
+    async def test_failed_audit_increments_attempts(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """On audit failure, the UPDATE must increment audit_attempts."""
         from agency_audit.loop.orchestrator import _audit_country_websites
 
-        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
+        ws = await _seed_website(
+            fresh_db, "fail-increment", audit_status="pending", audit_attempts=1
+        )
 
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
+        with patch("agency_audit.loop.orchestrator.retry", new_callable=AsyncMock) as mock_retry:
+            mock_retry.side_effect = RuntimeError("audit failed after retries")
 
-            mock_conn.fetch.return_value = [{"id": 1, "url": "https://example.com"}]
+            result = await _audit_country_websites(TEST_COUNTRY, concurrency=1)
 
-            # Mock retry to fail
-            with patch(
-                "agency_audit.loop.orchestrator.retry", new_callable=AsyncMock
-            ) as mock_retry:
-                mock_retry.side_effect = RuntimeError("audit failed after retries")
+        # Pristine database — exactly one test website.
+        assert result["failed"] == 1, (
+            f"Expected exactly 1 website to fail, got failed={result['failed']}"
+        )
 
-                result = await _audit_country_websites("BG", concurrency=1)
-
-            assert result["failed"] == 1
-            assert result["succeeded"] == 0
-
-            # Find the failure UPDATE
-            update_calls = [
-                call
-                for call in mock_conn.execute.call_args_list
-                if "UPDATE websites" in str(call.args[0])
-            ]
-            assert len(update_calls) >= 1
-
-            failure_update = str(update_calls[0].args[0])
-            assert "audit_attempts = audit_attempts + 1" in failure_update, (
-                "failed audit should increment audit_attempts, got: " + failure_update
-            )
-            assert "audit_attempts = 0" not in failure_update, (
-                "failed audit should NOT reset audit_attempts to 0"
-            )
-
-    @pytest.mark.asyncio
-    async def test_reaudit_scheduling_resets_attempts_to_zero(self):
-        """Re-audit scheduling should reset audit_attempts to 0, not increment."""
-        from agency_audit.loop.reaudit import schedule_reaudits
-
-        with patch("agency_audit.loop.reaudit.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
-
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
-
-            # Return one overdue website
-            mock_conn.fetch.return_value = [
-                {"id": 42, "url": "https://example.com", "score": 75, "age_days": 45},
-            ]
-
-            result = await schedule_reaudits(interval_days=30, limit=10)
-
-            assert result["queued"] == 1
-
-            # The UPDATE that sets status back to 'pending' should reset
-            # audit_attempts to 0, not increment
-            update_calls = [
-                call
-                for call in mock_conn.execute.call_args_list
-                if "UPDATE websites" in str(call.args[0])
-                and "SET audit_status = 'pending'" in str(call.args[0])
-            ]
-            assert len(update_calls) == 1, (
-                "Expected exactly one UPDATE websites SET audit_status='pending' call"
-            )
-
-            reaudit_update = str(update_calls[0].args[0])
-            assert "audit_attempts = 0" in reaudit_update, (
-                "re-audit scheduling should reset audit_attempts to 0, got: " + reaudit_update
-            )
-            assert "audit_attempts = audit_attempts + 1" not in reaudit_update, (
-                "re-audit scheduling should NOT increment audit_attempts"
-            )
+        row = await fresh_db.fetchrow(
+            "SELECT audit_status, audit_attempts, audit_last_error FROM websites WHERE id = $1",
+            ws["id"],
+        )
+        assert row is not None
+        assert row["audit_status"] == "failed"
+        # Was 1, should now be 2 (incremented)
+        assert row["audit_attempts"] == 2, "failed audit should increment audit_attempts"
+        assert "audit failed after retries" in (row["audit_last_error"] or "")
 
 
 # ──────────────────────────────────────────────────────────────────────
