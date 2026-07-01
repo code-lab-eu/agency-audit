@@ -203,8 +203,17 @@ class TestOrchestratorHappyPaths:
 
         Monkeypatches agency_audit.config.settings so get_pool() connects
         to the same isolated test database that the db_conn fixture uses.
+        Assertions are dynamic — they first query the active countries via
+        db_conn, then verify run_all_countries returns the same set.
         """
         from agency_audit.loop.orchestrator import run_all_countries
+
+        # Discover what the fixture database actually contains via db_conn.
+        # This makes the test independent of ambient database state and
+        # works whether the fixture is a Docker container or the same
+        # host as the developer's local instance.
+        rows = await db_conn.fetch("SELECT iso FROM countries WHERE active = true ORDER BY iso")
+        expected_isos = [r["iso"] for r in rows]
 
         # Point get_pool() at the fixture database so every consumer
         # (run_all_countries → get_pool → asyncpg.create_pool) hits
@@ -226,11 +235,10 @@ class TestOrchestratorHappyPaths:
 
             result = await run_all_countries()
 
-            # Seeded DB has BE, BG, ES, RS as active=true
-            assert result["totals"]["countries_processed"] == 4
-            assert mock_run.call_count == 4
-            # Verify the specific active countries were processed
-            assert set(result["results"].keys()) == {"BE", "BG", "ES", "RS"}
+            assert result["totals"]["countries_processed"] == len(expected_isos)
+            assert mock_run.call_count == len(expected_isos)
+            # Verify the exact set of active countries was processed
+            assert set(result["results"].keys()) == set(expected_isos)
 
     @pytest.mark.asyncio
     async def test_discovery_phase_success(self):
@@ -481,16 +489,25 @@ class TestOrchestratorSkipPaths:
         postgres_dsn: str,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        """_audit_country_websites returns zeros when no pending websites.
+        """_audit_country_websites reflects the actual pending-website count.
 
         Query-path test: exercises the real database via get_pool().  The
-        seeded test database has no websites, so the pending-websites query
-        returns empty and the function returns all zeros.
-
-        Monkeypatches agency_audit.config.settings so get_pool() connects
-        to the same isolated test database that the db_conn fixture uses.
+        test first queries the pending BG website count via db_conn, then
+        asserts _audit_country_websites returns the same count.  The
+        ``audit_website`` call is mocked to avoid real HTTP requests and
+        prevent database writes outside the db_conn transaction.
         """
         from agency_audit.loop.orchestrator import _audit_country_websites
+
+        # Discover the current pending BG website count via db_conn.
+        pending_count = await db_conn.fetchval(
+            """SELECT COUNT(*)
+               FROM websites w
+               JOIN website_cities wc ON wc.website_id = w.id
+               JOIN cities c ON c.id = wc.city_id
+               WHERE c.country = 'BG' AND w.audit_status = 'pending'
+                 AND w.audit_attempts < 3"""
+        )
 
         # Point get_pool() at the fixture database.
         parsed = urlparse(postgres_dsn)
@@ -500,5 +517,22 @@ class TestOrchestratorSkipPaths:
         monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
         monkeypatch.setattr(settings, "pg_password", parsed.password or "")
 
-        result = await _audit_country_websites("BG")
-        assert result == {"audited": 0, "succeeded": 0, "failed": 0}
+        # Mock audit_website so we never make real HTTP calls, regardless
+        # of how many pending websites exist in the fixture database.
+        mock_audit_data = MagicMock()
+        mock_audit_data.score = 80
+        mock_audit_data.to_dict.return_value = {"score": 80}
+
+        with patch(
+            "agency_audit.loop.orchestrator.audit_website",
+            new_callable=AsyncMock,
+            return_value=mock_audit_data,
+        ) as mock_audit:
+            result = await _audit_country_websites("BG")
+
+        assert result["audited"] == pending_count
+        # The mock audit_website always "succeeds", so all audited sites
+        # should be counted as succeeded.
+        assert result["succeeded"] == pending_count
+        assert result["failed"] == 0
+        assert mock_audit.call_count == pending_count
