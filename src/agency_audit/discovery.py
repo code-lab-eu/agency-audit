@@ -19,7 +19,7 @@ import httpx
 
 from agency_audit.config import settings
 from agency_audit.db import get_pool
-from agency_audit.discovery_geo import Rectangle, bbox_from_center
+from agency_audit.discovery_geo import Rectangle, bbox_from_center, is_saturated, subdivide
 
 logger = logging.getLogger(__name__)
 
@@ -451,6 +451,79 @@ class DiscoveryPipeline:
             lon=float(city["longitude"]),
             half_extent_m=settings.places_city_half_extent_meters,
         )
+
+    async def search_tiled(
+        self,
+        query: str,
+        city: dict[str, Any],
+    ) -> list[PlaceResult]:
+        """Search the city's viewport recursively via tiled Text Search.
+
+        The city's viewport is subdivided into a quadtree.  A tile whose
+        result count meets or exceeds ``places_tile_saturation_threshold``
+        is subdivided into 4 quadrants and each is searched independently
+        — up to ``places_tile_max_depth`` levels deep.  Tiles that return
+        fewer results are kept as-is.
+
+        A per-city API-call counter stops subdivision once
+        ``places_max_calls_per_city`` is reached; skipped tiles are logged
+        explicitly (not silently truncated).  Results are deduplicated by
+        ``place_id``.
+        """
+        viewport = await self.resolve_city_viewport(city)
+        call_count = 0
+        skipped_tiles = 0
+        max_calls = settings.places_max_calls_per_city
+        max_depth = settings.places_tile_max_depth
+        sat_threshold = settings.places_tile_saturation_threshold
+        city_label = str(city.get("label", "unknown"))
+
+        async def _search_recursive(
+            tile: Rectangle,
+            depth: int,
+        ) -> list[PlaceResult]:
+            nonlocal call_count, skipped_tiles
+
+            if call_count >= max_calls:
+                skipped_tiles += 1
+                return []
+
+            call_count += 1
+            results = await self.places.search_text(
+                query=query,
+                location_restriction=tile,
+            )
+
+            if (
+                is_saturated(len(results), sat_threshold)
+                and depth < max_depth
+                and call_count < max_calls
+            ):
+                child_results: list[PlaceResult] = []
+                for child in subdivide(tile):
+                    child_results.extend(await _search_recursive(child, depth + 1))
+                return results + child_results
+
+            return results
+
+        all_results = await _search_recursive(viewport, 0)
+
+        if skipped_tiles > 0:
+            logger.warning(
+                "Tiled search for %s: budget exhausted — %d tiles skipped",
+                city_label,
+                skipped_tiles,
+            )
+
+        # Deduplicate by place_id, preserving first occurrence
+        seen: set[str] = set()
+        deduped: list[PlaceResult] = []
+        for r in all_results:
+            if r.place_id and r.place_id not in seen:
+                deduped.append(r)
+                seen.add(r.place_id)
+
+        return deduped
 
     async def query_for_country(self, country_iso: str) -> list[str]:
         """Get search query templates for a country."""
