@@ -1,4 +1,4 @@
--- 005_add_fulltext_search.sql — Full-text search on agency names
+-- 006_add_fulltext_search.sql — Full-text search on agency names
 --
 -- Adds a description column (stub for future integration — search only indexes
 -- label until a population path is wired), a generated tsvector column on label,

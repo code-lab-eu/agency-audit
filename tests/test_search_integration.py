@@ -301,7 +301,7 @@ class TestSetDescriptionIntegration:
 
 
 class TestMigrationApplied:
-    """Verify the 005 migration structure is correct."""
+    """Verify the 006 migration structure is correct."""
 
     async def test_search_vector_column_exists(self, pg_conn):
         """The search_vector generated column was created by the migration."""
