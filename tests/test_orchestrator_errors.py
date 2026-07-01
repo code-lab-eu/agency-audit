@@ -1,12 +1,34 @@
 """Additional tests for orchestrator error paths. Push coverage further."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlparse
 
 import pytest
 
+from agency_audit.config import settings
+from agency_audit.db import close_pool
+
+
+@pytest.fixture(autouse=True)
+async def _cleanup_pool():
+    """Ensure the module-level pool is closed after every test.
+
+    get_pool() is a module-level singleton; when one test creates a pool on its
+    event loop, that pool becomes stale as soon as the test's loop closes.
+    Closing it here guarantees the next test always gets a fresh pool.
+    """
+    yield
+    await close_pool()
+
 
 class TestOrchestratorErrorPaths:
-    """Test error-handling paths in run_country for each phase."""
+    """Test error-handling paths in run_country for each phase.
+
+    These are error-injection tests: they mock phase functions to raise
+    and verify the orchestrator catches and records the errors.  get_pool
+    is mocked here because log_full_loop_run uses it; the mock is genuine
+    error-path scaffolding, not a substitute for SQL correctness checks.
+    """
 
     @pytest.mark.asyncio
     async def test_discovery_phase_error(self):
@@ -14,7 +36,9 @@ class TestOrchestratorErrorPaths:
         from agency_audit.loop.orchestrator import run_country
 
         with (
-            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch(
+                "agency_audit.loop.orchestrator.get_pool"
+            ) as mock_get_pool,  # db-mock-check: ignore
             patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
             patch("agency_audit.loop.orchestrator.DiscoveryPipeline") as mock_dp_cls,
         ):
@@ -47,7 +71,9 @@ class TestOrchestratorErrorPaths:
         from agency_audit.loop.orchestrator import run_country
 
         with (
-            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch(
+                "agency_audit.loop.orchestrator.get_pool"
+            ) as mock_get_pool,  # db-mock-check: ignore
             patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
             patch("agency_audit.loop.orchestrator._audit_country_websites") as mock_audit,
         ):
@@ -73,7 +99,9 @@ class TestOrchestratorErrorPaths:
         from agency_audit.loop.orchestrator import run_country
 
         with (
-            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch(
+                "agency_audit.loop.orchestrator.get_pool"
+            ) as mock_get_pool,  # db-mock-check: ignore
             patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
             patch("agency_audit.loop.orchestrator.run_qc_checks") as mock_qc,
         ):
@@ -99,7 +127,9 @@ class TestOrchestratorErrorPaths:
         from agency_audit.loop.orchestrator import run_country
 
         with (
-            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch(
+                "agency_audit.loop.orchestrator.get_pool"
+            ) as mock_get_pool,  # db-mock-check: ignore
             patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
             patch("agency_audit.loop.orchestrator.schedule_reaudits") as mock_reaudit,
         ):
@@ -150,24 +180,52 @@ class TestOrchestratorFormatSummaryEdgeCases:
 
 
 class TestOrchestratorHappyPaths:
-    """Test the success logging paths in each phase of run_country."""
+    """Test the success logging paths in each phase of run_country.
+
+    These tests mock phase functions and verify the orchestrator's
+    control-flow / aggregation logic.  get_pool is mocked because the
+    only real consumer is log_full_loop_run, which is also mocked here.
+    """
 
     @pytest.mark.asyncio
-    async def test_run_all_countries_default_countries(self):
-        """run_all_countries without countries list fetches from DB."""
+    async def test_run_all_countries_default_countries(
+        self,
+        db_conn,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """run_all_countries without countries list fetches active countries from DB.
+
+        Query-path test: exercises the real database via get_pool() so the
+        ``SELECT iso FROM countries WHERE active = true`` query runs against
+        PostgreSQL.  run_country is still mocked — we are testing the
+        country-fetch path, not the full loop.
+
+        Monkeypatches agency_audit.config.settings so get_pool() connects
+        to the same isolated test database that the db_conn fixture uses.
+        Assertions are dynamic — they first query the active countries via
+        db_conn, then verify run_all_countries returns the same set.
+        """
         from agency_audit.loop.orchestrator import run_all_countries
 
-        mock_conn = AsyncMock()
-        mock_ctx = AsyncMock()
-        mock_ctx.__aenter__.return_value = mock_conn
-        mock_pool = MagicMock()
-        mock_pool.acquire.return_value = mock_ctx
-        mock_conn.fetch = AsyncMock(return_value=[{"iso": "BG"}, {"iso": "GB"}])
+        # Discover what the fixture database actually contains via db_conn.
+        # This makes the test independent of ambient database state and
+        # works whether the fixture is a Docker container or the same
+        # host as the developer's local instance.
+        rows = await db_conn.fetch("SELECT iso FROM countries WHERE active = true ORDER BY iso")
+        expected_isos = [r["iso"] for r in rows]
 
-        with (
-            patch("agency_audit.loop.orchestrator.get_pool", return_value=mock_pool),
-            patch("agency_audit.loop.orchestrator.run_country") as mock_run,
-        ):
+        # Point get_pool() at the fixture database so every consumer
+        # (run_all_countries → get_pool → asyncpg.create_pool) hits
+        # the same isolated, migrated, seeded database as db_conn.
+        parsed = urlparse(postgres_dsn)
+        monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
+        monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
+        monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
+        monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
+        monkeypatch.setattr(settings, "pg_password", parsed.password or "")
+
+        with patch("agency_audit.loop.orchestrator.run_country") as mock_run:
             mock_run.return_value = {
                 "country": "BG",
                 "phases": {},
@@ -176,8 +234,11 @@ class TestOrchestratorHappyPaths:
             }
 
             result = await run_all_countries()
-            assert result["totals"]["countries_processed"] == 2
-            assert mock_run.call_count == 2
+
+            assert result["totals"]["countries_processed"] == len(expected_isos)
+            assert mock_run.call_count == len(expected_isos)
+            # Verify the exact set of active countries was processed
+            assert set(result["results"].keys()) == set(expected_isos)
 
     @pytest.mark.asyncio
     async def test_discovery_phase_success(self):
@@ -185,7 +246,7 @@ class TestOrchestratorHappyPaths:
         from agency_audit.loop.orchestrator import run_country
 
         with (
-            patch("agency_audit.loop.orchestrator.get_pool"),
+            patch("agency_audit.loop.orchestrator.get_pool"),  # db-mock-check: ignore
             patch("agency_audit.loop.orchestrator.DiscoveryPipeline") as mock_dp_cls,
             patch("agency_audit.loop.orchestrator.log_discovery_run") as mock_log,
             patch("agency_audit.loop.orchestrator.log_full_loop_run"),
@@ -220,7 +281,7 @@ class TestOrchestratorHappyPaths:
         from agency_audit.loop.orchestrator import run_country
 
         with (
-            patch("agency_audit.loop.orchestrator.get_pool"),
+            patch("agency_audit.loop.orchestrator.get_pool"),  # db-mock-check: ignore
             patch("agency_audit.loop.orchestrator._audit_country_websites") as mock_audit,
             patch("agency_audit.loop.orchestrator.log_full_loop_run"),
         ):
@@ -247,7 +308,7 @@ class TestOrchestratorHappyPaths:
         from agency_audit.loop.orchestrator import run_country
 
         with (
-            patch("agency_audit.loop.orchestrator.get_pool"),
+            patch("agency_audit.loop.orchestrator.get_pool"),  # db-mock-check: ignore
             patch("agency_audit.loop.orchestrator.run_qc_checks") as mock_qc,
             patch("agency_audit.loop.orchestrator.log_full_loop_run"),
         ):
@@ -274,7 +335,7 @@ class TestOrchestratorHappyPaths:
         from agency_audit.loop.orchestrator import run_country
 
         with (
-            patch("agency_audit.loop.orchestrator.get_pool"),
+            patch("agency_audit.loop.orchestrator.get_pool"),  # db-mock-check: ignore
             patch("agency_audit.loop.orchestrator.schedule_reaudits") as mock_reaudit,
             patch("agency_audit.loop.orchestrator.log_full_loop_run"),
         ):
@@ -308,7 +369,9 @@ class TestOrchestratorSkipPaths:
         from agency_audit.loop.orchestrator import run_country
 
         with (
-            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch(
+                "agency_audit.loop.orchestrator.get_pool"
+            ) as mock_get_pool,  # db-mock-check: ignore
             patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
         ):
             mock_pool = MagicMock()
@@ -332,7 +395,9 @@ class TestOrchestratorSkipPaths:
         from agency_audit.loop.orchestrator import run_country
 
         with (
-            patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool,
+            patch(
+                "agency_audit.loop.orchestrator.get_pool"
+            ) as mock_get_pool,  # db-mock-check: ignore
             patch("agency_audit.loop.orchestrator.log_full_loop_run") as mock_log,
         ):
             mock_pool = MagicMock()
@@ -350,7 +415,14 @@ class TestOrchestratorSkipPaths:
 
     @pytest.mark.asyncio
     async def test_run_all_countries_with_countries_list(self):
-        """run_all_countries with explicit countries list, all skipped."""
+        """run_all_countries with explicit countries list, all skipped.
+
+        When a countries list is supplied the orchestrator uses it directly
+        without fetching from the database.  get_pool is still called
+        (pool.acquire happens unconditionally) but the connection is
+        released immediately.  Mocking get_pool here is appropriate because
+        the test exercises control flow, not a SQL query path.
+        """
         from agency_audit.loop.orchestrator import run_all_countries
 
         mock_conn = AsyncMock()
@@ -360,7 +432,10 @@ class TestOrchestratorSkipPaths:
         mock_pool.acquire.return_value = mock_ctx
 
         with (
-            patch("agency_audit.loop.orchestrator.get_pool", return_value=mock_pool),
+            patch(
+                "agency_audit.loop.orchestrator.get_pool",
+                return_value=mock_pool,
+            ),  # db-mock-check: ignore
             patch("agency_audit.loop.orchestrator.run_country") as mock_run,
         ):
             mock_run.return_value = {
@@ -394,7 +469,10 @@ class TestOrchestratorSkipPaths:
         mock_pool.acquire.return_value = mock_ctx
 
         with (
-            patch("agency_audit.loop.orchestrator.get_pool", return_value=mock_pool),
+            patch(
+                "agency_audit.loop.orchestrator.get_pool",
+                return_value=mock_pool,
+            ),  # db-mock-check: ignore
             patch("agency_audit.loop.orchestrator.run_country") as mock_run,
         ):
             mock_run.side_effect = RuntimeError("boom")
@@ -405,19 +483,118 @@ class TestOrchestratorSkipPaths:
             assert len(result["totals"]["errors"]) == 1
 
     @pytest.mark.asyncio
-    async def test_audit_country_websites_empty(self):
-        """_audit_country_websites returns zeros when no pending websites."""
+    async def test_audit_country_websites_empty(
+        self,
+        db_conn,
+        postgres_dsn: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """_audit_country_websites reflects the actual pending-website count.
+
+        Query-path test: exercises the real database via get_pool().  The
+        test first queries the pending BG website IDs via db_conn, then
+        asserts _audit_country_websites returns matching DISTINCT counts.
+        ``audit_website`` is mocked to avoid real HTTP requests.  Writes
+        from _audit_country_websites (which uses its own connection pool)
+        are reset in a ``finally`` block so the fixture database stays
+        clean for other tests.
+        """
         from agency_audit.loop.orchestrator import _audit_country_websites
 
-        with patch("agency_audit.loop.orchestrator.get_pool") as mock_get_pool:
-            mock_pool = MagicMock()
-            mock_get_pool.return_value = mock_pool
+        # Discover the current pending BG websites via db_conn.  Use
+        # COUNT(DISTINCT w.id) to match the production query, which
+        # selects DISTINCT w.id (a website may appear in multiple cities).
+        pending_count = await db_conn.fetchval(
+            """SELECT COUNT(DISTINCT w.id)
+               FROM websites w
+               JOIN website_cities wc ON wc.website_id = w.id
+               JOIN cities c ON c.id = wc.city_id
+               WHERE c.country = 'BG' AND w.audit_status = 'pending'
+                 AND w.audit_attempts < 3"""
+        )
+        rows = await db_conn.fetch(
+            """SELECT DISTINCT w.id
+               FROM websites w
+               JOIN website_cities wc ON wc.website_id = w.id
+               JOIN cities c ON c.id = wc.city_id
+               WHERE c.country = 'BG' AND w.audit_status = 'pending'
+                 AND w.audit_attempts < 3"""
+        )
+        pending_ids = [r["id"] for r in rows]
 
-            mock_conn = AsyncMock()
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__.return_value = mock_conn
-            mock_pool.acquire.return_value = mock_ctx
-            mock_conn.fetch = AsyncMock(return_value=[])
+        # Point get_pool() at the fixture database.
+        parsed = urlparse(postgres_dsn)
+        monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
+        monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
+        monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
+        monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
+        monkeypatch.setattr(settings, "pg_password", parsed.password or "")
 
-            result = await _audit_country_websites("BG")
-            assert result == {"audited": 0, "succeeded": 0, "failed": 0}
+        # Capture the original state of every website that _audit_country_websites
+        # will touch.  _audit_country_websites writes through its own get_pool()
+        # connection, outside the db_conn fixture's rollback transaction, so we
+        # need to restore each row's exact pre-test values in the finally block.
+        original_state: list[dict[str, object]] = []
+        if pending_ids:
+            original_rows = await db_conn.fetch(
+                """SELECT id, audit_status, audit_data, score, last_audited_at,
+                          audit_attempts, audit_last_error
+                   FROM websites WHERE id = ANY($1::int[])""",
+                pending_ids,
+            )
+            original_state = [dict(r) for r in original_rows]
+
+        # Mock audit_website so we never make real HTTP calls, regardless
+        # of how many pending websites exist in the fixture database.
+        mock_audit_data = MagicMock()
+        mock_audit_data.score = 80
+        mock_audit_data.to_dict.return_value = {"score": 80}
+
+        try:
+            with patch(
+                "agency_audit.loop.orchestrator.audit_website",
+                new_callable=AsyncMock,
+                return_value=mock_audit_data,
+            ) as mock_audit:
+                result = await _audit_country_websites("BG")
+
+            assert result["audited"] == pending_count
+            # The mock audit_website always "succeeds", so all audited sites
+            # should be counted as succeeded.
+            assert result["succeeded"] == pending_count
+            assert result["failed"] == 0
+            assert mock_audit.call_count == pending_count
+        finally:
+            # Restore each touched row to its exact original state, so the
+            # fixture database remains unchanged regardless of what state the
+            # rows were in before the test (pending, retry, error, etc.).
+            if original_state:
+                from agency_audit.loop.orchestrator import get_pool
+
+                pool = await get_pool()
+                try:
+                    async with pool.acquire() as conn:
+                        await conn.executemany(
+                            """UPDATE websites
+                               SET audit_status = $2,
+                                   audit_data = $3,
+                                   score = $4,
+                                   last_audited_at = $5,
+                                   audit_attempts = $6,
+                                   audit_last_error = $7
+                               WHERE id = $1""",
+                            [
+                                (
+                                    row["id"],
+                                    row["audit_status"],
+                                    row["audit_data"],
+                                    row["score"],
+                                    row["last_audited_at"],
+                                    row["audit_attempts"],
+                                    row["audit_last_error"],
+                                )
+                                for row in original_state
+                            ],
+                        )
+                finally:
+                    await pool.close()
