@@ -447,7 +447,9 @@ def test_htmx_discover_city_country_mismatch_404(
     mock_run.assert_not_called()
 
 
-def test_htmx_discover_city_requires_api_key(client: TestClient, _test_brussels_city: int) -> None:
+def test_htmx_discover_city_requires_api_key(
+    client: TestClient, _test_brussels_city: int, postgres_dsn: str
+) -> None:
     with patch("agency_audit.web.app.settings") as mock_settings:
         mock_settings.google_maps_api_key = ""
 
@@ -455,6 +457,21 @@ def test_htmx_discover_city_requires_api_key(client: TestClient, _test_brussels_
 
     assert response.status_code == 200
     assert "No Google Maps API key configured" in response.text
+
+    # City status must remain 'pending' — the guard rejected the request
+    # before it could transition to 'in_progress'.
+
+    async def _check() -> str | None:
+        conn = await _committed_conn(postgres_dsn)
+        try:
+            return await conn.fetchval(
+                "SELECT discovery_status FROM cities WHERE id = $1", _test_brussels_city
+            )
+        finally:
+            await conn.close()
+
+    status = _run_async(_check())
+    assert status == "pending", f"Expected 'pending', got {status!r}"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -478,6 +495,23 @@ def test_htmx_city_row_done_triggers_refresh(client: TestClient, _test_city_done
     assert "every 3s" not in response.text
     assert "Refresh discovery" in response.text
     assert response.headers.get("HX-Trigger") == "discoveryComplete"
+
+
+def test_htmx_city_row_in_progress_no_trigger(
+    client: TestClient, _test_city_in_progress: int
+) -> None:
+    """When city is 'in_progress', row polls but does NOT fire HX-Trigger.
+
+    The in_progress row re-renders with hx-trigger=\"every 3s\" so the
+    browser keeps polling.  It must NOT emit discoveryComplete because
+    discovery hasn't finished yet — firing it early would refresh the
+    websites table with stale data.
+    """
+    response = client.get(f"/htmx/country/BE/cities/{_test_city_in_progress}/row")
+    assert response.status_code == 200
+    assert "every 3s" in response.text
+    assert "spinner-border" in response.text
+    assert "HX-Trigger" not in response.headers
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -842,36 +876,47 @@ async def test_run_city_discovery_marks_failed_on_error(
         await tmp_conn.close()
     assert sofia_id is not None, "Sofia must exist in the test database"
 
-    with patch("agency_audit.discovery.DiscoveryPipeline") as mock_pipeline_cls:
-        pipeline = mock_pipeline_cls.return_value
-        pipeline.discover_city = AsyncMock(side_effect=RuntimeError("boom"))
-        pipeline.close = AsyncMock()
+    try:
+        with patch("agency_audit.discovery.DiscoveryPipeline") as mock_pipeline_cls:
+            pipeline = mock_pipeline_cls.return_value
+            pipeline.discover_city = AsyncMock(side_effect=RuntimeError("boom"))
+            pipeline.close = AsyncMock()
 
-        from agency_audit.web.app import _run_city_discovery
+            from agency_audit.web.app import _run_city_discovery
 
-        await _run_city_discovery(sofia_id, "BG")
+            await _run_city_discovery(sofia_id, "BG")
 
-        # Discovery uses the city's stored country, not a caller-supplied ISO.
-        assert pipeline.discover_city.call_args.kwargs["country_iso"] == "BG"
+            # Discovery uses the city's stored country, not a caller-supplied ISO.
+            assert pipeline.discover_city.call_args.kwargs["country_iso"] == "BG"
 
-        # Verify the city was marked 'failed' in the real database.
-        from agency_audit.db import get_pool
+            # Verify the city was marked 'failed' in the real database.
+            from agency_audit.db import get_pool
 
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            status = await conn.fetchval(
-                "SELECT discovery_status FROM cities WHERE id = $1", sofia_id
-            )
-        assert status == "failed"
+            pool = await get_pool()
+            try:
+                async with pool.acquire() as conn:
+                    status = await conn.fetchval(
+                        "SELECT discovery_status FROM cities WHERE id = $1", sofia_id
+                    )
+                assert status == "failed"
+            finally:
+                await close_pool()
 
-        pipeline.close.assert_awaited_once()
+            pipeline.close.assert_awaited_once()
+    finally:
+        # Always reset Sofia so a failed assertion doesn't leave the
+        # city 'failed' for the rest of the session.
+        from agency_audit.db import get_pool as _gp_finally
 
-    # Reset the city so other tests aren't affected.
-    from agency_audit.db import get_pool
-
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("UPDATE cities SET discovery_status = 'pending' WHERE id = $1", sofia_id)
+        pool = await _gp_finally()
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE cities SET discovery_status = 'pending' WHERE id = $1",
+                    sofia_id,
+                )
+        finally:
+            await close_pool()
 
 
 # ──────────────────────────────────────────────────────────────────────
