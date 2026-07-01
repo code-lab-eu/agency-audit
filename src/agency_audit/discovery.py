@@ -489,6 +489,7 @@ class DiscoveryPipeline:
         viewport = await self.resolve_city_viewport(city)
         call_count = 0
         skipped_tiles = 0
+        truncated_tiles = 0
         max_calls = settings.places_max_calls_per_city
         max_depth = settings.places_tile_max_depth
         sat_threshold = settings.places_tile_saturation_threshold
@@ -498,7 +499,7 @@ class DiscoveryPipeline:
             tile: Rectangle,
             depth: int,
         ) -> list[PlaceResult]:
-            nonlocal call_count, skipped_tiles
+            nonlocal call_count, skipped_tiles, truncated_tiles
 
             if call_count >= max_calls:
                 skipped_tiles += 1
@@ -514,6 +515,20 @@ class DiscoveryPipeline:
             after = self.places.api_call_count
             consumed = after - before
             call_count += consumed
+
+            # If this tile used its full remaining budget, the pagination loop
+            # was cut short — results may be incomplete.  Log and track so the
+            # caller knows not to trust the saturation signal blindly.
+            if consumed > 0 and consumed == remaining:
+                truncated_tiles += 1
+                logger.debug(
+                    "Tiled search for %s: budget truncated results for tile "
+                    "(depth=%d, consumed=%d requests, %d results kept)",
+                    city_label,
+                    depth,
+                    consumed,
+                    len(results),
+                )
 
             if (
                 is_saturated(len(results), sat_threshold)
@@ -539,11 +554,16 @@ class DiscoveryPipeline:
 
         all_results = await _search_recursive(viewport, 0)
 
-        if skipped_tiles > 0:
+        if skipped_tiles > 0 or truncated_tiles > 0:
+            parts = []
+            if skipped_tiles > 0:
+                parts.append(f"{skipped_tiles} tiles skipped")
+            if truncated_tiles > 0:
+                parts.append(f"{truncated_tiles} tiles budget-truncated")
             logger.warning(
-                "Tiled search for %s: budget exhausted — %d tiles skipped",
+                "Tiled search for %s: budget exhausted — %s",
                 city_label,
-                skipped_tiles,
+                ", ".join(parts),
             )
 
         # Deduplicate by place_id, preserving first occurrence

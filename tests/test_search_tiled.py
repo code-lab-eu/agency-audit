@@ -483,6 +483,45 @@ class TestSearchTiledCallBudget:
 
         await pipeline.close()
 
+    async def test_budget_truncated_tile_is_observable(self, monkeypatch, caplog):
+        """When a tile consumes its full remaining budget, the truncation is
+        logged and tracked — the caller knows the results may be partial."""
+        monkeypatch.setattr(settings, "places_tile_saturation_threshold", 1)
+        monkeypatch.setattr(settings, "places_tile_max_depth", 2)
+        monkeypatch.setattr(settings, "places_max_calls_per_city", 2)
+
+        caplog.set_level(logging.WARNING)
+
+        async def mock_search_text(
+            query: str,
+            location_restriction: Rectangle | None = None,
+            **kwargs,
+        ) -> list[PlaceResult]:
+            return _make_places(2)
+
+        places_client = _make_places_client()
+        places_client.search_text = _mock_search_text_wrapper(places_client, mock_search_text)
+
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        viewport = Rectangle(42.0, 23.0, 43.0, 24.0)
+
+        with patch.object(pipeline, "resolve_city_viewport", return_value=viewport):
+            await pipeline.search_tiled(query="test", city=_make_city(label="Varna"))
+
+        # max_calls=2, always saturated:
+        # call 1 (root): remaining=2, consumed=1 → not truncated
+        # call 2 (NW, d=1): remaining=1, consumed=1 → BUDGET-TRUNCATED
+        # → saturated + call_count==max_calls → +4 skipped for NW children
+        # NE, SW, SE (d=1): each +1 skipped (budget guard)
+        # Truncated: 1, Skipped: 4 + 3 = 7
+        assert "budget exhausted" in caplog.text
+        assert "budget-truncated" in caplog.text
+        assert "Varna" in caplog.text
+        assert "7 tiles skipped" in caplog.text
+        assert "1 tiles budget-truncated" in caplog.text
+
+        await pipeline.close()
+
 
 # ──────────────────────────────────────────────────────────────────────
 # resolve_city_viewport integration
