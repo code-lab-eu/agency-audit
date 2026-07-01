@@ -19,7 +19,7 @@ import httpx
 
 from agency_audit.config import settings
 from agency_audit.db import get_pool
-from agency_audit.discovery_geo import Rectangle
+from agency_audit.discovery_geo import Rectangle, bbox_from_center
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +266,91 @@ class PlacesAPIClient:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Geocoding API Client
+# ──────────────────────────────────────────────────────────────────────
+
+
+class GeocodingClient:
+    """HTTP client for the Google Geocoding API.
+
+    Resolves place names to geographic coordinates and viewport bounding
+    boxes.  Uses the same API key as the Places API client.
+    """
+
+    BASE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
+
+    def __init__(self, api_key: str | None = None):
+        self.api_key = api_key if api_key is not None else self._load_api_key()
+        self._client: httpx.AsyncClient | None = None
+        self._request_count = 0
+        self._last_request_time = 0.0
+
+    def _load_api_key(self) -> str:
+        from agency_audit.config import settings
+
+        return str(settings.google_maps_api_key)
+
+    async def _ensure_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=float(settings.places_api_timeout),
+            )
+        return self._client
+
+    async def geocode(self, address: str) -> dict[str, Any] | None:
+        """Geocode an address string via the Google Geocoding API.
+
+        Returns the parsed JSON response dict on success, or ``None`` on
+        any error (timeout, HTTP error, missing results).
+        """
+        await self._rate_limit()
+
+        client = await self._ensure_client()
+        params = {
+            "address": address,
+            "key": self.api_key,
+        }
+
+        try:
+            resp = await client.get(self.BASE_URL, params=params)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"Geocoding API HTTP {e.response.status_code} for '{address}'")
+            return None
+        except httpx.TimeoutException:
+            logger.warning(f"Geocoding API timeout for '{address}'")
+            return None
+
+        data: dict[str, Any] = resp.json()
+        status = data.get("status", "")
+        if status != "OK":
+            logger.info(f"Geocoding API returned status '{status}' for '{address}'")
+            return None
+
+        results = data.get("results", [])
+        if not results:
+            logger.info(f"Geocoding API returned no results for '{address}'")
+            return None
+
+        return data
+
+    async def _rate_limit(self) -> None:
+        """Simple rate limiting — max 5 QPS (shared with Places API rate)."""
+        now = time.monotonic()
+        elapsed = now - self._last_request_time
+        min_interval = 1.0 / settings.places_rate_limit_qps
+        if elapsed < min_interval:
+            await asyncio.sleep(min_interval - elapsed)
+        self._last_request_time = time.monotonic()
+        self._request_count += 1
+
+    async def close(self) -> None:
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Discovery Orchestrator
 # ──────────────────────────────────────────────────────────────────────
 
@@ -280,9 +365,11 @@ class DiscoveryPipeline:
     def __init__(
         self,
         places_client: PlacesAPIClient | None = None,
+        geocoding_client: GeocodingClient | None = None,
         batch_size: int = 10,
     ):
         self.places = places_client or PlacesAPIClient()
+        self.geocoding = geocoding_client or GeocodingClient()
         self.batch_size = batch_size
         self._pool = None
 
@@ -290,6 +377,80 @@ class DiscoveryPipeline:
         if self._pool is None:
             self._pool = await get_pool()
         return self._pool
+
+    async def resolve_city_viewport(self, city: dict[str, Any]) -> Rectangle:
+        """Resolve a city's viewport bounding box, caching it on the cities row.
+
+        Strategy (first win):
+        1. If the four ``viewport_*`` columns on *city* are already populated,
+           return a ``Rectangle`` from the cache — no API call.
+        2. Otherwise geocode ``{label}, {country}`` via the Google Geocoding
+           API, parse ``geometry.viewport`` into a ``Rectangle``, persist it
+           to the ``cities`` table, and return it.
+        3. If geocoding fails (any error or no viewport in the response),
+           fall back to ``bbox_from_center`` using the city's lat/lon and the
+           configured ``places_city_half_extent_meters``, and log the fallback.
+        """
+        # 1. Cache hit — all four columns populated
+        viewport_cols = [
+            "viewport_low_lat",
+            "viewport_low_lng",
+            "viewport_high_lat",
+            "viewport_high_lng",
+        ]
+        if all(city.get(col) is not None for col in viewport_cols):
+            return Rectangle(
+                low_lat=float(city["viewport_low_lat"]),
+                low_lng=float(city["viewport_low_lng"]),
+                high_lat=float(city["viewport_high_lat"]),
+                high_lng=float(city["viewport_high_lng"]),
+            )
+
+        # 2. Geocode
+        address = f"{city['label']}, {city['country']}"
+        try:
+            result = await self.geocoding.geocode(address)
+            if result:
+                vp = result.get("results", [{}])[0].get("geometry", {}).get("viewport")
+                if vp:
+                    rect = Rectangle(
+                        low_lat=float(vp["southwest"]["lat"]),
+                        low_lng=float(vp["southwest"]["lng"]),
+                        high_lat=float(vp["northeast"]["lat"]),
+                        high_lng=float(vp["northeast"]["lng"]),
+                    )
+                    # Persist
+                    pool = await self._get_pool()
+                    async with pool.acquire() as conn:
+                        await conn.execute(
+                            """UPDATE cities
+                               SET viewport_low_lat  = $1,
+                                   viewport_low_lng  = $2,
+                                   viewport_high_lat = $3,
+                                   viewport_high_lng = $4
+                             WHERE id = $5""",
+                            rect.low_lat,
+                            rect.low_lng,
+                            rect.high_lat,
+                            rect.high_lng,
+                            city["id"],
+                        )
+                    return rect
+        except Exception as e:
+            logger.warning(
+                f"Geocoding error for '{address}': {e} — falling back to bbox_from_center"
+            )
+
+        # 3. Fallback
+        logger.info(
+            f"Falling back to bbox_from_center for {city['label']} "
+            f"({city.get('latitude')}, {city.get('longitude')})"
+        )
+        return bbox_from_center(
+            lat=float(city["latitude"]),
+            lon=float(city["longitude"]),
+            half_extent_m=settings.places_city_half_extent_meters,
+        )
 
     async def query_for_country(self, country_iso: str) -> list[str]:
         """Get search query templates for a country."""
@@ -485,6 +646,8 @@ class DiscoveryPipeline:
     async def close(self):
         if self.places:
             await self.places.close()
+        if self.geocoding:
+            await self.geocoding.close()
 
 
 # ──────────────────────────────────────────────────────────────────────
