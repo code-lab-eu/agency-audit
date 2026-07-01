@@ -263,12 +263,18 @@ class TestReauditWithResults:
         _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
 
         seed = await _seed_conn(postgres_dsn)
+        cleaned_log_ids: list[int] = []
+        cleaned_city_id: int | None = None
         try:
+            # Two BG websites — linked to Sofia (id=1) and Plovdiv (id=2)
             w1 = await seed.fetchval(
                 "INSERT INTO websites (url, label, score, audit_status, "
                 "needs_review, last_audited_at, audit_attempts) "
                 "VALUES ('https://test-a.example.com', 'A', 60, 'audited', "
                 "false, now() - INTERVAL '40 days', 0) RETURNING id"
+            )
+            await seed.execute(
+                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, 1)", w1
             )
             w2 = await seed.fetchval(
                 "INSERT INTO websites (url, label, score, audit_status, "
@@ -276,12 +282,34 @@ class TestReauditWithResults:
                 "VALUES ('https://test-b.example.com', 'B', 70, 'audited', "
                 "false, now() - INTERVAL '50 days', 0) RETURNING id"
             )
+            await seed.execute(
+                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, 2)", w2
+            )
+
+            # Non-BG control — link to a city in Spain (ES) so the country
+            # filter in schedule_reaudits(country="BG") actually excludes it.
+            es_city_id = await seed.fetchval(
+                "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
+                "VALUES ('ES', 'Madrid', 'madrid', 3223334, 40.4168, -3.7038) RETURNING id"
+            )
+            cleaned_city_id = es_city_id
+            w3 = await seed.fetchval(
+                "INSERT INTO websites (url, label, score, audit_status, "
+                "needs_review, last_audited_at, audit_attempts) "
+                "VALUES ('https://test-es.example.com', 'ES Agency', 80, 'audited', "
+                "false, now() - INTERVAL '60 days', 0) RETURNING id"
+            )
+            await seed.execute(
+                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
+                w3,
+                es_city_id,
+            )
 
             result = await schedule_reaudits(interval_days=30, country="BG")
-            assert result["queued"] == 2
+            assert result["queued"] == 2  # only BG, not ES
             assert result["oldest_age_days"] == 50
 
-            # Verify websites were updated to 'pending' with reset attempts
+            # Verify BG websites were updated to 'pending' with reset attempts
             for wid in (w1, w2):
                 row = await db_conn.fetchrow(
                     "SELECT audit_status, audit_attempts FROM websites WHERE id = $1",
@@ -290,17 +318,33 @@ class TestReauditWithResults:
                 assert row["audit_status"] == "pending"
                 assert row["audit_attempts"] == 0
 
-            # Verify an audit_log entry was created
+            # ES website must NOT have been touched
+            row = await db_conn.fetchrow(
+                "SELECT audit_status, audit_attempts FROM websites WHERE id = $1",
+                w3,
+            )
+            assert row["audit_status"] == "audited"
+            assert row["audit_attempts"] == 0
+
+            # Verify an audit_log entry was created — capture its ID for cleanup
             log_row = await db_conn.fetchrow(
-                "SELECT run_type, items_processed, summary FROM audit_log "
+                "SELECT id, run_type, items_processed, summary FROM audit_log "
                 "WHERE summary->>'queued_websites' = '2'"
             )
             assert log_row is not None
             assert log_row["run_type"] == "reaudit"
             assert log_row["items_processed"] == 2
+            cleaned_log_ids.append(log_row["id"])
         finally:
-            await seed.execute("DELETE FROM audit_log WHERE run_type = 'reaudit'")
+            if cleaned_log_ids:
+                await seed.execute("DELETE FROM audit_log WHERE id = ANY($1)", cleaned_log_ids)
+            await seed.execute(
+                "DELETE FROM website_cities WHERE website_id IN "
+                "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
+            )
             await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
+            if cleaned_city_id is not None:
+                await seed.execute("DELETE FROM cities WHERE id = $1", cleaned_city_id)
             await seed.close()
 
 
@@ -318,6 +362,7 @@ class TestRetryMarkFailed:
         _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
 
         seed = await _seed_conn(postgres_dsn)
+        cleaned_log_ids: list[int] = []
         try:
             # Need website + website_cities link to a real city for the
             # audit_log INSERT (JOIN website_cities → cities).
@@ -343,17 +388,19 @@ class TestRetryMarkFailed:
             assert row["audit_last_error"] == "test error"
             assert row["audit_attempts"] == 2  # was 1, incremented
 
-            # Check audit_log entry
+            # Check audit_log entry — capture its ID for cleanup
             log_row = await db_conn.fetchrow(
-                "SELECT run_type, country, items_failed, error FROM audit_log "
+                "SELECT id, run_type, country, items_failed, error FROM audit_log "
                 "WHERE error = 'test error'"
             )
             assert log_row is not None
             assert log_row["run_type"] == "audit"
             assert log_row["country"] == "BG"
             assert log_row["items_failed"] == 1
+            cleaned_log_ids.append(log_row["id"])
         finally:
-            await seed.execute("DELETE FROM audit_log WHERE error = 'test error'")
+            if cleaned_log_ids:
+                await seed.execute("DELETE FROM audit_log WHERE id = ANY($1)", cleaned_log_ids)
             await seed.execute(
                 "DELETE FROM website_cities WHERE website_id IN "
                 "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
@@ -431,6 +478,7 @@ class TestTrackingLogFunctions:
         _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
 
         seed = await _seed_conn(postgres_dsn)
+        log_id: int | None = None
         try:
             log_id = await log_discovery_run("BG", 5, 12, 2.5)
             assert isinstance(log_id, int)
@@ -451,7 +499,8 @@ class TestTrackingLogFunctions:
             assert summary["cities_processed"] == 5
             assert summary["agencies_found"] == 12
         finally:
-            await seed.execute("DELETE FROM audit_log WHERE run_type = 'discovery'")
+            if log_id is not None:
+                await seed.execute("DELETE FROM audit_log WHERE id = $1", log_id)
             await seed.close()
 
     async def test_log_discovery_run_with_errors(
@@ -462,6 +511,7 @@ class TestTrackingLogFunctions:
         _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
 
         seed = await _seed_conn(postgres_dsn)
+        log_id: int | None = None
         try:
             log_id = await log_discovery_run("BG", 3, 5, 1.0, errors=["err1", "err2"])
             assert isinstance(log_id, int)
@@ -475,7 +525,8 @@ class TestTrackingLogFunctions:
             summary = json.loads(row["summary"])
             assert summary["errors"] == ["err1", "err2"]
         finally:
-            await seed.execute("DELETE FROM audit_log WHERE run_type = 'discovery'")
+            if log_id is not None:
+                await seed.execute("DELETE FROM audit_log WHERE id = $1", log_id)
             await seed.close()
 
     async def test_log_audit_run(
@@ -486,6 +537,7 @@ class TestTrackingLogFunctions:
         _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
 
         seed = await _seed_conn(postgres_dsn)
+        log_id: int | None = None
         try:
             # Need website + website_cities → city so country can be resolved
             website_id = await seed.fetchval(
@@ -514,7 +566,8 @@ class TestTrackingLogFunctions:
             assert summary["website_id"] == website_id
             assert summary["score"] == 75
         finally:
-            await seed.execute("DELETE FROM audit_log WHERE run_type = 'audit'")
+            if log_id is not None:
+                await seed.execute("DELETE FROM audit_log WHERE id = $1", log_id)
             await seed.execute(
                 "DELETE FROM website_cities WHERE website_id IN "
                 "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
@@ -530,6 +583,7 @@ class TestTrackingLogFunctions:
         _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
 
         seed = await _seed_conn(postgres_dsn)
+        log_id: int | None = None
         try:
             website_id = await seed.fetchval(
                 "INSERT INTO websites (url, label) "
@@ -558,7 +612,8 @@ class TestTrackingLogFunctions:
             summary = json.loads(row["summary"])
             assert summary["score"] == 80
         finally:
-            await seed.execute("DELETE FROM audit_log WHERE run_type = 'audit'")
+            if log_id is not None:
+                await seed.execute("DELETE FROM audit_log WHERE id = $1", log_id)
             await seed.execute(
                 "DELETE FROM website_cities WHERE website_id IN "
                 "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
@@ -574,6 +629,7 @@ class TestTrackingLogFunctions:
         _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
 
         seed = await _seed_conn(postgres_dsn)
+        log_id: int | None = None
         try:
             log_id = await log_full_loop_run("BG", 10, 25, 20, 18, 2, 3, 5, 30.5)
             assert isinstance(log_id, int)
@@ -594,9 +650,8 @@ class TestTrackingLogFunctions:
             assert summary["qc_findings"] == 3
             assert summary["reaudit_queued"] == 5
         finally:
-            await seed.execute(
-                "DELETE FROM audit_log WHERE run_type = 'full_loop' AND country = 'BG'"
-            )
+            if log_id is not None:
+                await seed.execute("DELETE FROM audit_log WHERE id = $1", log_id)
             await seed.close()
 
 
