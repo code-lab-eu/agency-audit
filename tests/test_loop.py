@@ -6,6 +6,15 @@ and orchestrator integration.
 Database-backed tests run against the real PostgreSQL database via the shared
 ``db_conn`` fixture from ``tests/conftest.py``.  Non-database mocks (retry,
 audit) are kept as-is.
+
+Isolation strategy
+------------------
+All test data uses a **test-only country** (``XB``) and a **test-only URL
+prefix** (``TEST_URL_PREFIX``).  Production functions that accept a ``country``
+parameter receive ``XB`` so they never touch real data.  The autouse fixture
+inserts the test country/city idempotently and cleans up every test-owned row
+(audit_log by country, websites/website_cities by URL prefix) before and after
+each test.
 """
 
 from __future__ import annotations
@@ -22,10 +31,11 @@ from agency_audit.db import close_pool, get_pool
 # ──────────────────────────────────────────────────────────────────────
 
 TEST_URL_PREFIX = "https://test-loop.example.com/"
+TEST_COUNTRY = "XB"  # Non-existent ISO code — walled-off test-only country
 
 
-async def _seed_website(url_suffix: str = "001", **overrides) -> dict:
-    """Insert a test website linked to the first BG city and return its row.
+async def _seed_website(url_suffix: str = "001", country: str = TEST_COUNTRY, **overrides) -> dict:
+    """Insert a test website linked to the first city in *country* and return its row.
 
     Uses the pool so the row is committed and visible to functions that call
     ``get_pool()`` internally.
@@ -33,7 +43,7 @@ async def _seed_website(url_suffix: str = "001", **overrides) -> dict:
     pool = await get_pool()
     async with pool.acquire() as conn:
         url = f"{TEST_URL_PREFIX}{url_suffix}"
-        defaults = {
+        defaults: dict = {
             "url": url,
             "score": 0,
             "audit_status": "pending",
@@ -65,9 +75,9 @@ async def _seed_website(url_suffix: str = "001", **overrides) -> dict:
             defaults.get("last_audited_at"),
         )
 
-        # Link to the first BG city (Sofia, id=1 from seed fixtures)
+        # Link to the first city in the requested country
         city_id = await conn.fetchval(
-            "SELECT id FROM cities WHERE country = 'BG' ORDER BY id LIMIT 1"
+            "SELECT id FROM cities WHERE country = $1 ORDER BY id LIMIT 1", country
         )
         await conn.execute(
             """INSERT INTO website_cities (website_id, city_id)
@@ -99,13 +109,28 @@ async def _cleanup_loop_data():
     # Pre-test cleanup via pool (committed, visible to function under test)
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # Ensure test country and city exist (idempotent)
+        await conn.execute(
+            "INSERT INTO countries (iso, label, active) VALUES ($1, 'Testland', false) "
+            "ON CONFLICT (iso) DO NOTHING",
+            TEST_COUNTRY,
+        )
+        await conn.execute(
+            "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
+            "VALUES ($1, 'Test City', 'test-city', 1000, 0, 0) "
+            "ON CONFLICT (country, slug) DO NOTHING",
+            TEST_COUNTRY,
+        )
+
+        # Clean up any test-owned rows from previous runs
         await conn.execute(
             "DELETE FROM website_cities WHERE website_id IN "
             "(SELECT id FROM websites WHERE url LIKE $1)",
             TEST_URL_PREFIX + "%",
         )
         await conn.execute(
-            "DELETE FROM audit_log WHERE error LIKE 'test%' OR summary::text LIKE '%test-loop%'"
+            "DELETE FROM audit_log WHERE country = $1",
+            TEST_COUNTRY,
         )
         await conn.execute("DELETE FROM websites WHERE url LIKE $1", TEST_URL_PREFIX + "%")
 
@@ -120,7 +145,8 @@ async def _cleanup_loop_data():
             TEST_URL_PREFIX + "%",
         )
         await conn.execute(
-            "DELETE FROM audit_log WHERE error LIKE 'test%' OR summary::text LIKE '%test-loop%'"
+            "DELETE FROM audit_log WHERE country = $1",
+            TEST_COUNTRY,
         )
         await conn.execute("DELETE FROM websites WHERE url LIKE $1", TEST_URL_PREFIX + "%")
     await close_pool()
@@ -246,8 +272,9 @@ class TestRetry:
             "test network timeout",
         )
         assert log_row is not None, "Expected an audit_log row to be inserted"
-        assert log_row["country"] == "BG", (
-            f"Country should be 'BG' (resolved via cities JOIN), got: {log_row['country']}"
+        assert log_row["country"] == TEST_COUNTRY, (
+            f"Country should be '{TEST_COUNTRY}' (resolved via cities JOIN), "
+            f"got: {log_row['country']}"
         )
         assert log_row["run_type"] == "audit"
 
@@ -324,9 +351,18 @@ class TestQC:
         """detect_duplicates should flag a domain appearing in multiple cities."""
         from agency_audit.loop.qc import detect_duplicates
 
-        # Create one website linked to two different BG cities (Sofia + Plovdiv)
+        # Create one website linked to two test cities in the test country.
+        # We need a second city in the test country for this test.
         pool = await get_pool()
         async with pool.acquire() as conn:
+            # Insert second test city
+            city2_id = await conn.fetchval(
+                "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
+                "VALUES ($1, 'Test City 2', 'test-city-2', 2000, 1, 1) "
+                "ON CONFLICT (country, slug) DO UPDATE SET id = cities.id "
+                "RETURNING id",
+                TEST_COUNTRY,
+            )
             url = f"{TEST_URL_PREFIX}duplicate-agency"
             wid = await conn.fetchval(
                 """INSERT INTO websites (url, label, audit_status)
@@ -335,12 +371,19 @@ class TestQC:
                    RETURNING id""",
                 url,
             )
-            # Link to Sofia (city_id=1) and Plovdiv (city_id=2 from seed)
+            # Get the first test city ID
+            city1_id = await conn.fetchval(
+                "SELECT id FROM cities WHERE country = $1 AND slug = 'test-city'",
+                TEST_COUNTRY,
+            )
+            # Link to both test cities
             await conn.execute(
                 """INSERT INTO website_cities (website_id, city_id)
-                   VALUES ($1, 1), ($1, 2)
+                   VALUES ($1, $2), ($1, $3)
                    ON CONFLICT (website_id, city_id) DO NOTHING""",
                 wid,
+                city1_id,
+                city2_id,
             )
 
         findings = await detect_duplicates()
@@ -362,7 +405,7 @@ class TestQC:
         """A website in only one city should NOT be flagged as duplicate."""
         from agency_audit.loop.qc import detect_duplicates
 
-        # Single-city website (only Sofia)
+        # Single-city website (linked to just one city in the test country)
         await _seed_website("single-city", audit_status="audited")
 
         findings = await detect_duplicates()
@@ -384,8 +427,8 @@ class TestReaudit:
         """get_reaudit_queue should not return test-owned websites after cleanup."""
         from agency_audit.loop.reaudit import get_reaudit_queue
 
-        queue = await get_reaudit_queue()
-        # Filter to test-owned data — pre-existing committed rows may exist.
+        queue = await get_reaudit_queue(country=TEST_COUNTRY)
+        # All returned websites should be test-owned (filtered by country).
         test_queue = [w for w in queue if (w.get("url") or "").startswith(TEST_URL_PREFIX)]
         assert test_queue == []
 
@@ -393,13 +436,12 @@ class TestReaudit:
         """schedule_reaudits should not affect test-owned websites after cleanup."""
         from agency_audit.loop.reaudit import schedule_reaudits
 
-        # The autouse fixture already deleted all test-prefix websites, so
-        # schedule_reaudits should not queue any of them.  We cannot assert
-        # result["queued"] == 0 on a non-pristine DB — pre-existing overdue
-        # websites may be present.
-        await schedule_reaudits()
+        result = await schedule_reaudits(country=TEST_COUNTRY)
 
-        # Verify no test-prefix website was reset to pending.
+        # No test websites exist after cleanup, so none should be queued for XB.
+        assert result["queued"] == 0, f"Expected 0 queued for test country, got: {result['queued']}"
+
+        # Verify no test-prefix website was reset to pending (defence in depth).
         test_pending = await db_conn.fetchval(
             "SELECT COUNT(*) FROM websites WHERE url LIKE $1 AND audit_status = 'pending'",
             TEST_URL_PREFIX + "%",
@@ -412,7 +454,7 @@ class TestReaudit:
 
         from agency_audit.loop.reaudit import schedule_reaudits
 
-        # Seed a website that was audited 45 days ago
+        # Seed a test-owned website audited 45 days ago
         old_date = datetime.now(UTC) - timedelta(days=45)
         ws = await _seed_website(
             "overdue",
@@ -421,13 +463,11 @@ class TestReaudit:
             last_audited_at=old_date,
         )
 
-        result = await schedule_reaudits(interval_days=30, limit=10, country="BG")
+        result = await schedule_reaudits(interval_days=30, limit=10, country=TEST_COUNTRY)
 
-        # The test-owned website must have been queued.  We cannot assert
-        # result["queued"] == 1 because pre-existing overdue websites may
-        # also be present on a non-pristine DB.
-        assert result["queued"] >= 1, (
-            f"Expected at least the test website to be queued, got: {result['queued']}"
+        # Only test-owned websites in XB exist — exact count assertion is safe.
+        assert result["queued"] == 1, (
+            f"Expected exactly 1 test website queued, got: {result['queued']}"
         )
 
         # Verify the website was reset to pending with audit_attempts=0
@@ -455,18 +495,18 @@ class TestReaudit:
             last_audited_at=old_date,
         )
 
-        result = await schedule_reaudits(interval_days=30, limit=10, country="BG")
+        result = await schedule_reaudits(interval_days=30, limit=10, country=TEST_COUNTRY)
 
-        # The test-owned website must have been queued (>=1 not ==1 for
-        # robustness against pre-existing overdue sites on non-pristine DBs).
-        assert result["queued"] >= 1, (
-            f"Expected at least the test website to be queued, got: {result['queued']}"
+        # Only test-owned websites in XB exist — exact count assertion is safe.
+        assert result["queued"] == 1, (
+            f"Expected exactly 1 test website queued, got: {result['queued']}"
         )
 
         row = await db_conn.fetchrow(
             "SELECT audit_status, audit_attempts FROM websites WHERE id = $1",
             ws["id"],
         )
+        assert row is not None
         assert row["audit_status"] == "pending"
         assert row["audit_attempts"] == 0, "re-audit scheduling should reset audit_attempts to 0"
 
@@ -526,7 +566,7 @@ class TestTracking:
         from agency_audit.loop.tracking import log_discovery_run
 
         log_id = await log_discovery_run(
-            country="BG",
+            country=TEST_COUNTRY,
             cities_processed=5,
             agencies_found=12,
             duration_seconds=3.5,
@@ -537,7 +577,8 @@ class TestTracking:
             "duration_seconds, summary FROM audit_log WHERE id = $1",
             log_id,
         )
-        assert row["country"] == "BG"
+        assert row is not None
+        assert row["country"] == TEST_COUNTRY
         assert row["run_type"] == "discovery"
         assert row["items_processed"] == 5
         assert row["items_succeeded"] == 12
@@ -612,7 +653,7 @@ class TestAuditAttemptsCounter:
         """On audit success, the UPDATE must set audit_attempts = 0."""
         from agency_audit.loop.orchestrator import _audit_country_websites
 
-        # Seed a pending website with prior attempts
+        # Seed a pending website with prior attempts in the test country
         ws = await _seed_website("success-reset", audit_status="pending", audit_attempts=2)
 
         # Mock retry to return a fake successful audit result
@@ -626,18 +667,18 @@ class TestAuditAttemptsCounter:
         with patch("agency_audit.loop.orchestrator.retry", new_callable=AsyncMock) as mock_retry:
             mock_retry.return_value = FakeAuditResult()
 
-            result = await _audit_country_websites("BG", concurrency=1)
+            result = await _audit_country_websites(TEST_COUNTRY, concurrency=1)
 
-        # The test-owned website must have been processed.  We cannot assert
-        # exact counts because pre-existing pending websites may be present.
-        assert result["succeeded"] >= 1, (
-            f"Expected at least the test website to succeed, got succeeded={result['succeeded']}"
+        # Only test-owned websites exist in XB — exact count assertion is safe.
+        assert result["succeeded"] == 1, (
+            f"Expected exactly 1 test website to succeed, got succeeded={result['succeeded']}"
         )
 
         row = await db_conn.fetchrow(
             "SELECT audit_status, audit_attempts, score FROM websites WHERE id = $1",
             ws["id"],
         )
+        assert row is not None
         assert row["audit_status"] == "audited"
         assert row["audit_attempts"] == 0, "successful audit should reset audit_attempts to 0"
         assert row["score"] == 85
@@ -651,18 +692,18 @@ class TestAuditAttemptsCounter:
         with patch("agency_audit.loop.orchestrator.retry", new_callable=AsyncMock) as mock_retry:
             mock_retry.side_effect = RuntimeError("audit failed after retries")
 
-            result = await _audit_country_websites("BG", concurrency=1)
+            result = await _audit_country_websites(TEST_COUNTRY, concurrency=1)
 
-        # The test-owned website must have been processed.  We cannot assert
-        # exact counts because pre-existing pending websites may be present.
-        assert result["failed"] >= 1, (
-            f"Expected at least the test website to fail, got failed={result['failed']}"
+        # Only test-owned websites exist in XB — exact count assertion is safe.
+        assert result["failed"] == 1, (
+            f"Expected exactly 1 test website to fail, got failed={result['failed']}"
         )
 
         row = await db_conn.fetchrow(
             "SELECT audit_status, audit_attempts, audit_last_error FROM websites WHERE id = $1",
             ws["id"],
         )
+        assert row is not None
         assert row["audit_status"] == "failed"
         # Was 1, should now be 2 (incremented)
         assert row["audit_attempts"] == 2, "failed audit should increment audit_attempts"
