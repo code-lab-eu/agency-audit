@@ -122,13 +122,16 @@ async def schedule_reaudits(
                 """SELECT w.id, w.url, w.score,
                           EXTRACT(DAY FROM now() - w.last_audited_at)::int AS age_days
                    FROM websites w
-                   JOIN website_cities wc ON wc.website_id = w.id
-                   JOIN cities c ON c.id = wc.city_id
-                   WHERE w.audit_status = 'audited'
+                   WHERE w.id IN (
+                       SELECT DISTINCT wc.website_id
+                       FROM website_cities wc
+                       JOIN cities c ON c.id = wc.city_id
+                       WHERE c.country = $2
+                   )
+                     AND w.audit_status = 'audited'
                      AND w.needs_review = false
                      AND (w.last_audited_at < $1 OR w.last_audited_at IS NULL)
                      AND w.audit_attempts < 3
-                     AND c.country = $2
                    ORDER BY w.last_audited_at ASC NULLS FIRST
                    LIMIT $3""",
                 cutoff,

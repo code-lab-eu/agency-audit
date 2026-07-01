@@ -244,9 +244,11 @@ class TestReauditWithResults:
             )
 
             queue = await get_reaudit_queue(interval_days=30)
-            assert len(queue) == 1
-            assert queue[0]["id"] == website_id
-            assert queue[0]["age_days"] == 45
+            # Scoped: check our website is present, not global cardinality
+            queue_ids = [q["id"] for q in queue]
+            assert website_id in queue_ids
+            our_entry = next(q for q in queue if q["id"] == website_id)
+            assert our_entry["age_days"] == 45
         finally:
             await seed.execute(
                 "DELETE FROM website_cities WHERE website_id IN "
