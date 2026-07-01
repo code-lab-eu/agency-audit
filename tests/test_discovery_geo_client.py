@@ -337,6 +337,28 @@ class TestGeocodingClient:
 
         assert result is None
 
+    async def test_geocode_http_error_sanitizes_api_key(self, caplog):
+        """Prove a sentinel API key never appears in logs after an HTTP error."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(403, json={"error": "forbidden"})
+
+        client = GeocodingClient(api_key="SENTINEL-LEAK-TEST-KEY")
+        transport = httpx.MockTransport(handler)
+        client._client = httpx.AsyncClient(transport=transport)
+
+        await client.geocode("Sofia, BG")
+        await client.close()
+
+        # The sentinel key MUST NOT appear anywhere in the captured log output.
+        captured = caplog.text
+        assert "SENTINEL-LEAK-TEST-KEY" not in captured, (
+            f"API key leaked into logs!\nCaptured: {captured}"
+        )
+
     async def test_geocode_non_ok_status_returns_none(self):
         """Non-OK status (e.g. ZERO_RESULTS) → None."""
 

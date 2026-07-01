@@ -314,8 +314,11 @@ class GeocodingClient:
         try:
             resp = await client.get(self.BASE_URL, params=params)
             resp.raise_for_status()
-        except (httpx.HTTPStatusError, httpx.TimeoutException) as e:
-            logger.warning(f"Geocoding API error for '{address}': {e}")
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"Geocoding API HTTP {e.response.status_code} for '{address}'")
+            return None
+        except httpx.TimeoutException:
+            logger.warning(f"Geocoding API timeout for '{address}'")
             return None
 
         data: dict[str, Any] = resp.json()
