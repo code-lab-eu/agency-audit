@@ -492,22 +492,35 @@ class TestOrchestratorSkipPaths:
         """_audit_country_websites reflects the actual pending-website count.
 
         Query-path test: exercises the real database via get_pool().  The
-        test first queries the pending BG website count via db_conn, then
-        asserts _audit_country_websites returns the same count.  The
-        ``audit_website`` call is mocked to avoid real HTTP requests and
-        prevent database writes outside the db_conn transaction.
+        test first queries the pending BG website IDs via db_conn, then
+        asserts _audit_country_websites returns matching DISTINCT counts.
+        ``audit_website`` is mocked to avoid real HTTP requests.  Writes
+        from _audit_country_websites (which uses its own connection pool)
+        are reset in a ``finally`` block so the fixture database stays
+        clean for other tests.
         """
         from agency_audit.loop.orchestrator import _audit_country_websites
 
-        # Discover the current pending BG website count via db_conn.
+        # Discover the current pending BG websites via db_conn.  Use
+        # COUNT(DISTINCT w.id) to match the production query, which
+        # selects DISTINCT w.id (a website may appear in multiple cities).
         pending_count = await db_conn.fetchval(
-            """SELECT COUNT(*)
+            """SELECT COUNT(DISTINCT w.id)
                FROM websites w
                JOIN website_cities wc ON wc.website_id = w.id
                JOIN cities c ON c.id = wc.city_id
                WHERE c.country = 'BG' AND w.audit_status = 'pending'
                  AND w.audit_attempts < 3"""
         )
+        rows = await db_conn.fetch(
+            """SELECT DISTINCT w.id
+               FROM websites w
+               JOIN website_cities wc ON wc.website_id = w.id
+               JOIN cities c ON c.id = wc.city_id
+               WHERE c.country = 'BG' AND w.audit_status = 'pending'
+                 AND w.audit_attempts < 3"""
+        )
+        pending_ids = [r["id"] for r in rows]
 
         # Point get_pool() at the fixture database.
         parsed = urlparse(postgres_dsn)
@@ -523,16 +536,41 @@ class TestOrchestratorSkipPaths:
         mock_audit_data.score = 80
         mock_audit_data.to_dict.return_value = {"score": 80}
 
-        with patch(
-            "agency_audit.loop.orchestrator.audit_website",
-            new_callable=AsyncMock,
-            return_value=mock_audit_data,
-        ) as mock_audit:
-            result = await _audit_country_websites("BG")
+        try:
+            with patch(
+                "agency_audit.loop.orchestrator.audit_website",
+                new_callable=AsyncMock,
+                return_value=mock_audit_data,
+            ) as mock_audit:
+                result = await _audit_country_websites("BG")
 
-        assert result["audited"] == pending_count
-        # The mock audit_website always "succeeds", so all audited sites
-        # should be counted as succeeded.
-        assert result["succeeded"] == pending_count
-        assert result["failed"] == 0
-        assert mock_audit.call_count == pending_count
+            assert result["audited"] == pending_count
+            # The mock audit_website always "succeeds", so all audited sites
+            # should be counted as succeeded.
+            assert result["succeeded"] == pending_count
+            assert result["failed"] == 0
+            assert mock_audit.call_count == pending_count
+        finally:
+            # _audit_country_websites writes through its own get_pool()
+            # connection, which is outside the db_conn fixture's rollback
+            # transaction.  Reset any modified websites back to 'pending'
+            # so the test database stays clean for downstream tests.
+            if pending_ids:
+                from agency_audit.loop.orchestrator import get_pool
+
+                pool = await get_pool()
+                try:
+                    async with pool.acquire() as conn:
+                        await conn.execute(
+                            """UPDATE websites
+                               SET audit_status = 'pending',
+                                   audit_data = NULL,
+                                   score = NULL,
+                                   last_audited_at = NULL,
+                                   audit_attempts = 0,
+                                   audit_last_error = NULL
+                               WHERE id = ANY($1::int[])""",
+                            pending_ids,
+                        )
+                finally:
+                    await pool.close()
