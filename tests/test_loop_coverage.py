@@ -3,154 +3,75 @@
 Covers: QC (mark_for_manual_review, run_qc_checks, get_websites_needing_review),
 reaudit (non-empty results), retry (mark_failed_*), tracking (log_* functions).
 
-Migrated from mocked database calls to the real database (shared db_conn fixture).
-Non-database mocks (helper-function patches) remain intact.
+Each test that hits the database runs against a private, pristine database
+provided by the ``fresh_db`` fixture (conftest.py): the canonical countries +
+20 BG cities seed is present, the mutable tables start empty, and the database
+is dropped on teardown.  Tests seed their own websites / discovery_log rows
+and query actual city IDs instead of hard-coding primary keys; no manual
+cleanup is needed and exact-count assertions are safe.
 
-All database-hitting tests accept the ``postgres_dsn`` fixture and monkeypatch
-``settings`` so that seed connections, ``get_pool()``, and assertions all target
-the same database — no ambient-state dependency.
-
-Tests that need city/country data seed their own test-owned rows via a helper
-rather than relying on ambient seed data (hardcoded city IDs 1/2 from fixtures).
+Non-database mocks (helper-function patches for run_qc_checks, mark_failed
+routing) remain intact.
 """
 
 from __future__ import annotations
 
 import json
 from unittest.mock import patch
-from urllib.parse import urlparse
 
 import asyncpg
 import pytest
 
-from agency_audit.config import settings
-from agency_audit.db import close_pool
-
-# ──────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────
-
-
-async def _seed_conn(dsn: str) -> asyncpg.Connection:
-    """Return an auto-commit connection for seeding test data.
-
-    Data inserted through this connection is immediately committed and
-    visible to get_pool() connections used by the functions under test.
-    Uses *dsn* (from the postgres_dsn fixture) so all connections target
-    the same database.
-    """
-    return await asyncpg.connect(dsn=dsn)
-
-
-def _point_settings_at_fixture_db(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Monkeypatch global settings so ``get_pool()`` connects to the fixture DB."""
-    parsed = urlparse(postgres_dsn)
-    monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
-    monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
-    monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
-    monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
-    monkeypatch.setattr(settings, "pg_password", parsed.password or "")
-
-
-async def _seed_test_country_and_city(
-    seed: asyncpg.Connection,
-    country_iso: str = "XX",
-    city_label: str = "TestCity",
-) -> int:
-    """Insert a test-owned country and city, returning the city_id.
-
-    Inserts the country with ON CONFLICT DO NOTHING so multiple tests
-    that happen to use the same ISO won't collide.  Each call inserts a
-    fresh city row, so the caller always gets a unique ID.
-    """
-    await seed.execute(
-        "INSERT INTO countries (iso, label) VALUES ($1, $2) ON CONFLICT (iso) DO NOTHING",
-        country_iso,
-        f"TestLand-{country_iso}",
-    )
-    city_id = await seed.fetchval(
-        "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
-        "VALUES ($1, $2, $3, 100000, 42.0, 23.0) RETURNING id",
-        country_iso,
-        city_label,
-        city_label.lower().replace(" ", "-"),
-    )
-    assert city_id is not None  # INSERT RETURNING always yields a row
-    return int(city_id)
-
-
-@pytest.fixture(autouse=True)
-async def _fresh_pool() -> None:
-    """Close the shared pool after each test so the next gets a fresh one."""
-    yield
-    await close_pool()
-
-
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 # QC — mark_for_manual_review
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 
 
 class TestQCMarkForReview:
-    async def test_mark_for_manual_review_warning(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_mark_for_manual_review_warning(self, fresh_db: asyncpg.Connection) -> None:
         from agency_audit.loop.qc import mark_for_manual_review
 
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+        website_id = await fresh_db.fetchval(
+            "INSERT INTO websites (url, label) "
+            "VALUES ('https://test-mr1.example.com', 'Test MR1') RETURNING id"
+        )
+        assert website_id is not None
+        await mark_for_manual_review(website_id, "test reason", severity="warning")
 
-        seed = await _seed_conn(postgres_dsn)
-        try:
-            website_id = await seed.fetchval(
-                "INSERT INTO websites (url, label) "
-                "VALUES ('https://test-mr1.example.com', 'Test MR1') RETURNING id"
-            )
-            await mark_for_manual_review(website_id, "test reason", severity="warning")
-
-            row = await db_conn.fetchrow(
-                "SELECT needs_review, review_reason, qc_checks FROM websites WHERE id = $1",
-                website_id,
-            )
-            assert row["needs_review"] is True
-            assert "test reason" in (row["review_reason"] or "")
-            qc = json.loads(row["qc_checks"])
-            assert any(e.get("check") == "manual_review" for e in qc)
-        finally:
-            await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-mr%'")
-            await seed.close()
+        row = await fresh_db.fetchrow(
+            "SELECT needs_review, review_reason, qc_checks FROM websites WHERE id = $1",
+            website_id,
+        )
+        assert row is not None
+        assert row["needs_review"] is True
+        assert "test reason" in (row["review_reason"] or "")
+        qc = json.loads(row["qc_checks"])
+        assert any(e.get("check") == "manual_review" for e in qc)
 
     async def test_mark_for_manual_review_error_severity(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+        self, fresh_db: asyncpg.Connection
     ) -> None:
         from agency_audit.loop.qc import mark_for_manual_review
 
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+        website_id = await fresh_db.fetchval(
+            "INSERT INTO websites (url, label) "
+            "VALUES ('https://test-mr2.example.com', 'Test MR2') RETURNING id"
+        )
+        assert website_id is not None
+        await mark_for_manual_review(website_id, "critical issue", severity="error")
 
-        seed = await _seed_conn(postgres_dsn)
-        try:
-            website_id = await seed.fetchval(
-                "INSERT INTO websites (url, label) "
-                "VALUES ('https://test-mr2.example.com', 'Test MR2') RETURNING id"
-            )
-            await mark_for_manual_review(website_id, "critical issue", severity="error")
-
-            row = await db_conn.fetchrow("SELECT qc_checks FROM websites WHERE id = $1", website_id)
-            qc = json.loads(row["qc_checks"])
-            assert any(
-                e.get("check") == "manual_review" and e.get("severity") == "error" for e in qc
-            )
-        finally:
-            await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-mr%'")
-            await seed.close()
+        row = await fresh_db.fetchrow("SELECT qc_checks FROM websites WHERE id = $1", website_id)
+        assert row is not None
+        qc = json.loads(row["qc_checks"])
+        assert any(e.get("check") == "manual_review" and e.get("severity") == "error" for e in qc)
 
 
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 # QC — run_qc_checks (mocks inner QC functions, not the database)
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 
 
 class TestQCRunChecks:
-    @pytest.mark.asyncio
     async def test_run_qc_checks_empty(self) -> None:
         from agency_audit.loop.qc import run_qc_checks
 
@@ -166,7 +87,6 @@ class TestQCRunChecks:
             assert summary["duplicate_domains"] == 0
             assert summary["total_findings"] == 0
 
-    @pytest.mark.asyncio
     async def test_run_qc_checks_with_findings(self) -> None:
         from agency_audit.loop.qc import QCFinding, run_qc_checks
 
@@ -188,316 +108,243 @@ class TestQCRunChecks:
             assert summary["total_findings"] == 3
 
 
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 # QC — get_websites_needing_review
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 
 
 class TestQCGetWebsitesNeedingReview:
-    async def test_no_owned_reviews(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_empty_when_no_flagged_sites(self, fresh_db: asyncpg.Connection) -> None:
+        """Pristine database: no websites → empty review list."""
         from agency_audit.loop.qc import get_websites_needing_review
 
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+        result = await get_websites_needing_review()
+        assert result == []
 
-        # Clean any leftovers from prior runs, then verify the test-owned
-        # URL does not appear — scoped to rows this test owns, not global state.
-        seed = await _seed_conn(postgres_dsn)
-        try:
-            await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-review%'")
-        finally:
-            await seed.close()
+    async def test_with_reviews(self, fresh_db: asyncpg.Connection) -> None:
+        from agency_audit.loop.qc import get_websites_needing_review
+
+        # Insert one website flagged for review, one not.
+        await fresh_db.execute(
+            "INSERT INTO websites (url, label, score, needs_review, review_reason, qc_checks) "
+            "VALUES ('https://test-review.example.com', 'Test Review', 0, true, "
+            "'Suspicious score 0', '[{\"check\":\"suspicious_score\"}]'::jsonb)"
+        )
+        await fresh_db.execute(
+            "INSERT INTO websites (url, label, score, needs_review) "
+            "VALUES ('https://test-ok.example.com', 'Test OK', 85, false)"
+        )
 
         result = await get_websites_needing_review()
         result_urls = {r["url"] for r in result}
-        assert "https://test-review.example.com" not in result_urls
-
-    async def test_with_reviews(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from agency_audit.loop.qc import get_websites_needing_review
-
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
-
-        seed = await _seed_conn(postgres_dsn)
-        try:
-            # Insert one website flagged for review, one not
-            await seed.execute(
-                "INSERT INTO websites (url, label, score, needs_review, review_reason, qc_checks) "
-                "VALUES ('https://test-review.example.com', 'Test Review', 0, true, "
-                "'Suspicious score 0', '[{\"check\":\"suspicious_score\"}]'::jsonb)"
-            )
-            await seed.execute(
-                "INSERT INTO websites (url, label, score, needs_review) "
-                "VALUES ('https://test-ok.example.com', 'Test OK', 85, false)"
-            )
-
-            result = await get_websites_needing_review()
-            result_urls = {r["url"] for r in result}
-            assert "https://test-review.example.com" in result_urls
-            assert "https://test-ok.example.com" not in result_urls
-            # Verify the flagged row's data is intact
-            review_row = next(r for r in result if r["url"] == "https://test-review.example.com")
-            assert review_row["score"] == 0
-        finally:
-            await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-            await seed.close()
+        assert "https://test-review.example.com" in result_urls
+        assert "https://test-ok.example.com" not in result_urls
+        # Pristine database: exactly one flagged site.
+        assert len(result) == 1
+        review_row = result[0]
+        assert review_row["score"] == 0
 
 
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 # Re-audit — non-empty results
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 
 
 class TestReauditWithResults:
-    async def test_get_reaudit_queue_with_results(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_get_reaudit_queue_with_results(self, fresh_db: asyncpg.Connection) -> None:
         from agency_audit.loop.reaudit import get_reaudit_queue
 
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+        # Resolve Sofia's actual ID from the reference seed.
+        sofia_id = await fresh_db.fetchval(
+            "SELECT id FROM cities WHERE country = 'BG' AND slug = 'sofia'"
+        )
+        assert sofia_id is not None
 
-        seed = await _seed_conn(postgres_dsn)
-        try:
-            # Seed a test-owned country + city instead of relying on ambient
-            # seed data (city id=1 from fixtures).
-            test_city_id = await _seed_test_country_and_city(seed, "XA", "ReauditCity")
+        # Insert an audited website with an old last_audited_at date.
+        website_id = await fresh_db.fetchval(
+            "INSERT INTO websites (url, label, score, audit_status, "
+            "needs_review, last_audited_at, audit_attempts) "
+            "VALUES ('https://test-old.example.com', 'Old Agency', 50, 'audited', "
+            "false, now() - INTERVAL '45 days', 0) RETURNING id"
+        )
+        assert website_id is not None
+        await fresh_db.execute(
+            "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
+            website_id,
+            sofia_id,
+        )
 
-            # Insert an audited website with an old last_audited_at date,
-            # linked to our test-owned city.
-            website_id = await seed.fetchval(
-                "INSERT INTO websites (url, label, score, audit_status, "
-                "needs_review, last_audited_at, audit_attempts) "
-                "VALUES ('https://test-old.example.com', 'Old Agency', 50, 'audited', "
-                "false, now() - INTERVAL '45 days', 0) RETURNING id"
-            )
-            await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
-                website_id,
-                test_city_id,
-            )
+        queue = await get_reaudit_queue(interval_days=30)
+        # Pristine database: our website is the only one in the queue.
+        assert len(queue) == 1
+        assert queue[0]["id"] == website_id
+        assert queue[0]["age_days"] == 45
 
-            queue = await get_reaudit_queue(interval_days=30)
-            # Scoped: check our website is present, not global cardinality
-            queue_ids = [q["id"] for q in queue]
-            assert website_id in queue_ids
-            our_entry = next(q for q in queue if q["id"] == website_id)
-            assert our_entry["age_days"] == 45
-        finally:
-            await seed.execute(
-                "DELETE FROM website_cities WHERE website_id IN "
-                "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
-            )
-            await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-            await seed.execute("DELETE FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY')")
-            await seed.execute("DELETE FROM countries WHERE iso IN ('XA', 'XB', 'XC', 'XY')")
-            await seed.close()
-
-    async def test_schedule_reaudits_with_results(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_schedule_reaudits_with_results(self, fresh_db: asyncpg.Connection) -> None:
         from agency_audit.loop.reaudit import schedule_reaudits
 
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+        # Resolve seeded BG city IDs.
+        sofia_id = await fresh_db.fetchval(
+            "SELECT id FROM cities WHERE country = 'BG' AND slug = 'sofia'"
+        )
+        plovdiv_id = await fresh_db.fetchval(
+            "SELECT id FROM cities WHERE country = 'BG' AND slug = 'plovdiv'"
+        )
+        assert sofia_id is not None
+        assert plovdiv_id is not None
 
-        seed = await _seed_conn(postgres_dsn)
-        cleaned_log_ids: list[int] = []
-        try:
-            # Seed test-owned country XB with two cities — replaces ambient
-            # seed data (city ids 1/2 from fixtures).
-            bg_city1 = await _seed_test_country_and_city(seed, "XB", "ReauditCity1")
-            bg_city2 = await _seed_test_country_and_city(seed, "XB", "ReauditCity2")
+        # Insert an ES city for a non-BG control — country 'ES' exists in the
+        # reference seed (44 countries), but has no cities yet.
+        madrid_id = await fresh_db.fetchval(
+            "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
+            "VALUES ('ES', 'Madrid', 'madrid', 3200000, 40.4168, -3.7038) RETURNING id"
+        )
+        assert madrid_id is not None
 
-            # Two BG websites linked to our test-owned cities
-            w1 = await seed.fetchval(
-                "INSERT INTO websites (url, label, score, audit_status, "
-                "needs_review, last_audited_at, audit_attempts) "
-                "VALUES ('https://test-a.example.com', 'A', 60, 'audited', "
-                "false, now() - INTERVAL '40 days', 0) RETURNING id"
-            )
-            await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)", w1, bg_city1
-            )
-            w2 = await seed.fetchval(
-                "INSERT INTO websites (url, label, score, audit_status, "
-                "needs_review, last_audited_at, audit_attempts) "
-                "VALUES ('https://test-b.example.com', 'B', 70, 'audited', "
-                "false, now() - INTERVAL '50 days', 0) RETURNING id"
-            )
-            await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)", w2, bg_city2
-            )
+        # Two BG websites — overdue, linked to seeded BG cities.
+        w1 = await fresh_db.fetchval(
+            "INSERT INTO websites (url, label, score, audit_status, "
+            "needs_review, last_audited_at, audit_attempts) "
+            "VALUES ('https://test-a.example.com', 'A', 60, 'audited', "
+            "false, now() - INTERVAL '40 days', 0) RETURNING id"
+        )
+        assert w1 is not None
+        await fresh_db.execute(
+            "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)", w1, sofia_id
+        )
+        w2 = await fresh_db.fetchval(
+            "INSERT INTO websites (url, label, score, audit_status, "
+            "needs_review, last_audited_at, audit_attempts) "
+            "VALUES ('https://test-b.example.com', 'B', 70, 'audited', "
+            "false, now() - INTERVAL '50 days', 0) RETURNING id"
+        )
+        assert w2 is not None
+        await fresh_db.execute(
+            "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)", w2, plovdiv_id
+        )
 
-            # Non-BG control — seed country XC + city so the country
-            # filter in schedule_reaudits(country="XB") actually excludes it.
-            es_city_id = await _seed_test_country_and_city(seed, "XC", "ControlCity")
-            w3 = await seed.fetchval(
-                "INSERT INTO websites (url, label, score, audit_status, "
-                "needs_review, last_audited_at, audit_attempts) "
-                "VALUES ('https://test-es.example.com', 'ES Agency', 80, 'audited', "
-                "false, now() - INTERVAL '60 days', 0) RETURNING id"
-            )
-            await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
-                w3,
-                es_city_id,
-            )
+        # Non-BG control — overdue, linked to the ES city.
+        w3 = await fresh_db.fetchval(
+            "INSERT INTO websites (url, label, score, audit_status, "
+            "needs_review, last_audited_at, audit_attempts) "
+            "VALUES ('https://test-es.example.com', 'ES Agency', 80, 'audited', "
+            "false, now() - INTERVAL '60 days', 0) RETURNING id"
+        )
+        assert w3 is not None
+        await fresh_db.execute(
+            "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)", w3, madrid_id
+        )
 
-            result = await schedule_reaudits(interval_days=30, country="XB")
-            assert result["queued"] == 2  # only XB, not XC
-            assert result["oldest_age_days"] == 50
+        result = await schedule_reaudits(interval_days=30, country="BG")
+        assert result["queued"] == 2  # only BG, not ES
+        assert result["oldest_age_days"] == 50
 
-            # Verify BG websites were updated to 'pending' with reset attempts
-            for wid in (w1, w2):
-                row = await db_conn.fetchrow(
-                    "SELECT audit_status, audit_attempts FROM websites WHERE id = $1",
-                    wid,
-                )
-                assert row["audit_status"] == "pending"
-                assert row["audit_attempts"] == 0
-
-            # ES website must NOT have been touched
-            row = await db_conn.fetchrow(
-                "SELECT audit_status, audit_attempts FROM websites WHERE id = $1",
-                w3,
+        # Verify BG websites were updated to 'pending' with reset attempts.
+        for wid in (w1, w2):
+            row = await fresh_db.fetchrow(
+                "SELECT audit_status, audit_attempts FROM websites WHERE id = $1", wid
             )
-            assert row["audit_status"] == "audited"
+            assert row is not None
+            assert row["audit_status"] == "pending"
             assert row["audit_attempts"] == 0
 
-            # Verify an audit_log entry was created — scoped to this test's
-            # unique country so the assertion identifies the row we created,
-            # not any pre-existing row with queued_websites = 2.
-            log_row = await db_conn.fetchrow(
-                "SELECT id, run_type, items_processed, summary FROM audit_log "
-                "WHERE run_type = 'reaudit' AND country = 'XB' ORDER BY id DESC LIMIT 1"
-            )
-            assert log_row is not None
-            assert log_row["run_type"] == "reaudit"
-            assert log_row["items_processed"] == 2
-            cleaned_log_ids.append(log_row["id"])
-        finally:
-            if cleaned_log_ids:
-                await seed.execute("DELETE FROM audit_log WHERE id = ANY($1)", cleaned_log_ids)
-            await seed.execute(
-                "DELETE FROM website_cities WHERE website_id IN "
-                "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
-            )
-            await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-            await seed.execute("DELETE FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY')")
-            await seed.execute("DELETE FROM countries WHERE iso IN ('XA', 'XB', 'XC', 'XY')")
-            await seed.close()
+        # ES website must NOT have been touched.
+        row = await fresh_db.fetchrow(
+            "SELECT audit_status, audit_attempts FROM websites WHERE id = $1", w3
+        )
+        assert row is not None
+        assert row["audit_status"] == "audited"
+        assert row["audit_attempts"] == 0
+
+        # Verify an audit_log entry was created — scoped to the country + run_type
+        # this test created (pristine database: exactly one such row).
+        log_row = await fresh_db.fetchrow(
+            "SELECT id, run_type, items_processed, summary FROM audit_log "
+            "WHERE run_type = 'reaudit' AND country = 'BG'"
+        )
+        assert log_row is not None
+        assert log_row["run_type"] == "reaudit"
+        assert log_row["items_processed"] == 2
 
 
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 # Retry — mark_failed_* functions
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 
 
 class TestRetryMarkFailed:
-    async def test_mark_failed_website(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_mark_failed_website(self, fresh_db: asyncpg.Connection) -> None:
         from agency_audit.loop.retry import mark_failed_website
 
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+        # Resolve Sofia's actual ID from the reference seed.
+        sofia_id = await fresh_db.fetchval(
+            "SELECT id FROM cities WHERE country = 'BG' AND slug = 'sofia'"
+        )
+        assert sofia_id is not None
 
-        seed = await _seed_conn(postgres_dsn)
-        cleaned_log_ids: list[int] = []
-        try:
-            # Seed test-owned country + city instead of relying on ambient
-            # seed data (city id=1 from fixtures).
-            test_city_id = await _seed_test_country_and_city(seed, "XA", "FailCity")
+        website_id = await fresh_db.fetchval(
+            "INSERT INTO websites (url, label, audit_status, audit_attempts) "
+            "VALUES ('https://test-fail.example.com', 'Fail', 'audited', 1) RETURNING id"
+        )
+        assert website_id is not None
+        await fresh_db.execute(
+            "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
+            website_id,
+            sofia_id,
+        )
 
-            # Need website + website_cities link to a real city for the
-            # audit_log INSERT (JOIN website_cities → cities).
-            website_id = await seed.fetchval(
-                "INSERT INTO websites (url, label, audit_status, audit_attempts) "
-                "VALUES ('https://test-fail.example.com', 'Fail', 'audited', 1) "
-                "RETURNING id"
-            )
-            await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
-                website_id,
-                test_city_id,
-            )
+        await mark_failed_website(website_id, "test error")
 
-            await mark_failed_website(website_id, "test error")
+        # Check website state.
+        row = await fresh_db.fetchrow(
+            "SELECT audit_status, audit_last_error, audit_attempts FROM websites WHERE id = $1",
+            website_id,
+        )
+        assert row is not None
+        assert row["audit_status"] == "failed"
+        assert row["audit_last_error"] == "test error"
+        assert row["audit_attempts"] == 2  # was 1, incremented
 
-            # Check website state
-            row = await db_conn.fetchrow(
-                "SELECT audit_status, audit_last_error, audit_attempts FROM websites WHERE id = $1",
-                website_id,
-            )
-            assert row["audit_status"] == "failed"
-            assert row["audit_last_error"] == "test error"
-            assert row["audit_attempts"] == 2  # was 1, incremented
+        # Check audit_log entry — pristine database: exactly one 'audit' row with
+        # this error.
+        log_row = await fresh_db.fetchrow(
+            "SELECT run_type, country, items_failed, error FROM audit_log "
+            "WHERE error = 'test error'"
+        )
+        assert log_row is not None
+        assert log_row["run_type"] == "audit"
+        assert log_row["country"] == "BG"
+        assert log_row["items_failed"] == 1
 
-            # Check audit_log entry — scoped to our unique error message
-            log_row = await db_conn.fetchrow(
-                "SELECT id, run_type, country, items_failed, error FROM audit_log "
-                "WHERE error = 'test error'"
-            )
-            assert log_row is not None
-            assert log_row["run_type"] == "audit"
-            # Country resolved from our test-owned city → country 'XA'
-            assert log_row["country"] == "XA"
-            assert log_row["items_failed"] == 1
-            cleaned_log_ids.append(log_row["id"])
-        finally:
-            if cleaned_log_ids:
-                await seed.execute("DELETE FROM audit_log WHERE id = ANY($1)", cleaned_log_ids)
-            await seed.execute(
-                "DELETE FROM website_cities WHERE website_id IN "
-                "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
-            )
-            await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-            await seed.execute("DELETE FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY')")
-            await seed.execute("DELETE FROM countries WHERE iso IN ('XA', 'XB', 'XC', 'XY')")
-            await seed.close()
-
-    async def test_mark_failed_discovery(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_mark_failed_discovery(self, fresh_db: asyncpg.Connection) -> None:
         from agency_audit.loop.retry import mark_failed_discovery
 
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+        # Resolve Sofia from the reference seed.
+        sofia_id = await fresh_db.fetchval(
+            "SELECT id FROM cities WHERE country = 'BG' AND slug = 'sofia'"
+        )
+        assert sofia_id is not None
 
-        seed = await _seed_conn(postgres_dsn)
-        try:
-            # Seed a test-owned city instead of relying on ambient seed data
-            # (city id=1 from fixtures).
-            test_city_id = await _seed_test_country_and_city(seed, "XA", "DiscoveryCity")
-            # Reset to pending first, then mark failed
-            await seed.execute(
-                "UPDATE cities SET discovery_status = 'pending' WHERE id = $1", test_city_id
-            )
-            await mark_failed_discovery(test_city_id, "discovery error")
+        # Reset to pending first (seed cities start as 'pending', but be explicit).
+        await fresh_db.execute(
+            "UPDATE cities SET discovery_status = 'pending' WHERE id = $1", sofia_id
+        )
+        await mark_failed_discovery(sofia_id, "discovery error")
 
-            row = await db_conn.fetchrow(
-                "SELECT discovery_status FROM cities WHERE id = $1", test_city_id
-            )
-            assert row["discovery_status"] == "skipped"
+        row = await fresh_db.fetchrow("SELECT discovery_status FROM cities WHERE id = $1", sofia_id)
+        assert row is not None
+        assert row["discovery_status"] == "skipped"
 
-            # Check discovery_log entry
-            log_row = await db_conn.fetchrow(
-                "SELECT city_id, status, last_error, attempt FROM discovery_log "
-                "WHERE city_id = $1 AND last_error = 'discovery error'",
-                test_city_id,
-            )
-            assert log_row is not None
-            assert log_row["status"] == "failed"
-            assert log_row["attempt"] == 3
-        finally:
-            await seed.execute(
-                "DELETE FROM discovery_log WHERE city_id IN "
-                "(SELECT id FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY'))"
-            )
-            await seed.execute("DELETE FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY')")
-            await seed.execute("DELETE FROM countries WHERE iso IN ('XA', 'XB', 'XC', 'XY')")
-            await seed.close()
+        # Check discovery_log entry — pristine database: exactly one row.
+        log_row = await fresh_db.fetchrow(
+            "SELECT city_id, status, last_error, attempt FROM discovery_log "
+            "WHERE city_id = $1 AND last_error = 'discovery error'",
+            sofia_id,
+        )
+        assert log_row is not None
+        assert log_row["status"] == "failed"
+        assert log_row["attempt"] == 3
 
-    @pytest.mark.asyncio
     async def test_mark_failed_website_type(self) -> None:
         from agency_audit.loop.retry import mark_failed
 
@@ -505,7 +352,6 @@ class TestRetryMarkFailed:
             await mark_failed("website", 42, "error")
             mock_ws.assert_called_once_with(42, "error")
 
-    @pytest.mark.asyncio
     async def test_mark_failed_city_type(self) -> None:
         from agency_audit.loop.retry import mark_failed
 
@@ -513,7 +359,6 @@ class TestRetryMarkFailed:
             await mark_failed("city", 7, "error")
             mock_city.assert_called_once_with(7, "error")
 
-    @pytest.mark.asyncio
     async def test_mark_failed_unknown_type(self) -> None:
         from agency_audit.loop.retry import mark_failed
 
@@ -521,216 +366,143 @@ class TestRetryMarkFailed:
             await mark_failed("unknown", 1, "error")
 
 
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 # Tracking — log_* functions
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 
 
 class TestTrackingLogFunctions:
-    async def test_log_discovery_run(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_log_discovery_run(self, fresh_db: asyncpg.Connection) -> None:
         from agency_audit.loop.tracking import log_discovery_run
 
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+        log_id = await log_discovery_run("BG", 5, 12, 2.5)
+        assert isinstance(log_id, int)
+        assert log_id > 0
 
-        seed = await _seed_conn(postgres_dsn)
-        log_id: int | None = None
-        try:
-            log_id = await log_discovery_run("BG", 5, 12, 2.5)
-            assert isinstance(log_id, int)
-            assert log_id > 0
+        row = await fresh_db.fetchrow(
+            "SELECT country, run_type, duration_seconds, items_processed, "
+            "items_succeeded, items_failed, summary FROM audit_log WHERE id = $1",
+            log_id,
+        )
+        assert row is not None
+        assert row["country"] == "BG"
+        assert row["run_type"] == "discovery"
+        assert float(row["duration_seconds"]) == 2.5
+        assert row["items_processed"] == 5
+        assert row["items_succeeded"] == 12
+        assert row["items_failed"] == 0
+        summary = json.loads(row["summary"])
+        assert summary["cities_processed"] == 5
+        assert summary["agencies_found"] == 12
 
-            row = await db_conn.fetchrow(
-                "SELECT country, run_type, duration_seconds, items_processed, "
-                "items_succeeded, items_failed, summary FROM audit_log WHERE id = $1",
-                log_id,
-            )
-            assert row["country"] == "BG"
-            assert row["run_type"] == "discovery"
-            assert float(row["duration_seconds"]) == 2.5
-            assert row["items_processed"] == 5
-            assert row["items_succeeded"] == 12
-            assert row["items_failed"] == 0
-            summary = json.loads(row["summary"])
-            assert summary["cities_processed"] == 5
-            assert summary["agencies_found"] == 12
-        finally:
-            if log_id is not None:
-                await seed.execute("DELETE FROM audit_log WHERE id = $1", log_id)
-            await seed.close()
-
-    async def test_log_discovery_run_with_errors(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_log_discovery_run_with_errors(self, fresh_db: asyncpg.Connection) -> None:
         from agency_audit.loop.tracking import log_discovery_run
 
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+        log_id = await log_discovery_run("BG", 3, 5, 1.0, errors=["err1", "err2"])
+        assert isinstance(log_id, int)
+        assert log_id > 0
 
-        seed = await _seed_conn(postgres_dsn)
-        log_id: int | None = None
-        try:
-            log_id = await log_discovery_run("BG", 3, 5, 1.0, errors=["err1", "err2"])
-            assert isinstance(log_id, int)
-            assert log_id > 0
+        row = await fresh_db.fetchrow(
+            "SELECT items_failed, summary FROM audit_log WHERE id = $1",
+            log_id,
+        )
+        assert row is not None
+        assert row["items_failed"] == 2
+        summary = json.loads(row["summary"])
+        assert summary["errors"] == ["err1", "err2"]
 
-            row = await db_conn.fetchrow(
-                "SELECT items_failed, summary FROM audit_log WHERE id = $1",
-                log_id,
-            )
-            assert row["items_failed"] == 2
-            summary = json.loads(row["summary"])
-            assert summary["errors"] == ["err1", "err2"]
-        finally:
-            if log_id is not None:
-                await seed.execute("DELETE FROM audit_log WHERE id = $1", log_id)
-            await seed.close()
-
-    async def test_log_audit_run(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_log_audit_run(self, fresh_db: asyncpg.Connection) -> None:
         from agency_audit.loop.tracking import log_audit_run
 
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+        sofia_id = await fresh_db.fetchval(
+            "SELECT id FROM cities WHERE country = 'BG' AND slug = 'sofia'"
+        )
+        assert sofia_id is not None
 
-        seed = await _seed_conn(postgres_dsn)
-        log_id: int | None = None
-        try:
-            # Seed test-owned country + city instead of relying on ambient
-            # seed data (city id=1 from fixtures).
-            test_city_id = await _seed_test_country_and_city(seed, "XA", "AuditCity")
+        website_id = await fresh_db.fetchval(
+            "INSERT INTO websites (url, label) "
+            "VALUES ('https://test-audit.example.com', 'Test Audit') RETURNING id"
+        )
+        assert website_id is not None
+        await fresh_db.execute(
+            "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
+            website_id,
+            sofia_id,
+        )
 
-            # Need website + website_cities → city so country can be resolved
-            website_id = await seed.fetchval(
-                "INSERT INTO websites (url, label) "
-                "VALUES ('https://test-audit.example.com', 'Test Audit') RETURNING id"
-            )
-            await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
-                website_id,
-                test_city_id,
-            )
+        log_id = await log_audit_run(website_id, 75, 1.5, success=True)
+        assert isinstance(log_id, int)
+        assert log_id > 0
 
-            log_id = await log_audit_run(website_id, 75, 1.5, success=True)
-            assert isinstance(log_id, int)
-            assert log_id > 0
+        row = await fresh_db.fetchrow(
+            "SELECT country, run_type, items_succeeded, items_failed, summary "
+            "FROM audit_log WHERE id = $1",
+            log_id,
+        )
+        assert row is not None
+        assert row["country"] == "BG"
+        assert row["run_type"] == "audit"
+        assert row["items_succeeded"] == 1
+        assert row["items_failed"] == 0
+        summary = json.loads(row["summary"])
+        assert summary["website_id"] == website_id
+        assert summary["score"] == 75
 
-            row = await db_conn.fetchrow(
-                "SELECT country, run_type, items_succeeded, items_failed, summary "
-                "FROM audit_log WHERE id = $1",
-                log_id,
-            )
-            assert row is not None
-            # Country resolved from test-owned city → country 'XA'
-            assert row["country"] == "XA"
-            assert row["run_type"] == "audit"
-            assert row["items_succeeded"] == 1
-            assert row["items_failed"] == 0
-            summary = json.loads(row["summary"])
-            assert summary["website_id"] == website_id
-            assert summary["score"] == 75
-        finally:
-            if log_id is not None:
-                await seed.execute("DELETE FROM audit_log WHERE id = $1", log_id)
-            await seed.execute(
-                "DELETE FROM website_cities WHERE website_id IN "
-                "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
-            )
-            await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-            await seed.execute("DELETE FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY')")
-            await seed.execute("DELETE FROM countries WHERE iso IN ('XA', 'XB', 'XC', 'XY')")
-            await seed.close()
-
-    async def test_log_audit_run_with_country(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_log_audit_run_with_country(self, fresh_db: asyncpg.Connection) -> None:
         from agency_audit.loop.tracking import log_audit_run
 
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+        website_id = await fresh_db.fetchval(
+            "INSERT INTO websites (url, label) "
+            "VALUES ('https://test-audit2.example.com', 'Test Audit 2') RETURNING id"
+        )
+        assert website_id is not None
 
-        seed = await _seed_conn(postgres_dsn)
-        log_id: int | None = None
-        try:
-            # Seed test-owned country + city instead of relying on ambient
-            # seed data (city id=1 from fixtures).
-            test_city_id = await _seed_test_country_and_city(seed, "XA", "AuditCity2")
+        log_id = await log_audit_run(
+            website_id, 80, 2.0, country="BG", success=False, error="timeout"
+        )
+        assert isinstance(log_id, int)
+        assert log_id > 0
 
-            website_id = await seed.fetchval(
-                "INSERT INTO websites (url, label) "
-                "VALUES ('https://test-audit2.example.com', 'Test Audit 2') RETURNING id"
-            )
-            await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
-                website_id,
-                test_city_id,
-            )
+        row = await fresh_db.fetchrow(
+            "SELECT country, items_succeeded, items_failed, summary, error "
+            "FROM audit_log WHERE id = $1",
+            log_id,
+        )
+        assert row is not None
+        assert row["country"] == "BG"
+        assert row["items_succeeded"] == 0
+        assert row["items_failed"] == 1
+        assert row["error"] == "timeout"
+        summary = json.loads(row["summary"])
+        assert summary["score"] == 80
 
-            log_id = await log_audit_run(
-                website_id, 80, 2.0, country="BG", success=False, error="timeout"
-            )
-            assert isinstance(log_id, int)
-            assert log_id > 0
-
-            row = await db_conn.fetchrow(
-                "SELECT country, items_succeeded, items_failed, summary, error "
-                "FROM audit_log WHERE id = $1",
-                log_id,
-            )
-            assert row["country"] == "BG"
-            assert row["items_succeeded"] == 0
-            assert row["items_failed"] == 1
-            assert row["error"] == "timeout"
-            summary = json.loads(row["summary"])
-            assert summary["score"] == 80
-        finally:
-            if log_id is not None:
-                await seed.execute("DELETE FROM audit_log WHERE id = $1", log_id)
-            await seed.execute(
-                "DELETE FROM website_cities WHERE website_id IN "
-                "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
-            )
-            await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-            await seed.execute("DELETE FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY')")
-            await seed.execute("DELETE FROM countries WHERE iso IN ('XA', 'XB', 'XC', 'XY')")
-            await seed.close()
-
-    async def test_log_full_loop_run(
-        self, db_conn: asyncpg.Connection, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_log_full_loop_run(self, fresh_db: asyncpg.Connection) -> None:
         from agency_audit.loop.tracking import log_full_loop_run
 
-        _point_settings_at_fixture_db(postgres_dsn, monkeypatch)
+        log_id = await log_full_loop_run("BG", 10, 25, 20, 18, 2, 3, 5, 30.5)
+        assert isinstance(log_id, int)
+        assert log_id > 0
 
-        seed = await _seed_conn(postgres_dsn)
-        log_id: int | None = None
-        try:
-            log_id = await log_full_loop_run("BG", 10, 25, 20, 18, 2, 3, 5, 30.5)
-            assert isinstance(log_id, int)
-            assert log_id > 0
-
-            row = await db_conn.fetchrow(
-                "SELECT country, run_type, duration_seconds, items_processed, "
-                "items_succeeded, items_failed, summary FROM audit_log WHERE id = $1",
-                log_id,
-            )
-            assert row["country"] == "BG"
-            assert row["run_type"] == "full_loop"
-            assert float(row["duration_seconds"]) == 30.5
-            assert row["items_processed"] == 30  # cities + websites
-            assert row["items_succeeded"] == 43  # agencies + succeeded audits
-            assert row["items_failed"] == 2
-            summary = json.loads(row["summary"])
-            assert summary["qc_findings"] == 3
-            assert summary["reaudit_queued"] == 5
-        finally:
-            if log_id is not None:
-                await seed.execute("DELETE FROM audit_log WHERE id = $1", log_id)
-            await seed.close()
+        row = await fresh_db.fetchrow(
+            "SELECT country, run_type, duration_seconds, items_processed, "
+            "items_succeeded, items_failed, summary FROM audit_log WHERE id = $1",
+            log_id,
+        )
+        assert row is not None
+        assert row["country"] == "BG"
+        assert row["run_type"] == "full_loop"
+        assert float(row["duration_seconds"]) == 30.5
+        assert row["items_processed"] == 30  # cities + websites
+        assert row["items_succeeded"] == 43  # agencies + succeeded audits
+        assert row["items_failed"] == 2
+        summary = json.loads(row["summary"])
+        assert summary["qc_findings"] == 3
+        assert summary["reaudit_queued"] == 5
 
 
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 # RetryConfig
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 
 
 class TestRetryConfigDefaults:
@@ -749,9 +521,9 @@ class TestRetryConfigDefaults:
         assert DEFAULT_RETRY_CONFIG.max_attempts == 3
 
 
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 # Re-audit — helpers
-# ──────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
 
 
 class TestReauditHelpers:
