@@ -27,6 +27,7 @@ import asyncio
 import logging
 import os
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 import asyncpg
 import pytest
@@ -91,9 +92,35 @@ def _ensure_migrations(postgres_dsn: str) -> None:
     asyncio.run(_migrate())
 
 
+@pytest.fixture(scope="session")
+def _ensure_seed_data(_ensure_migrations: None, postgres_dsn: str) -> None:
+    """Seed baseline data (countries + sample cities) once per session.
+
+    Mirrors what ``scripts/seed-test-db.py`` does so tests can rely on
+    a known set of countries and cities without depending on external
+    setup.  Uses a committed connection (no transaction wrapper) so the
+    rows are visible to every test's own connections.
+    """
+    ROOT = Path(__file__).resolve().parents[1]
+
+    async def _seed() -> None:
+        conn = await asyncpg.connect(dsn=postgres_dsn)
+        try:
+            countries_sql = (ROOT / "src" / "agency_audit" / "seed" / "countries.sql").read_text(
+                encoding="utf-8"
+            )
+            await conn.execute(countries_sql)
+            cities_sql = (ROOT / "tests" / "fixtures" / "cities.sql").read_text(encoding="utf-8")
+            await conn.execute(cities_sql)
+        finally:
+            await conn.close()
+
+    asyncio.run(_seed())
+
+
 @pytest.fixture
 async def db_conn(
-    postgres_dsn: str, _ensure_migrations: None
+    postgres_dsn: str, _ensure_migrations: None, _ensure_seed_data: None
 ) -> AsyncGenerator[asyncpg.Connection]:
     """Function-scoped asyncpg connection with rollback-only isolation.
 
