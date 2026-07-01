@@ -496,6 +496,7 @@ class DiscoveryPipeline:
         self,
         query: str,
         city: dict[str, Any],
+        max_calls: int | None = None,
     ) -> list[PlaceResult]:
         """Search the city's viewport recursively via tiled Text Search.
 
@@ -506,15 +507,17 @@ class DiscoveryPipeline:
         fewer results are kept as-is.
 
         A per-city API-call counter stops subdivision once
-        ``places_max_calls_per_city`` is reached; skipped tiles are logged
-        explicitly (not silently truncated).  Results are deduplicated by
-        ``place_id``.
+        *max_calls* is reached (defaults to ``places_max_calls_per_city``);
+        skipped tiles are logged explicitly (not silently truncated).
+        Results are deduplicated by ``place_id``.
         """
         viewport = await self.resolve_city_viewport(city)
         call_count = 0
         skipped_tiles = 0
         truncated_tiles = 0
-        max_calls = settings.places_max_calls_per_city
+        effective_max_calls = (
+            max_calls if max_calls is not None else settings.places_max_calls_per_city
+        )
         max_depth = settings.places_tile_max_depth
         sat_threshold = settings.places_tile_saturation_threshold
         city_label = str(city.get("label", "unknown"))
@@ -525,11 +528,11 @@ class DiscoveryPipeline:
         ) -> list[PlaceResult]:
             nonlocal call_count, skipped_tiles, truncated_tiles
 
-            if call_count >= max_calls:
+            if call_count >= effective_max_calls:
                 skipped_tiles += 1
                 return []
 
-            remaining = max_calls - call_count
+            remaining = effective_max_calls - call_count
             before = self.places.api_call_count
             search = await self.places.search_text(
                 query=query,
@@ -557,7 +560,7 @@ class DiscoveryPipeline:
             if (
                 is_saturated(len(results), sat_threshold)
                 and depth < max_depth
-                and call_count < max_calls
+                and call_count < effective_max_calls
             ):
                 child_results: list[PlaceResult] = []
                 for child in subdivide(tile):
@@ -567,7 +570,7 @@ class DiscoveryPipeline:
             if (
                 is_saturated(len(results), sat_threshold)
                 and depth < max_depth
-                and call_count >= max_calls
+                and call_count >= effective_max_calls
             ):
                 # Budget exhausted — children of this saturated tile are skipped.
                 # Each would have hit the top-of-function guard and been counted
@@ -612,6 +615,10 @@ class DiscoveryPipeline:
         country_iso: str,
         latitude: float | None,
         longitude: float | None,
+        viewport_low_lat: float | None = None,
+        viewport_low_lng: float | None = None,
+        viewport_high_lat: float | None = None,
+        viewport_high_lng: float | None = None,
     ) -> int:
         """Discover real estate agencies for a single city.
 
@@ -620,24 +627,63 @@ class DiscoveryPipeline:
         logger.info(f"Discovering agencies in {city_label}, {country_iso}")
 
         queries = await self.query_for_country(country_iso)
-        city = {
+        city: dict[str, Any] = {
             "id": city_id,
             "label": city_label,
             "slug": city_slug,
             "country": country_iso,
             "latitude": latitude,
             "longitude": longitude,
+            "viewport_low_lat": viewport_low_lat,
+            "viewport_low_lng": viewport_low_lng,
+            "viewport_high_lat": viewport_high_lat,
+            "viewport_high_lng": viewport_high_lng,
         }
+
+        # Pre-resolve & cache the viewport once per city so every keyword
+        # hits the cache instead of re-geocoding.  resolve_city_viewport
+        # already checks the dict's viewport_* columns first; after we
+        # resolve, we inject the result so subsequent lookups are free.
+        try:
+            viewport = await self.resolve_city_viewport(city)
+            city["viewport_low_lat"] = viewport.low_lat
+            city["viewport_low_lng"] = viewport.low_lng
+            city["viewport_high_lat"] = viewport.high_lat
+            city["viewport_high_lng"] = viewport.high_lng
+        except Exception as e:
+            logger.warning(
+                f"Viewport pre-resolution failed for {city_label}: {e} — "
+                f"falling back to bbox_from_center inside search_tiled"
+            )
+
         found_places: list[PlaceResult] = []
         seen_place_ids: set[str] = set()
+
+        # City-wide API-call budget — enforced ACROSS keywords, not reset per keyword
+        city_max_calls = settings.places_max_calls_per_city
 
         for query in queries:
             # Build full search query
             search_query = f"{query} {city_label}"
 
+            if city_max_calls <= 0:
+                logger.warning(
+                    f"City-wide API call budget exhausted for {city_label} "
+                    f"({settings.places_max_calls_per_city} calls) — "
+                    f"skipping remaining keywords"
+                )
+                break
+
             try:
                 if self.places.available:
-                    places = await self.search_tiled(query=search_query, city=city)
+                    calls_before = self.places.api_call_count
+                    places = await self.search_tiled(
+                        query=search_query,
+                        city=city,
+                        max_calls=city_max_calls,
+                    )
+                    calls_after = self.places.api_call_count
+                    city_max_calls -= calls_after - calls_before
                 else:
                     logger.warning(f"Places API not available for {city_label}")
                     break
@@ -649,7 +695,8 @@ class DiscoveryPipeline:
                         seen_place_ids.add(p.place_id)
 
                 logger.info(
-                    f"Query '{search_query}': found {len(places)} places, {len(found_places)} new"
+                    f"Query '{search_query}': found {len(places)} places, "
+                    f"{len(found_places)} total unique"
                 )
 
             except Exception as e:
@@ -759,7 +806,9 @@ class DiscoveryPipeline:
                 # Fetch next pending city for this country
                 async with pool.acquire() as conn:
                     row = await conn.fetchrow(
-                        """SELECT id, label, slug, population, latitude, longitude
+                        """SELECT id, label, slug, population, latitude, longitude,
+                                  viewport_low_lat, viewport_low_lng,
+                                  viewport_high_lat, viewport_high_lng
                            FROM cities
                            WHERE country = $1 AND discovery_status = 'pending'
                            ORDER BY population DESC
@@ -782,6 +831,10 @@ class DiscoveryPipeline:
                     country_iso=country,
                     latitude=row["latitude"],
                     longitude=row["longitude"],
+                    viewport_low_lat=row["viewport_low_lat"],
+                    viewport_low_lng=row["viewport_low_lng"],
+                    viewport_high_lat=row["viewport_high_lat"],
+                    viewport_high_lng=row["viewport_high_lng"],
                 )
 
                 country_summary["cities"] += 1
