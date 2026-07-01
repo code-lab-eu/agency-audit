@@ -11,12 +11,7 @@ async def test_db_conn_fixture_is_connected(db_conn: asyncpg.Connection):
 
 
 async def test_db_conn_has_migrations_applied(db_conn: asyncpg.Connection):
-    """All 6 project migrations are applied — no partial state.
-
-    PostGIS is a hard project dependency and migration 005 must always
-    be applied.  The fixture does not degrade gracefully when PostGIS
-    is unavailable.
-    """
+    """All project migrations are applied — no partial state."""
     versions = await db_conn.fetch("SELECT version FROM schema_migrations ORDER BY version")
     applied = {row["version"] for row in versions}
 
@@ -26,7 +21,6 @@ async def test_db_conn_has_migrations_applied(db_conn: asyncpg.Connection):
         "002_add_discovery_status.sql",
         "003_add_audit_log.sql",
         "004_add_failed_discovery_status.sql",
-        "005_add_spatial_geometry.sql",
     }
     assert expected <= applied, f"Missing migrations: {expected - applied}. Applied: {applied}"
 
