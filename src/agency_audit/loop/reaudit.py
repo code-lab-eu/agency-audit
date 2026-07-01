@@ -114,20 +114,44 @@ async def schedule_reaudits(
     cutoff = datetime.now(UTC) - timedelta(days=interval_days)
 
     async with pool.acquire() as conn:
-        # Get the websites to re-audit
-        rows = await conn.fetch(
-            """SELECT w.id, w.url, w.score,
-                      EXTRACT(DAY FROM now() - w.last_audited_at)::int AS age_days
-               FROM websites w
-               WHERE w.audit_status = 'audited'
-                 AND w.needs_review = false
-                 AND (w.last_audited_at < $1 OR w.last_audited_at IS NULL)
-                 AND w.audit_attempts < 3
-               ORDER BY w.last_audited_at ASC NULLS FIRST
-               LIMIT $2""",
-            cutoff,
-            limit,
-        )
+        # Get the websites to re-audit.  When *country* is provided, the
+        # query joins through website_cities → cities so the filter is
+        # actually enforced (matching get_reaudit_queue's behaviour).
+        if country:
+            rows = await conn.fetch(
+                """SELECT w.id, w.url, w.score,
+                          EXTRACT(DAY FROM now() - w.last_audited_at)::int AS age_days
+                   FROM websites w
+                   WHERE w.id IN (
+                       SELECT DISTINCT wc.website_id
+                       FROM website_cities wc
+                       JOIN cities c ON c.id = wc.city_id
+                       WHERE c.country = $2
+                   )
+                     AND w.audit_status = 'audited'
+                     AND w.needs_review = false
+                     AND (w.last_audited_at < $1 OR w.last_audited_at IS NULL)
+                     AND w.audit_attempts < 3
+                   ORDER BY w.last_audited_at ASC NULLS FIRST
+                   LIMIT $3""",
+                cutoff,
+                country,
+                limit,
+            )
+        else:
+            rows = await conn.fetch(
+                """SELECT w.id, w.url, w.score,
+                          EXTRACT(DAY FROM now() - w.last_audited_at)::int AS age_days
+                   FROM websites w
+                   WHERE w.audit_status = 'audited'
+                     AND w.needs_review = false
+                     AND (w.last_audited_at < $1 OR w.last_audited_at IS NULL)
+                     AND w.audit_attempts < 3
+                   ORDER BY w.last_audited_at ASC NULLS FIRST
+                   LIMIT $2""",
+                cutoff,
+                limit,
+            )
 
         if not rows:
             logger.info("No websites overdue for re-audit")
