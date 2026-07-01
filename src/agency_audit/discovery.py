@@ -19,6 +19,7 @@ import httpx
 
 from agency_audit.config import settings
 from agency_audit.db import get_pool
+from agency_audit.discovery_geo import Rectangle
 
 logger = logging.getLogger(__name__)
 
@@ -152,11 +153,23 @@ class PlacesAPIClient:
         location_bias: tuple[float, float] | None = None,
         radius: int = DEFAULT_RADIUS,
         max_results: int | None = None,
+        location_restriction: Rectangle | None = None,
     ) -> list[PlaceResult]:
         """Search Google Maps Places API for a text query.
 
         Handles pagination up to max_results (default from settings,
         max 60 for Text Search, but we paginate across multiple requests).
+
+        Args:
+            query: Text search query (e.g. "real estate agent Sofia").
+            location_bias: Optional (lat, lng) tuple for a circular bias —
+                only used when *location_restriction* is not set.
+            radius: Radius in meters for the circular locationBias.
+            max_results: Maximum number of results to return.
+            location_restriction: Optional Rectangle bounding-box filter.
+                When provided, emits ``locationRestriction.rectangle`` in
+                the POST body and **omits** ``locationBias`` — the two are
+                mutually exclusive in the Places API.
 
         Returns up to max_results PlaceResult objects.
         """
@@ -173,7 +186,20 @@ class PlacesAPIClient:
                 "textQuery": query,
                 "pageSize": min(20, max_results - len(results)),
             }
-            if location_bias:
+            if location_restriction:
+                body["locationRestriction"] = {
+                    "rectangle": {
+                        "low": {
+                            "latitude": float(location_restriction.low_lat),
+                            "longitude": float(location_restriction.low_lng),
+                        },
+                        "high": {
+                            "latitude": float(location_restriction.high_lat),
+                            "longitude": float(location_restriction.high_lng),
+                        },
+                    }
+                }
+            elif location_bias:
                 body["locationBias"] = {
                     "circle": {
                         "center": {

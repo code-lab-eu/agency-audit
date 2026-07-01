@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from agency_audit.discovery import PlacesAPIClient
+from agency_audit.discovery_geo import Rectangle
 
 # ──────────────────────────────────────────────────────────────────────
 # Helpers
@@ -108,6 +109,61 @@ class TestPlacesAPIClientSearchTextRequest:
         await client.close()
 
         assert captured_sizes == [15]
+
+    async def test_request_with_location_restriction(self):
+        """A Rectangle location_restriction emits locationRestriction and omits locationBias."""
+        captured_body = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_body
+            import json
+
+            captured_body = json.loads(request.read().decode("utf-8"))
+            return httpx.Response(200, json=build_place_response([]), request=request)
+
+        client = make_mock_client(handler)
+        rect = Rectangle(low_lat=42.0, low_lng=23.0, high_lat=43.0, high_lng=24.0)
+        await client.search_text(
+            "real estate agent",
+            location_restriction=rect,
+            max_results=20,
+        )
+        await client.close()
+
+        assert captured_body is not None
+        assert "locationRestriction" in captured_body
+        assert "locationBias" not in captured_body
+
+        rest = captured_body["locationRestriction"]
+        assert rest["rectangle"]["low"]["latitude"] == 42.0
+        assert rest["rectangle"]["low"]["longitude"] == 23.0
+        assert rest["rectangle"]["high"]["latitude"] == 43.0
+        assert rest["rectangle"]["high"]["longitude"] == 24.0
+
+    async def test_location_restriction_overrides_location_bias(self):
+        """When both are given, locationRestriction wins and locationBias is omitted."""
+        captured_body = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_body
+            import json
+
+            captured_body = json.loads(request.read().decode("utf-8"))
+            return httpx.Response(200, json=build_place_response([]), request=request)
+
+        client = make_mock_client(handler)
+        rect = Rectangle(low_lat=40.0, low_lng=20.0, high_lat=41.0, high_lng=21.0)
+        await client.search_text(
+            "some query",
+            location_bias=(48.0, 8.0),
+            location_restriction=rect,
+            max_results=20,
+        )
+        await client.close()
+
+        assert captured_body is not None
+        assert "locationRestriction" in captured_body
+        assert "locationBias" not in captured_body
 
 
 # ──────────────────────────────────────────────────────────────────────
