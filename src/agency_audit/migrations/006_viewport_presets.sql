@@ -1,4 +1,4 @@
--- 004_viewport_presets.sql — Store saved map viewport presets (for the web dashboard)
+-- 006_viewport_presets.sql — Store saved map viewport presets (for the web dashboard)
 -- Independent module — no dependencies on search or geometry modules.
 -- Uses its own DB access pattern via get_pool().
 
