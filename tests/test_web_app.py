@@ -3,240 +3,130 @@
 Tests all routes, HTMX partials, API endpoint, template helpers, and query helpers.
 Uses FastAPI TestClient against the real database (no DB-layer mocks).
 
-Baseline seed data (countries + 20 BG cities) is loaded by the session-scoped
-``_ensure_seed_data`` fixture in ``conftest.py``.  Tests insert their own
-websites / discovery_log rows and query actual city IDs from the database
-instead of hard-coding primary keys.
+Each test runs against a private, pristine database provided by the
+``fresh_db`` fixture (conftest.py): the canonical countries + 20 BG cities
+seed is present, the mutable tables start empty, and the database is dropped
+on teardown.  Tests seed their own websites / discovery_log rows and query
+actual city IDs instead of hard-coding primary keys; no manual cleanup is
+needed and exact-count assertions are safe.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, patch
-from urllib.parse import urlparse
 
 import asyncpg
 import pytest
 from fastapi.testclient import TestClient
 
 from agency_audit.config import settings
-from agency_audit.db import close_pool
 from agency_audit.web.app import _score_color, _status_badge, app
 
 # ──────────────────────────────────────────────────────────────────────
-# Client fixture — ensures the FastAPI app uses the test database
+# Client fixture — the FastAPI app runs against the per-test database
 # ──────────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def client(
-    postgres_dsn: str, _ensure_seed_data: None, monkeypatch: pytest.MonkeyPatch
-) -> TestClient:
-    """TestClient wired to the disposable test database.
+def client(fresh_db: asyncpg.Connection) -> TestClient:
+    """TestClient wired to the per-test database.
 
-    Monkeypatches ``agency_audit.config.settings`` so every
-    ``get_pool()`` call inside the web app connects to the test
-    database, not the ambient one.
+    Depending on ``fresh_db`` redirects ``get_pool()`` onto this test's
+    private database and drops it (with its pool) afterwards, so the app
+    reads and writes an isolated, pristine dataset.
     """
-    parsed = urlparse(postgres_dsn)
-    monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
-    monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
-    monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
-    monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
-    monkeypatch.setattr(settings, "pg_password", parsed.password or "")
     return TestClient(app)
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Pool cleanup — close pools properly instead of dropping references
+# Seeding helpers — write on fresh_db's connection (committed, autocommit)
+# so the web app's own pool sees the rows.
 # ──────────────────────────────────────────────────────────────────────
 
 
-@pytest.fixture(autouse=True)
-async def _close_pool_after_test() -> AsyncGenerator[None]:
-    """Close the shared pool after every test so no connections leak.
-
-    For async tests the pool is created on pytest's event loop and
-    ``close_pool()`` works directly.  For sync tests that use
-    ``TestClient``, the pool may live on anyio's event loop — in that
-    case ``close_pool()`` raises and we fall back to resetting the
-    module-level reference so the next test starts fresh.
-
-    Also cleans up test-* websites so data from one test never leaks
-    into another (the ``_app_pool`` fixture uses a committed pool).
-    """
-    yield
-    try:
-        # Clean up test data left by committed-pool tests.
-        from agency_audit.db import get_pool as _gp
-
-        pool = await _gp()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "DELETE FROM discovery_log WHERE website_id IN "
-                "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
-            )
-            await conn.execute(
-                "DELETE FROM website_cities WHERE website_id IN "
-                "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
-            )
-            await conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-            # Clean up test-* cities and their website_cities links too.
-            await conn.execute(
-                "DELETE FROM website_cities WHERE city_id IN "
-                "(SELECT id FROM cities WHERE slug LIKE 'test-%')"
-            )
-            await conn.execute("DELETE FROM cities WHERE slug LIKE 'test-%'")
-        await close_pool()
-    except Exception:
-        # Pool was created on TestClient's anyio loop which is already
-        # closed.  Reset the reference so the next get_pool() starts clean.
-        import agency_audit.db as _db
-
-        _db._pool = None  # type: ignore[assignment]
-        _db._pool_closed = False
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Seeding helpers — committed connections so the web app's pool sees them
-# ──────────────────────────────────────────────────────────────────────
-
-
-async def _committed_conn(postgres_dsn: str) -> asyncpg.Connection:
-    """Open a short-lived connection that auto-commits immediately."""
-    return await asyncpg.connect(dsn=postgres_dsn)
-
-
-# ── Dynamic city-ID lookups for sync fixtures (run asyncio once) ──────
-
-
-def _run_async(coro):
-    """Run a coroutine in a fresh event loop, returning the result."""
-    return asyncio.run(coro)
-
-
-@pytest.fixture(scope="module")
-def sofia_city_id(postgres_dsn: str) -> int:
-    """Sofia's actual primary key, resolved once per test module."""
-
-    async def _get():
-        conn = await _committed_conn(postgres_dsn)
-        try:
-            sid = await conn.fetchval(
-                "SELECT id FROM cities WHERE country = 'BG' AND slug = 'sofia'"
-            )
-        finally:
-            await conn.close()
-        assert sid is not None, "Sofia must exist in the test database"
-        return sid
-
-    return _run_async(_get())
-
-
-# ── Test-fixture factories (committed inserts) ────────────────────────
+@pytest.fixture
+async def sofia_city_id(fresh_db: asyncpg.Connection) -> int:
+    """Sofia's primary key in this test's database."""
+    sid: int | None = await fresh_db.fetchval(
+        "SELECT id FROM cities WHERE country = 'BG' AND slug = 'sofia'"
+    )
+    assert sid is not None, "Sofia must exist in the seeded database"
+    return sid
 
 
 @pytest.fixture
-async def _test_website(postgres_dsn: str) -> AsyncGenerator[int]:
-    """Insert a test website on a committed connection, clean up after."""
-    conn = await _committed_conn(postgres_dsn)
-    try:
-        row = await conn.fetchrow(
-            """\
-            INSERT INTO websites (url, label, score, audit_data, audit_status)
-            VALUES ('https://test-website.example.com', 'Test Agency', 75,
-                    '{"score":75,"modules":{}}', 'audited')
-            RETURNING id\
-            """
-        )
-        website_id: int = row["id"]
-        yield website_id
-        await conn.execute("DELETE FROM websites WHERE id = $1", website_id)
-    finally:
-        await conn.close()
+async def _test_website(fresh_db: asyncpg.Connection) -> int:
+    """Insert a test website and return its id."""
+    row = await fresh_db.fetchrow(
+        """\
+        INSERT INTO websites (url, label, score, audit_data, audit_status)
+        VALUES ('https://test-website.example.com', 'Test Agency', 75,
+                '{"score":75,"modules":{}}', 'audited')
+        RETURNING id\
+        """
+    )
+    website_id: int = row["id"]
+    return website_id
 
 
 @pytest.fixture
-async def _seed_bg_website(postgres_dsn: str) -> AsyncGenerator[int]:
-    """Insert a test website linked to Sofia (dynamically resolved city ID)."""
-    conn = await _committed_conn(postgres_dsn)
-    try:
-        city_id = await conn.fetchval(
-            "SELECT id FROM cities WHERE country = 'BG' AND slug = 'sofia'"
-        )
-        assert city_id is not None, "Sofia must exist in the test database"
-        row = await conn.fetchrow(
-            """\
-            INSERT INTO websites (url, label, score, audit_status)
-            VALUES ('https://test-bg.example.com', 'Example BG Agency', 42, 'audited')
-            RETURNING id\
-            """
-        )
-        website_id: int = row["id"]
-        await conn.execute(
-            "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
-            website_id,
-            city_id,
-        )
-        yield website_id
-        await conn.execute("DELETE FROM website_cities WHERE website_id = $1", website_id)
-        await conn.execute("DELETE FROM websites WHERE id = $1", website_id)
-    finally:
-        await conn.close()
+async def _seed_bg_website(fresh_db: asyncpg.Connection) -> int:
+    """Insert a test website linked to Sofia and return its id."""
+    city_id = await fresh_db.fetchval(
+        "SELECT id FROM cities WHERE country = 'BG' AND slug = 'sofia'"
+    )
+    assert city_id is not None, "Sofia must exist in the seeded database"
+    row = await fresh_db.fetchrow(
+        """\
+        INSERT INTO websites (url, label, score, audit_status)
+        VALUES ('https://test-bg.example.com', 'Example BG Agency', 42, 'audited')
+        RETURNING id\
+        """
+    )
+    website_id: int = row["id"]
+    await fresh_db.execute(
+        "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
+        website_id,
+        city_id,
+    )
+    return website_id
 
 
 @pytest.fixture
-async def _test_brussels_city(postgres_dsn: str) -> AsyncGenerator[int]:
-    """Insert a test Brussels city (committed) and return its actual ID."""
-    conn = await _committed_conn(postgres_dsn)
-    try:
-        city_id = await conn.fetchval(
-            """\
-            INSERT INTO cities (country, label, slug, population,
-                                latitude, longitude, discovery_status)
-            VALUES ('BE', 'Brussels (test)', 'test-brussels',
-                    1000000, 50.85, 4.35, 'pending')
-            ON CONFLICT (country, slug) DO UPDATE SET discovery_status = 'pending'
-            RETURNING id
-            """
-        )
-        assert city_id is not None, "INSERT ... RETURNING id must return a value"
-        yield city_id
-        await conn.execute("DELETE FROM website_cities WHERE city_id = $1", city_id)
-        await conn.execute("DELETE FROM cities WHERE id = $1", city_id)
-    finally:
-        await conn.close()
+async def _test_brussels_city(fresh_db: asyncpg.Connection) -> int:
+    """Insert a test Brussels (BE) city and return its id."""
+    city_id: int | None = await fresh_db.fetchval(
+        """\
+        INSERT INTO cities (country, label, slug, population,
+                            latitude, longitude, discovery_status)
+        VALUES ('BE', 'Brussels (test)', 'test-brussels',
+                1000000, 50.85, 4.35, 'pending')
+        RETURNING id
+        """
+    )
+    assert city_id is not None, "INSERT ... RETURNING id must return a value"
+    return city_id
 
 
 @pytest.fixture
-async def _test_city_in_progress(
-    _test_brussels_city: int, postgres_dsn: str
-) -> AsyncGenerator[int]:
-    """Set the test Brussels city to 'in_progress' (committed)."""
-    conn = await _committed_conn(postgres_dsn)
-    try:
-        await conn.execute(
-            "UPDATE cities SET discovery_status = 'in_progress' WHERE id = $1",
-            _test_brussels_city,
-        )
-        yield _test_brussels_city
-    finally:
-        await conn.close()
+async def _test_city_in_progress(fresh_db: asyncpg.Connection, _test_brussels_city: int) -> int:
+    """Set the test Brussels city to 'in_progress'."""
+    await fresh_db.execute(
+        "UPDATE cities SET discovery_status = 'in_progress' WHERE id = $1",
+        _test_brussels_city,
+    )
+    return _test_brussels_city
 
 
 @pytest.fixture
-async def _test_city_done(_test_brussels_city: int, postgres_dsn: str) -> AsyncGenerator[int]:
-    """Set the test Brussels city to 'done' (committed)."""
-    conn = await _committed_conn(postgres_dsn)
-    try:
-        await conn.execute(
-            "UPDATE cities SET discovery_status = 'done' WHERE id = $1",
-            _test_brussels_city,
-        )
-        yield _test_brussels_city
-    finally:
-        await conn.close()
+async def _test_city_done(fresh_db: asyncpg.Connection, _test_brussels_city: int) -> int:
+    """Set the test Brussels city to 'done'."""
+    await fresh_db.execute(
+        "UPDATE cities SET discovery_status = 'done' WHERE id = $1",
+        _test_brussels_city,
+    )
+    return _test_brussels_city
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -447,9 +337,7 @@ def test_htmx_discover_city_country_mismatch_404(
     mock_run.assert_not_called()
 
 
-def test_htmx_discover_city_requires_api_key(
-    client: TestClient, _test_brussels_city: int, postgres_dsn: str
-) -> None:
+def test_htmx_discover_city_requires_api_key(client: TestClient, _test_brussels_city: int) -> None:
     with patch("agency_audit.web.app.settings") as mock_settings:
         mock_settings.google_maps_api_key = ""
 
@@ -459,10 +347,10 @@ def test_htmx_discover_city_requires_api_key(
     assert "No Google Maps API key configured" in response.text
 
     # City status must remain 'pending' — the guard rejected the request
-    # before it could transition to 'in_progress'.
-
-    async def _check() -> str | None:
-        conn = await _committed_conn(postgres_dsn)
+    # before it could transition to 'in_progress'.  fresh_db redirected
+    # settings.dsn onto this test's database.
+    async def _status() -> str | None:
+        conn = await asyncpg.connect(dsn=settings.dsn)
         try:
             return await conn.fetchval(
                 "SELECT discovery_status FROM cities WHERE id = $1", _test_brussels_city
@@ -470,8 +358,7 @@ def test_htmx_discover_city_requires_api_key(
         finally:
             await conn.close()
 
-    status = _run_async(_check())
-    assert status == "pending", f"Expected 'pending', got {status!r}"
+    assert asyncio.run(_status()) == "pending"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -560,14 +447,12 @@ def test_api_stats(client: TestClient) -> None:
 
 
 @pytest.fixture
-async def _app_pool(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> asyncpg.Pool:
-    """Pool for the web app's query helpers, bound to the test database."""
-    parsed = urlparse(postgres_dsn)
-    monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
-    monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
-    monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
-    monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
-    monkeypatch.setattr(settings, "pg_password", parsed.password or "")
+async def _app_pool(fresh_db: asyncpg.Connection) -> asyncpg.Pool:
+    """Pool for the web app's query helpers, bound to the per-test database.
+
+    ``fresh_db`` has already redirected ``get_pool()`` onto this test's
+    private database, so the pool the app builds here is isolated.
+    """
     from agency_audit.db import get_pool
 
     return await get_pool()
@@ -622,18 +507,13 @@ async def test_overview_stats(_app_pool: asyncpg.Pool) -> None:
     # 5 total websites (4 audited + 1 pending) + existing
     assert stats["websites_total"] == base["total_websites"] + 5
 
-    # Score distribution — only our 4 audited test sites matter for the
-    # per-bucket assertions.  Grab the buckets and look for the values
-    # that match our known scores.
+    # Score distribution — the database is pristine, so the buckets hold
+    # exactly our four audited inserts.
     buckets = {b["bucket"]: b["cnt"] for b in stats["score_distribution"]}
-    assert buckets["50+"] >= 1  # 80 from our insert
-    assert buckets["20-49"] >= 1  # 30
-    assert buckets["0-19"] >= 1  # 10
-    assert buckets["negative"] >= 1  # -5
-
-    # Clean up so the next test sees a clean slate.
-    async with _app_pool.acquire() as conn:
-        await conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
+    assert buckets["50+"] == 1  # 80
+    assert buckets["20-49"] == 1  # 30
+    assert buckets["0-19"] == 1  # 10
+    assert buckets["negative"] == 1  # -5
 
 
 @pytest.mark.asyncio
@@ -685,10 +565,6 @@ async def test_country_list_with_websites(_app_pool: asyncpg.Pool) -> None:
     assert bg["websites_discovered"] == 1
     assert bg["websites_audited"] == 1
     assert float(bg["avg_score"]) == 60.0
-
-    # Clean up
-    async with _app_pool.acquire() as conn:
-        await conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
 
 
 @pytest.mark.asyncio
@@ -752,10 +628,6 @@ async def test_website_detail(_app_pool: asyncpg.Pool) -> None:
     assert result["cities"][0]["discovered_via"] == "google_maps"
     assert "discovery_logs" in result
 
-    # Clean up
-    async with _app_pool.acquire() as conn:
-        await conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-
 
 @pytest.mark.asyncio
 async def test_website_detail_none(_app_pool: asyncpg.Pool) -> None:
@@ -785,14 +657,8 @@ async def test_recent_activity_empty(_app_pool: asyncpg.Pool) -> None:
     from agency_audit.web.app import _recent_activity
 
     result = await _recent_activity(_app_pool)
-    # No test-* entries from previous tests (cleanup fixture handles that).
-    urls: set[str] = set()
-    for row in result:
-        if row.get("website_url"):
-            urls.add(row["website_url"])
-    assert not any(u.startswith("https://test-") for u in urls), (
-        f"Found test-* website URLs in results: {urls}"
-    )
+    # Pristine database: no discovery_log rows exist yet.
+    assert result == []
 
 
 @pytest.mark.asyncio
@@ -824,22 +690,15 @@ async def test_recent_activity_with_data(_app_pool: asyncpg.Pool) -> None:
         )
 
     result = await _recent_activity(_app_pool, limit=50)
-    # Our specific entry must be present
-    our_entry = [
-        r
-        for r in result
-        if r["search_query"] == "test query sofia" and r["website_label"] == "Test Activity"
-    ]
-    assert len(our_entry) == 1, f"Expected 1 matching entry, found {len(our_entry)}"
-    assert our_entry[0]["agent"] == "google_maps"
-    assert our_entry[0]["status"] == "found"
-    assert our_entry[0]["city_label"] == "Sofia"
-    assert our_entry[0]["website_url"] == "https://test-activity.example.com"
-
-    # Clean up
-    async with _app_pool.acquire() as conn:
-        await conn.execute("DELETE FROM discovery_log WHERE search_query = 'test query sofia'")
-        await conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
+    # Pristine database: our single insert is the only activity row.
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["search_query"] == "test query sofia"
+    assert entry["website_label"] == "Test Activity"
+    assert entry["agent"] == "google_maps"
+    assert entry["status"] == "found"
+    assert entry["city_label"] == "Sofia"
+    assert entry["website_url"] == "https://test-activity.example.com"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -848,75 +707,42 @@ async def test_recent_activity_with_data(_app_pool: asyncpg.Pool) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_city_discovery_marks_failed_on_error(
-    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_run_city_discovery_marks_failed_on_error(fresh_db: asyncpg.Connection) -> None:
     """A failing background discovery marks the city 'failed' so polling stops.
 
     'failed' must be a status the DB CHECK constraint accepts (migration 004),
     otherwise this UPDATE would itself raise and leave the row stuck
-    'in_progress'.
+    'in_progress'.  ``fresh_db`` has redirected ``get_pool()`` at this test's
+    private database, so ``_run_city_discovery``'s internal pool connects here.
     """
-    # Point get_pool() at the test database so _run_city_discovery's
-    # internal pool connects here.
-    parsed = urlparse(postgres_dsn)
-    monkeypatch.setattr(settings, "pg_host", parsed.hostname or "localhost")
-    monkeypatch.setattr(settings, "pg_port", parsed.port or 5432)
-    monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
-    monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
-    monkeypatch.setattr(settings, "pg_password", parsed.password or "")
+    sofia_id = await fresh_db.fetchval(
+        "SELECT id FROM cities WHERE country = 'BG' AND slug = 'sofia'"
+    )
+    assert sofia_id is not None, "Sofia must exist in the seeded database"
 
-    # Resolve Sofia's city ID dynamically.
-    tmp_conn = await asyncpg.connect(dsn=postgres_dsn)
-    try:
-        sofia_id = await tmp_conn.fetchval(
-            "SELECT id FROM cities WHERE country = 'BG' AND slug = 'sofia'"
-        )
-    finally:
-        await tmp_conn.close()
-    assert sofia_id is not None, "Sofia must exist in the test database"
+    with patch("agency_audit.discovery.DiscoveryPipeline") as mock_pipeline_cls:
+        pipeline = mock_pipeline_cls.return_value
+        pipeline.discover_city = AsyncMock(side_effect=RuntimeError("boom"))
+        pipeline.close = AsyncMock()
 
-    try:
-        with patch("agency_audit.discovery.DiscoveryPipeline") as mock_pipeline_cls:
-            pipeline = mock_pipeline_cls.return_value
-            pipeline.discover_city = AsyncMock(side_effect=RuntimeError("boom"))
-            pipeline.close = AsyncMock()
+        from agency_audit.web.app import _run_city_discovery
 
-            from agency_audit.web.app import _run_city_discovery
+        await _run_city_discovery(sofia_id, "BG")
 
-            await _run_city_discovery(sofia_id, "BG")
+        # Discovery uses the city's stored country, not a caller-supplied ISO.
+        assert pipeline.discover_city.call_args.kwargs["country_iso"] == "BG"
 
-            # Discovery uses the city's stored country, not a caller-supplied ISO.
-            assert pipeline.discover_city.call_args.kwargs["country_iso"] == "BG"
+        # Verify the city was marked 'failed' in the real database.
+        from agency_audit.db import get_pool
 
-            # Verify the city was marked 'failed' in the real database.
-            from agency_audit.db import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            status = await conn.fetchval(
+                "SELECT discovery_status FROM cities WHERE id = $1", sofia_id
+            )
+        assert status == "failed"
 
-            pool = await get_pool()
-            try:
-                async with pool.acquire() as conn:
-                    status = await conn.fetchval(
-                        "SELECT discovery_status FROM cities WHERE id = $1", sofia_id
-                    )
-                assert status == "failed"
-            finally:
-                await close_pool()
-
-            pipeline.close.assert_awaited_once()
-    finally:
-        # Always reset Sofia so a failed assertion doesn't leave the
-        # city 'failed' for the rest of the session.
-        from agency_audit.db import get_pool as _gp_finally
-
-        pool = await _gp_finally()
-        try:
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE cities SET discovery_status = 'pending' WHERE id = $1",
-                    sofia_id,
-                )
-        finally:
-            await close_pool()
+        pipeline.close.assert_awaited_once()
 
 
 # ──────────────────────────────────────────────────────────────────────
