@@ -1,9 +1,12 @@
-"""Integration tests for geometry module — runs against a live PostGIS database.
+"""Integration tests for the geometry module — runs against a live PostGIS database.
 
 These tests exercise query_by_bounding_box, set_location, and
 bulk_set_locations against an actual PostGIS instance to verify that
 the SQL is valid, the spatial predicates are correct, and the lat/lng
-axis handling is right. They are skipped when no database is reachable.
+axis handling is right.  The shared ``db_conn`` fixture from
+``tests/conftest.py`` guarantees that all migrations (including PostGIS)
+are applied and wraps each test in a rollback-only transaction — no
+skip-on-unavailable or manual-cleanup scaffolding is needed.
 
 The pure-mock guard tests (missing conn/pool, parameter ordering checks)
 remain in tests/test_geometry.py since those genuinely don't need a DB.
@@ -12,52 +15,8 @@ remain in tests/test_geometry.py since those genuinely don't need a DB.
 from __future__ import annotations
 
 import asyncpg
-import pytest
 
-from agency_audit.config import settings
-from agency_audit.db import close_pool
 from agency_audit.geometry import bulk_set_locations, query_by_bounding_box, set_location
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def db_conn():
-    """Direct connection for test setup/teardown.
-
-    Uses a fresh connection (not the pool) so it works reliably across
-    pytest-asyncio's per-function event loops.
-
-    Skipped when no live PostgreSQL is reachable.
-    """
-    try:
-        conn = await asyncpg.connect(dsn=settings.dsn)
-    except OSError as exc:
-        pytest.skip(f"PostgreSQL not available for integration tests: {exc}")
-    try:
-        yield conn
-    finally:
-        await conn.close()
-
-
-@pytest.fixture(autouse=True)
-async def _postgis_and_cleanup(db_conn: asyncpg.Connection):
-    """Skip if PostGIS unavailable, then clean up test data per test.
-
-    Also closes the shared pool after each test so the next test gets a
-    fresh pool on its own event loop (matches test_mcp_server.py pattern).
-    """
-    try:
-        await db_conn.execute("CREATE EXTENSION IF NOT EXISTS postgis")
-    except Exception:
-        pytest.skip("PostGIS extension not available on this database")
-
-    await db_conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-geo-%'")
-    yield
-    await db_conn.execute("DELETE FROM websites WHERE url LIKE 'https://test-geo-%'")
-    await close_pool()
 
 
 async def _insert_website(conn: asyncpg.Connection, url: str, label: str = "") -> int:
