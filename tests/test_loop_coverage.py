@@ -9,6 +9,9 @@ Non-database mocks (helper-function patches) remain intact.
 All database-hitting tests accept the ``postgres_dsn`` fixture and monkeypatch
 ``settings`` so that seed connections, ``get_pool()``, and assertions all target
 the same database — no ambient-state dependency.
+
+Tests that need city/country data seed their own test-owned rows via a helper
+rather than relying on ambient seed data (hardcoded city IDs 1/2 from fixtures).
 """
 
 from __future__ import annotations
@@ -47,6 +50,33 @@ def _point_settings_at_fixture_db(postgres_dsn: str, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(settings, "pg_database", (parsed.path or "/agency_audit").lstrip("/"))
     monkeypatch.setattr(settings, "pg_user", parsed.username or "agency_audit")
     monkeypatch.setattr(settings, "pg_password", parsed.password or "")
+
+
+async def _seed_test_country_and_city(
+    seed: asyncpg.Connection,
+    country_iso: str = "XX",
+    city_label: str = "TestCity",
+) -> int:
+    """Insert a test-owned country and city, returning the city_id.
+
+    Inserts the country with ON CONFLICT DO NOTHING so multiple tests
+    that happen to use the same ISO won't collide.  Each call inserts a
+    fresh city row, so the caller always gets a unique ID.
+    """
+    await seed.execute(
+        "INSERT INTO countries (iso, label) VALUES ($1, $2) ON CONFLICT (iso) DO NOTHING",
+        country_iso,
+        f"TestLand-{country_iso}",
+    )
+    city_id = await seed.fetchval(
+        "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
+        "VALUES ($1, $2, $3, 100000, 42.0, 23.0) RETURNING id",
+        country_iso,
+        city_label,
+        city_label.lower().replace(" ", "-"),
+    )
+    assert city_id is not None  # INSERT RETURNING always yields a row
+    return int(city_id)
 
 
 @pytest.fixture(autouse=True)
@@ -230,8 +260,12 @@ class TestReauditWithResults:
 
         seed = await _seed_conn(postgres_dsn)
         try:
+            # Seed a test-owned country + city instead of relying on ambient
+            # seed data (city id=1 from fixtures).
+            test_city_id = await _seed_test_country_and_city(seed, "XA", "ReauditCity")
+
             # Insert an audited website with an old last_audited_at date,
-            # linked to Sofia (city id=1, country BG from seed fixtures).
+            # linked to our test-owned city.
             website_id = await seed.fetchval(
                 "INSERT INTO websites (url, label, score, audit_status, "
                 "needs_review, last_audited_at, audit_attempts) "
@@ -239,8 +273,9 @@ class TestReauditWithResults:
                 "false, now() - INTERVAL '45 days', 0) RETURNING id"
             )
             await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, 1)",
+                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
                 website_id,
+                test_city_id,
             )
 
             queue = await get_reaudit_queue(interval_days=30)
@@ -255,6 +290,8 @@ class TestReauditWithResults:
                 "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
             )
             await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
+            await seed.execute("DELETE FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY')")
+            await seed.execute("DELETE FROM countries WHERE iso IN ('XA', 'XB', 'XC', 'XY')")
             await seed.close()
 
     async def test_schedule_reaudits_with_results(
@@ -266,9 +303,13 @@ class TestReauditWithResults:
 
         seed = await _seed_conn(postgres_dsn)
         cleaned_log_ids: list[int] = []
-        cleaned_city_id: int | None = None
         try:
-            # Two BG websites — linked to Sofia (id=1) and Plovdiv (id=2)
+            # Seed test-owned country XB with two cities — replaces ambient
+            # seed data (city ids 1/2 from fixtures).
+            bg_city1 = await _seed_test_country_and_city(seed, "XB", "ReauditCity1")
+            bg_city2 = await _seed_test_country_and_city(seed, "XB", "ReauditCity2")
+
+            # Two BG websites linked to our test-owned cities
             w1 = await seed.fetchval(
                 "INSERT INTO websites (url, label, score, audit_status, "
                 "needs_review, last_audited_at, audit_attempts) "
@@ -276,7 +317,7 @@ class TestReauditWithResults:
                 "false, now() - INTERVAL '40 days', 0) RETURNING id"
             )
             await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, 1)", w1
+                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)", w1, bg_city1
             )
             w2 = await seed.fetchval(
                 "INSERT INTO websites (url, label, score, audit_status, "
@@ -285,16 +326,12 @@ class TestReauditWithResults:
                 "false, now() - INTERVAL '50 days', 0) RETURNING id"
             )
             await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, 2)", w2
+                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)", w2, bg_city2
             )
 
-            # Non-BG control — link to a city in Spain (ES) so the country
-            # filter in schedule_reaudits(country="BG") actually excludes it.
-            es_city_id = await seed.fetchval(
-                "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
-                "VALUES ('ES', 'Madrid', 'madrid', 3223334, 40.4168, -3.7038) RETURNING id"
-            )
-            cleaned_city_id = es_city_id
+            # Non-BG control — seed country XC + city so the country
+            # filter in schedule_reaudits(country="XB") actually excludes it.
+            es_city_id = await _seed_test_country_and_city(seed, "XC", "ControlCity")
             w3 = await seed.fetchval(
                 "INSERT INTO websites (url, label, score, audit_status, "
                 "needs_review, last_audited_at, audit_attempts) "
@@ -307,8 +344,8 @@ class TestReauditWithResults:
                 es_city_id,
             )
 
-            result = await schedule_reaudits(interval_days=30, country="BG")
-            assert result["queued"] == 2  # only BG, not ES
+            result = await schedule_reaudits(interval_days=30, country="XB")
+            assert result["queued"] == 2  # only XB, not XC
             assert result["oldest_age_days"] == 50
 
             # Verify BG websites were updated to 'pending' with reset attempts
@@ -328,10 +365,12 @@ class TestReauditWithResults:
             assert row["audit_status"] == "audited"
             assert row["audit_attempts"] == 0
 
-            # Verify an audit_log entry was created — capture its ID for cleanup
+            # Verify an audit_log entry was created — scoped to this test's
+            # unique country so the assertion identifies the row we created,
+            # not any pre-existing row with queued_websites = 2.
             log_row = await db_conn.fetchrow(
                 "SELECT id, run_type, items_processed, summary FROM audit_log "
-                "WHERE summary->>'queued_websites' = '2'"
+                "WHERE run_type = 'reaudit' AND country = 'XB' ORDER BY id DESC LIMIT 1"
             )
             assert log_row is not None
             assert log_row["run_type"] == "reaudit"
@@ -345,8 +384,8 @@ class TestReauditWithResults:
                 "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
             )
             await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
-            if cleaned_city_id is not None:
-                await seed.execute("DELETE FROM cities WHERE id = $1", cleaned_city_id)
+            await seed.execute("DELETE FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY')")
+            await seed.execute("DELETE FROM countries WHERE iso IN ('XA', 'XB', 'XC', 'XY')")
             await seed.close()
 
 
@@ -366,6 +405,10 @@ class TestRetryMarkFailed:
         seed = await _seed_conn(postgres_dsn)
         cleaned_log_ids: list[int] = []
         try:
+            # Seed test-owned country + city instead of relying on ambient
+            # seed data (city id=1 from fixtures).
+            test_city_id = await _seed_test_country_and_city(seed, "XA", "FailCity")
+
             # Need website + website_cities link to a real city for the
             # audit_log INSERT (JOIN website_cities → cities).
             website_id = await seed.fetchval(
@@ -373,10 +416,10 @@ class TestRetryMarkFailed:
                 "VALUES ('https://test-fail.example.com', 'Fail', 'audited', 1) "
                 "RETURNING id"
             )
-            # Link to Sofia (city id=1 from seed fixtures, country BG)
             await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, 1)",
+                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
                 website_id,
+                test_city_id,
             )
 
             await mark_failed_website(website_id, "test error")
@@ -390,14 +433,15 @@ class TestRetryMarkFailed:
             assert row["audit_last_error"] == "test error"
             assert row["audit_attempts"] == 2  # was 1, incremented
 
-            # Check audit_log entry — capture its ID for cleanup
+            # Check audit_log entry — scoped to our unique error message
             log_row = await db_conn.fetchrow(
                 "SELECT id, run_type, country, items_failed, error FROM audit_log "
                 "WHERE error = 'test error'"
             )
             assert log_row is not None
             assert log_row["run_type"] == "audit"
-            assert log_row["country"] == "BG"
+            # Country resolved from our test-owned city → country 'XA'
+            assert log_row["country"] == "XA"
             assert log_row["items_failed"] == 1
             cleaned_log_ids.append(log_row["id"])
         finally:
@@ -408,6 +452,8 @@ class TestRetryMarkFailed:
                 "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
             )
             await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
+            await seed.execute("DELETE FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY')")
+            await seed.execute("DELETE FROM countries WHERE iso IN ('XA', 'XB', 'XC', 'XY')")
             await seed.close()
 
     async def test_mark_failed_discovery(
@@ -419,27 +465,36 @@ class TestRetryMarkFailed:
 
         seed = await _seed_conn(postgres_dsn)
         try:
-            # Use Sofia (city id=1) — reset to pending first, then mark failed
-            await seed.execute("UPDATE cities SET discovery_status = 'pending' WHERE id = 1")
-            await mark_failed_discovery(1, "discovery error")
+            # Seed a test-owned city instead of relying on ambient seed data
+            # (city id=1 from fixtures).
+            test_city_id = await _seed_test_country_and_city(seed, "XA", "DiscoveryCity")
+            # Reset to pending first, then mark failed
+            await seed.execute(
+                "UPDATE cities SET discovery_status = 'pending' WHERE id = $1", test_city_id
+            )
+            await mark_failed_discovery(test_city_id, "discovery error")
 
-            row = await db_conn.fetchrow("SELECT discovery_status FROM cities WHERE id = 1")
+            row = await db_conn.fetchrow(
+                "SELECT discovery_status FROM cities WHERE id = $1", test_city_id
+            )
             assert row["discovery_status"] == "skipped"
 
             # Check discovery_log entry
             log_row = await db_conn.fetchrow(
                 "SELECT city_id, status, last_error, attempt FROM discovery_log "
-                "WHERE city_id = 1 AND last_error = 'discovery error'"
+                "WHERE city_id = $1 AND last_error = 'discovery error'",
+                test_city_id,
             )
             assert log_row is not None
             assert log_row["status"] == "failed"
             assert log_row["attempt"] == 3
         finally:
-            # Restore city state
-            await seed.execute("UPDATE cities SET discovery_status = 'pending' WHERE id = 1")
             await seed.execute(
-                "DELETE FROM discovery_log WHERE city_id = 1 AND last_error = 'discovery error'"
+                "DELETE FROM discovery_log WHERE city_id IN "
+                "(SELECT id FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY'))"
             )
+            await seed.execute("DELETE FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY')")
+            await seed.execute("DELETE FROM countries WHERE iso IN ('XA', 'XB', 'XC', 'XY')")
             await seed.close()
 
     @pytest.mark.asyncio
@@ -541,14 +596,19 @@ class TestTrackingLogFunctions:
         seed = await _seed_conn(postgres_dsn)
         log_id: int | None = None
         try:
+            # Seed test-owned country + city instead of relying on ambient
+            # seed data (city id=1 from fixtures).
+            test_city_id = await _seed_test_country_and_city(seed, "XA", "AuditCity")
+
             # Need website + website_cities → city so country can be resolved
             website_id = await seed.fetchval(
                 "INSERT INTO websites (url, label) "
                 "VALUES ('https://test-audit.example.com', 'Test Audit') RETURNING id"
             )
             await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, 1)",
+                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
                 website_id,
+                test_city_id,
             )
 
             log_id = await log_audit_run(website_id, 75, 1.5, success=True)
@@ -560,7 +620,9 @@ class TestTrackingLogFunctions:
                 "FROM audit_log WHERE id = $1",
                 log_id,
             )
-            assert row["country"] == "BG"
+            assert row is not None
+            # Country resolved from test-owned city → country 'XA'
+            assert row["country"] == "XA"
             assert row["run_type"] == "audit"
             assert row["items_succeeded"] == 1
             assert row["items_failed"] == 0
@@ -575,6 +637,8 @@ class TestTrackingLogFunctions:
                 "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
             )
             await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
+            await seed.execute("DELETE FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY')")
+            await seed.execute("DELETE FROM countries WHERE iso IN ('XA', 'XB', 'XC', 'XY')")
             await seed.close()
 
     async def test_log_audit_run_with_country(
@@ -587,13 +651,18 @@ class TestTrackingLogFunctions:
         seed = await _seed_conn(postgres_dsn)
         log_id: int | None = None
         try:
+            # Seed test-owned country + city instead of relying on ambient
+            # seed data (city id=1 from fixtures).
+            test_city_id = await _seed_test_country_and_city(seed, "XA", "AuditCity2")
+
             website_id = await seed.fetchval(
                 "INSERT INTO websites (url, label) "
                 "VALUES ('https://test-audit2.example.com', 'Test Audit 2') RETURNING id"
             )
             await seed.execute(
-                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, 1)",
+                "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
                 website_id,
+                test_city_id,
             )
 
             log_id = await log_audit_run(
@@ -621,6 +690,8 @@ class TestTrackingLogFunctions:
                 "(SELECT id FROM websites WHERE url LIKE 'https://test-%')"
             )
             await seed.execute("DELETE FROM websites WHERE url LIKE 'https://test-%'")
+            await seed.execute("DELETE FROM cities WHERE country IN ('XA', 'XB', 'XC', 'XY')")
+            await seed.execute("DELETE FROM countries WHERE iso IN ('XA', 'XB', 'XC', 'XY')")
             await seed.close()
 
     async def test_log_full_loop_run(
