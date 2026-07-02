@@ -19,7 +19,7 @@ import httpx
 
 from agency_audit.config import settings
 from agency_audit.db import get_pool
-from agency_audit.discovery_geo import Rectangle, bbox_from_center, is_saturated, subdivide
+from agency_audit.discovery_geo import Rectangle, is_saturated, subdivide
 
 logger = logging.getLogger(__name__)
 
@@ -421,15 +421,18 @@ class DiscoveryPipeline:
     async def resolve_city_viewport(self, city: dict[str, Any]) -> Rectangle:
         """Resolve a city's viewport bounding box, caching it on the cities row.
 
-        Strategy (first win):
+        Strategy:
         1. If the four ``viewport_*`` columns on *city* are already populated,
            return a ``Rectangle`` from the cache — no API call.
         2. Otherwise geocode ``{label}, {country}`` via the Google Geocoding
            API, parse ``geometry.viewport`` into a ``Rectangle``, persist it
            to the ``cities`` table, and return it.
-        3. If geocoding fails (any error or no viewport in the response),
-           fall back to ``bbox_from_center`` using the city's lat/lon and the
-           configured ``places_city_half_extent_meters``, and log the fallback.
+        3. If geocoding yields no usable viewport (any error, non-OK status,
+           empty results, or missing ``geometry.viewport``), raise a
+           ``RuntimeError`` naming the city and the reason.
+
+        Raises:
+            RuntimeError: When geocoding fails to produce a usable viewport.
         """
         # 1. Cache hit — all four columns populated
         viewport_cols = [
@@ -448,49 +451,43 @@ class DiscoveryPipeline:
 
         # 2. Geocode
         address = f"{city['label']}, {city['country']}"
-        try:
-            result = await self.geocoding.geocode(address)
-            if result:
-                vp = result.get("results", [{}])[0].get("geometry", {}).get("viewport")
-                if vp:
-                    rect = Rectangle(
-                        low_lat=float(vp["southwest"]["lat"]),
-                        low_lng=float(vp["southwest"]["lng"]),
-                        high_lat=float(vp["northeast"]["lat"]),
-                        high_lng=float(vp["northeast"]["lng"]),
-                    )
-                    # Persist
-                    pool = await self._get_pool()
-                    async with pool.acquire() as conn:
-                        await conn.execute(
-                            """UPDATE cities
-                               SET viewport_low_lat  = $1,
-                                   viewport_low_lng  = $2,
-                                   viewport_high_lat = $3,
-                                   viewport_high_lng = $4
-                             WHERE id = $5""",
-                            rect.low_lat,
-                            rect.low_lng,
-                            rect.high_lat,
-                            rect.high_lng,
-                            city["id"],
-                        )
-                    return rect
-        except Exception as e:
-            logger.warning(
-                f"Geocoding error for '{address}': {e} — falling back to bbox_from_center"
+        result = await self.geocoding.geocode(address)
+        if result is None:
+            raise RuntimeError(
+                f"Geocoding failed for '{address}' (city id={city['id']}): "
+                "API returned no result (check API key, network, or address validity)"
             )
 
-        # 3. Fallback
-        logger.info(
-            f"Falling back to bbox_from_center for {city['label']} "
-            f"({city.get('latitude')}, {city.get('longitude')})"
+        vp = result.get("results", [{}])[0].get("geometry", {}).get("viewport")
+        if not vp:
+            raise RuntimeError(
+                f"Geocoding succeeded for '{address}' (city id={city['id']}) "
+                "but returned no geometry.viewport"
+            )
+
+        rect = Rectangle(
+            low_lat=float(vp["southwest"]["lat"]),
+            low_lng=float(vp["southwest"]["lng"]),
+            high_lat=float(vp["northeast"]["lat"]),
+            high_lng=float(vp["northeast"]["lng"]),
         )
-        return bbox_from_center(
-            lat=float(city["latitude"]),
-            lon=float(city["longitude"]),
-            half_extent_m=settings.places_city_half_extent_meters,
-        )
+        # Persist
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """UPDATE cities
+                   SET viewport_low_lat  = $1,
+                       viewport_low_lng  = $2,
+                       viewport_high_lat = $3,
+                       viewport_high_lng = $4
+                 WHERE id = $5""",
+                rect.low_lat,
+                rect.low_lng,
+                rect.high_lat,
+                rect.high_lng,
+                city["id"],
+            )
+        return rect
 
     async def search_tiled(
         self,
@@ -644,17 +641,11 @@ class DiscoveryPipeline:
         # hits the cache instead of re-geocoding.  resolve_city_viewport
         # already checks the dict's viewport_* columns first; after we
         # resolve, we inject the result so subsequent lookups are free.
-        try:
-            viewport = await self.resolve_city_viewport(city)
-            city["viewport_low_lat"] = viewport.low_lat
-            city["viewport_low_lng"] = viewport.low_lng
-            city["viewport_high_lat"] = viewport.high_lat
-            city["viewport_high_lng"] = viewport.high_lng
-        except Exception as e:
-            logger.warning(
-                f"Viewport pre-resolution failed for {city_label}: {e} — "
-                f"falling back to bbox_from_center inside search_tiled"
-            )
+        viewport = await self.resolve_city_viewport(city)
+        city["viewport_low_lat"] = viewport.low_lat
+        city["viewport_low_lng"] = viewport.low_lng
+        city["viewport_high_lat"] = viewport.high_lat
+        city["viewport_high_lng"] = viewport.high_lng
 
         found_places: list[PlaceResult] = []
         seen_place_ids: set[str] = set()

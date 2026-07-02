@@ -85,8 +85,6 @@ class Settings(BaseSettings):
     places_tile_saturation_threshold: int = 60
     # Hard cap on Places API calls per city during tiled discovery
     places_max_calls_per_city: int = 200
-    # Fallback bounding-box half-extent in metres (used when city boundaries unknown)
-    places_city_half_extent_meters: int = 15000
 
     @property
     def dsn(self) -> str:

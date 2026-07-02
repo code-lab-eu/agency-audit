@@ -11,9 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from agency_audit.config import settings
 from agency_audit.discovery import DiscoveryPipeline, GeocodingClient
-from agency_audit.discovery_geo import bbox_from_center
 
 # ──────────────────────────────────────────────────────────────────────
 # Helpers
@@ -186,15 +184,15 @@ class TestResolveCityViewportCacheMiss:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# (c) Geocoding failure — fall back to bbox_from_center
+# (c) Geocoding failure — resolve_city_viewport raises RuntimeError
 # ──────────────────────────────────────────────────────────────────────
 
 
-class TestResolveCityViewportFallback:
-    """Geocoding failures fall back to bbox_from_center."""
+class TestResolveCityViewportRaises:
+    """resolve_city_viewport raises RuntimeError when geocoding yields no viewport."""
 
-    async def test_http_error_falls_back(self, caplog):
-        """HTTP 500 from geocoding → fall back to bbox_from_center."""
+    async def test_http_error_raises(self):
+        """HTTP 500 from geocoding → RuntimeError."""
 
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(500, json={"error": "internal"})
@@ -210,19 +208,13 @@ class TestResolveCityViewportFallback:
 
             city = make_city_dict(latitude=42.6977, longitude=23.3219)
 
-            rect = await pipeline.resolve_city_viewport(city)
-
-            # Falls back to bbox_from_center
-            expected = bbox_from_center(42.6977, 23.3219, settings.places_city_half_extent_meters)
-            assert rect.low_lat == pytest.approx(expected.low_lat)
-            assert rect.low_lng == pytest.approx(expected.low_lng)
-            assert rect.high_lat == pytest.approx(expected.high_lat)
-            assert rect.high_lng == pytest.approx(expected.high_lng)
+            with pytest.raises(RuntimeError, match="Geocoding failed.*Sofia.*BG"):
+                await pipeline.resolve_city_viewport(city)
 
             await pipeline.close()
 
-    async def test_zero_results_falls_back(self, caplog):
-        """Geocoding returns ZERO_RESULTS → fall back to bbox_from_center."""
+    async def test_zero_results_raises(self):
+        """Geocoding returns ZERO_RESULTS → RuntimeError."""
 
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -241,15 +233,13 @@ class TestResolveCityViewportFallback:
 
             city = make_city_dict(latitude=42.6977, longitude=23.3219)
 
-            rect = await pipeline.resolve_city_viewport(city)
-
-            expected = bbox_from_center(42.6977, 23.3219, settings.places_city_half_extent_meters)
-            assert rect.low_lat == pytest.approx(expected.low_lat)
+            with pytest.raises(RuntimeError, match="Geocoding failed.*Sofia.*BG"):
+                await pipeline.resolve_city_viewport(city)
 
             await pipeline.close()
 
-    async def test_no_viewport_in_result_falls_back(self, caplog):
-        """Geocoding result has no geometry.viewport → fall back."""
+    async def test_no_viewport_in_result_raises(self):
+        """Geocoding result has no geometry.viewport → RuntimeError."""
 
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -271,15 +261,13 @@ class TestResolveCityViewportFallback:
 
             city = make_city_dict(latitude=42.6977, longitude=23.3219)
 
-            rect = await pipeline.resolve_city_viewport(city)
-
-            expected = bbox_from_center(42.6977, 23.3219, settings.places_city_half_extent_meters)
-            assert rect.low_lat == pytest.approx(expected.low_lat)
+            with pytest.raises(RuntimeError, match="no geometry.viewport"):
+                await pipeline.resolve_city_viewport(city)
 
             await pipeline.close()
 
-    async def test_timeout_falls_back(self, caplog):
-        """TimeoutException from geocoding → fall back to bbox_from_center."""
+    async def test_timeout_raises(self):
+        """TimeoutException from geocoding → RuntimeError."""
 
         def handler(request: httpx.Request) -> httpx.Response:
             raise httpx.TimeoutException("timed out")
@@ -295,10 +283,8 @@ class TestResolveCityViewportFallback:
 
             city = make_city_dict(latitude=42.6977, longitude=23.3219)
 
-            rect = await pipeline.resolve_city_viewport(city)
-
-            expected = bbox_from_center(42.6977, 23.3219, settings.places_city_half_extent_meters)
-            assert rect.low_lat == pytest.approx(expected.low_lat)
+            with pytest.raises(RuntimeError, match="Geocoding failed.*Sofia.*BG"):
+                await pipeline.resolve_city_viewport(city)
 
             await pipeline.close()
 
