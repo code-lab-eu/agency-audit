@@ -233,6 +233,49 @@ class TestPropertyCountCoverage:
         assert count == 2  # deduplicated, not 4
         assert conf == 0.8
 
+    async def test_count_from_sitemap_index_fallback_accumulation(self):
+        """_count_from_sitemap index accumulates fallback counts from children.
+
+        When child sitemaps have <loc> URLs but none match LISTING_PATH_PATTERNS,
+        each child returns a low-confidence fallback count (total URL count, 0.4).
+        The index must accumulate these rather than silently drop them.
+        """
+        index_xml = (
+            '<?xml version="1.0"?>\n'
+            '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<sitemap><loc>https://example.com/sitemap-pages.xml</loc></sitemap>\n"
+            "<sitemap><loc>https://example.com/sitemap-blog.xml</loc></sitemap>\n"
+            "</sitemapindex>"
+        )
+        sub_pages = (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/about</loc></url>\n"
+            "<url><loc>https://example.com/contact</loc></url>\n"
+            "</urlset>"
+        )
+        sub_blog = (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/blog/post-1</loc></url>\n"
+            "<url><loc>https://example.com/blog/post-2</loc></url>\n"
+            "<url><loc>https://example.com/blog/post-3</loc></url>\n"
+            "</urlset>"
+        )
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            url = str(req.url)
+            if "sitemap-pages" in url:
+                return httpx.Response(200, text=sub_pages, request=req)
+            if "sitemap-blog" in url:
+                return httpx.Response(200, text=sub_blog, request=req)
+            return httpx.Response(200, text=index_xml, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+        assert count == 5  # 2 (pages) + 3 (blog) = 5, not 0
+        assert conf == 0.4
+
     async def test_count_from_sitemap_error(self):
         """_count_from_sitemap with HTTP error."""
         async with httpx.AsyncClient(

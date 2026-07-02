@@ -199,9 +199,22 @@ async def _count_from_sitemap(
 
             if normalised_urls is None:
                 normalised_urls = set()
+            fallback_total = 0
             for sub_url in sub_sitemaps[:10]:  # limit to first 10 sub-sitemaps
-                await _count_from_sitemap(sub_url, client, normalised_urls)
-            return len(normalised_urls), 0.8 if normalised_urls else 0.0
+                before = len(normalised_urls)
+                child_count, _child_conf = await _count_from_sitemap(
+                    sub_url, client, normalised_urls
+                )
+                # If the child didn't add any property URLs to the shared set,
+                # it fell through to the low-confidence fallback — accumulate
+                # its count so we don't silently drop it.
+                if len(normalised_urls) == before:
+                    fallback_total += child_count
+            if normalised_urls:
+                return len(normalised_urls), 0.8
+            if fallback_total > 0:
+                return fallback_total, 0.4
+            return 0, 0.0
 
         # Regular sitemap — extract and count unique property URLs
         url_count = content.count("<url>") + content.count("<url ")
