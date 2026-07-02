@@ -292,9 +292,10 @@ def test_website_detail_listings_price_location_yes(
     html = response.text
     assert "Listings Have Price" in html
     assert "Listings Have Location" in html
-    # Confirm Yes appears after each label (not "— No")
-    assert re.search(r"Listings Have Price.*?✓ Yes", html, re.DOTALL)
-    assert re.search(r"Listings Have Location.*?✓ Yes", html, re.DOTALL)
+    # Confirm Yes appears within the same row as each label (anchored to
+    # the next row label so the match cannot cross a </tr> boundary).
+    assert re.search(r"Listings Have Price.*?✓ Yes.*?Listings Have Location", html, re.DOTALL)
+    assert re.search(r"Listings Have Location.*?✓ Yes.*?Listings Have Images", html, re.DOTALL)
 
 
 # ──────────────────────────────────────────────────────────────────────
