@@ -74,10 +74,31 @@ All configuration is read from environment variables prefixed with
 | `AGENCY_AUDIT_PG_PASSWORD` | *(empty)* | PostgreSQL password |
 | `AGENCY_AUDIT_PG_DATABASE` | `agency_audit` | PostgreSQL database |
 | `AGENCY_AUDIT_GEONAMES_MIN_POPULATION` | `50000` | Minimum population for city import |
-| `AGENCY_AUDIT_GOOGLE_MAPS_API_KEY` | *(empty)* | Google Maps Places API key, **required** for the `discover` command |
+| `AGENCY_AUDIT_GOOGLE_MAPS_API_KEY` | *(empty)* | Google Maps API key (Places + Geocoding), **required** for the `discover` command |
 
 The Docker Compose stack sets the database variables automatically; you only
 need to provide `AGENCY_AUDIT_GOOGLE_MAPS_API_KEY` to enable discovery.
+
+### Google Maps API key
+
+Discovery uses two Google Maps Platform APIs on a single key: the **Places
+API** (finding agencies) and the **Geocoding API** (resolving a city name to a
+bounding box). To set the key up:
+
+1. In the [Google Cloud Console](https://console.cloud.google.com/), select or
+   create a project with billing enabled.
+2. Under **APIs & Services → Enabled APIs & services**, enable both the
+   **Places API** and the **Geocoding API** for that project.
+3. Under **APIs & Services → Credentials**, create an API key (or reuse an
+   existing one).
+4. If the key has **API restrictions** set to "Restrict key", add both the
+   Places API and the Geocoding API to its allowed list. (Enabling an API for
+   the project is not enough on its own — a restricted key must also list it.)
+5. Set the key as `AGENCY_AUDIT_GOOGLE_MAPS_API_KEY` in your `.env`.
+
+Restriction changes can take a few minutes to propagate. If a request returns
+`REQUEST_DENIED`, the API is either not enabled for the key's project or not in
+the key's allowed API list.
 
 ## Usage
 
