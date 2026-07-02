@@ -190,6 +190,49 @@ class TestPropertyCountCoverage:
         assert count > 0
         assert conf == 0.8
 
+    async def test_count_from_sitemap_index_dedup_multilingual(self):
+        """_count_from_sitemap index deduplicates multilingual variants across sub-sitemaps.
+
+        A WPML site may split language variants across sub-sitemaps:
+        sitemap-properties.xml lists /properties/x and /properties/y
+        sitemap-properties-en.xml lists /en/properties/x and /en/properties/y
+        These should deduplicate to 2, not 4.
+        """
+        index_xml = (
+            '<?xml version="1.0"?>\n'
+            '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<sitemap><loc>https://example.com/sitemap-properties.xml</loc></sitemap>\n"
+            "<sitemap><loc>https://example.com/sitemap-properties-en.xml</loc></sitemap>\n"
+            "</sitemapindex>"
+        )
+        sub_default = (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/properties/x</loc></url>\n"
+            "<url><loc>https://example.com/properties/y</loc></url>\n"
+            "</urlset>"
+        )
+        sub_en = (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/en/properties/x</loc></url>\n"
+            "<url><loc>https://example.com/en/properties/y</loc></url>\n"
+            "</urlset>"
+        )
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            url = str(req.url)
+            if "sitemap-properties-en" in url:
+                return httpx.Response(200, text=sub_en, request=req)
+            if "sitemap-properties" in url:
+                return httpx.Response(200, text=sub_default, request=req)
+            return httpx.Response(200, text=index_xml, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+        assert count == 2  # deduplicated, not 4
+        assert conf == 0.8
+
     async def test_count_from_sitemap_error(self):
         """_count_from_sitemap with HTTP error."""
         async with httpx.AsyncClient(

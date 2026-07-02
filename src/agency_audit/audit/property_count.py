@@ -166,8 +166,14 @@ def _find_listing_page_url(base_url: str, html_text: str) -> str | None:
 async def _count_from_sitemap(
     sitemap_url: str,
     client: httpx.AsyncClient,
+    normalised_urls: set[str] | None = None,
 ) -> tuple[int, float]:
     """Count property URLs from a sitemap.
+
+    Deduplicates multilingual URL variants within and across sub-sitemaps:
+    language-prefixed URLs (/en/properties/x, /ru/properties/x) collapse to a
+    single normalised path (/properties/x) via a shared set that is threaded
+    through sitemap-index recursion.
 
     Returns:
         (count, confidence)
@@ -191,11 +197,11 @@ async def _count_from_sitemap(
                 if url:
                     sub_sitemaps.append(url)
 
-            total = 0
+            if normalised_urls is None:
+                normalised_urls = set()
             for sub_url in sub_sitemaps[:10]:  # limit to first 10 sub-sitemaps
-                count, _ = await _count_from_sitemap(sub_url, client)
-                total += count
-            return total, 0.8 if total > 0 else 0.0
+                await _count_from_sitemap(sub_url, client, normalised_urls)
+            return len(normalised_urls), 0.8 if normalised_urls else 0.0
 
         # Regular sitemap — extract and count unique property URLs
         url_count = content.count("<url>") + content.count("<url ")
@@ -207,7 +213,8 @@ async def _count_from_sitemap(
                 # segments (e.g. /en/, /ru/, /de/, /bg/) to collapse multilingual
                 # variants of the same listing into one.
                 lang_prefix = re.compile(r"^/([a-z]{2})/")
-                normalised: set[str] = set()
+                if normalised_urls is None:
+                    normalised_urls = set()
                 for url in loc_urls:
                     path = urlsplit(url.strip()).path
                     if not path or path == "/":
@@ -215,10 +222,10 @@ async def _count_from_sitemap(
                     # Strip any leading language prefix
                     path = lang_prefix.sub("/", path)
                     if any(re.search(pat, path, re.IGNORECASE) for pat in LISTING_PATH_PATTERNS):
-                        normalised.add(path)
+                        normalised_urls.add(path)
 
-                if normalised:
-                    return len(normalised), 0.8
+                if normalised_urls:
+                    return len(normalised_urls), 0.8
 
             # If we can't filter, return total URL count as low-confidence
             return url_count, 0.4
