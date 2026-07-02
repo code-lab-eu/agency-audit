@@ -163,6 +163,30 @@ class TestPropertyCountCoverage:
         assert count == 2  # x and y, not 4
         assert conf == 0.8
 
+    async def test_count_from_sitemap_dedup_multilingual_preserves_query(self):
+        """_count_from_sitemap preserves query strings when deduplicating.
+
+        /properties/x?id=1 and /en/properties/x?id=1 are the same listing in
+        two languages — collapse to 1.  /properties/x?id=2 is a distinct
+        listing — keep it.  End result: 2 unique listings, not 3 or 1.
+        """
+        sitemap_xml = (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/properties/x?id=1</loc></url>\n"
+            "<url><loc>https://example.com/en/properties/x?id=1</loc></url>\n"
+            "<url><loc>https://example.com/properties/x?id=2</loc></url>\n"
+            "</urlset>"
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=sitemap_xml, request=req)
+            )
+        ) as client:
+            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+        assert count == 2  # id=1 and id=2, not 3
+        assert conf == 0.8
+
     async def test_count_from_sitemap_index(self):
         """_count_from_sitemap with sitemap index."""
         index_xml = (

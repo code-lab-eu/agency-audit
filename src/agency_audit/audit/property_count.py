@@ -229,13 +229,17 @@ async def _count_from_sitemap(
                 if normalised_urls is None:
                     normalised_urls = set()
                 for url in loc_urls:
-                    path = urlsplit(url.strip()).path
+                    parsed = urlsplit(url.strip())
+                    path = parsed.path
                     if not path or path == "/":
                         continue
-                    # Strip any leading language prefix
+                    # Strip any leading language prefix from the path
                     path = lang_prefix.sub("/", path)
+                    # Preserve query identity — distinct query params identify
+                    # distinct listings (e.g. /properties/x?id=1 vs ?id=2).
+                    key = path + ("?" + parsed.query if parsed.query else "")
                     if any(re.search(pat, path, re.IGNORECASE) for pat in LISTING_PATH_PATTERNS):
-                        normalised_urls.add(path)
+                        normalised_urls.add(key)
 
                 if normalised_urls:
                     return len(normalised_urls), 0.8
