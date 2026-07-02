@@ -14,6 +14,8 @@ needed and exact-count assertions are safe.
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from unittest.mock import AsyncMock, patch
 
 import asyncpg
@@ -67,6 +69,38 @@ async def _test_website(fresh_db: asyncpg.Connection) -> int:
         """
     )
     website_id: int = row["id"]
+    return website_id
+
+
+@pytest.fixture
+async def _test_website_with_listing_fields(
+    fresh_db: asyncpg.Connection, sofia_city_id: int
+) -> int:
+    """Insert a test website with listings_have_prices and listings_have_locations
+    set to true in audit_data, and link it to Sofia."""
+    audit_data = {
+        "score": 80,
+        "listings_have_prices": True,
+        "listings_have_locations": True,
+        "listings_have_images": False,
+    }
+    row = await fresh_db.fetchrow(
+        """\
+        INSERT INTO websites (url, label, score, audit_data, audit_status)
+        VALUES ($1, $2, $3, $4, 'audited')
+        RETURNING id\
+        """,
+        "https://price-location-test.example.com",
+        "Price & Location Agency",
+        80,
+        json.dumps(audit_data),
+    )
+    website_id: int = row["id"]
+    await fresh_db.execute(
+        "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
+        website_id,
+        sofia_city_id,
+    )
     return website_id
 
 
@@ -246,6 +280,21 @@ def test_website_detail_route_not_found(client: TestClient) -> None:
     """Non-existent website returns 404."""
     response = client.get("/website/99999")
     assert response.status_code == 404
+
+
+def test_website_detail_listings_price_location_yes(
+    client: TestClient, _test_website_with_listing_fields: int
+) -> None:
+    """The detail page renders '✓ Yes' for Price and Location when
+    listings_have_prices and listings_have_locations are true in audit_data."""
+    response = client.get(f"/website/{_test_website_with_listing_fields}")
+    assert response.status_code == 200
+    html = response.text
+    assert "Listings Have Price" in html
+    assert "Listings Have Location" in html
+    # Confirm Yes appears after each label (not "— No")
+    assert re.search(r"Listings Have Price.*?✓ Yes", html, re.DOTALL)
+    assert re.search(r"Listings Have Location.*?✓ Yes", html, re.DOTALL)
 
 
 # ──────────────────────────────────────────────────────────────────────
