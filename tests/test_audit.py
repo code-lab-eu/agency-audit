@@ -1332,6 +1332,60 @@ class TestScoring:
         score, breakdown = compute_score(audit)
         assert sum(breakdown.values()) == score or score == 100  # might be clamped
 
+    def test_score_anti_scraping_recaptcha_only_no_penalty(self, default_config):
+        """Solely reCAPTCHA (e.g. WordPress CF7) should NOT trigger penalty."""
+        audit = AuditData(
+            anti_scraping=AntiScrapingResult(
+                detected=True,
+                recaptcha=True,
+                cloudflare=False,
+                bot_detection_headers=False,
+                js_only_rendering=False,
+            ),
+            robots=RobotsResult(allows_scraping=True),
+            ssl_valid=True,
+        )
+        _, breakdown = compute_score(audit, default_config)
+        assert "has_anti_scraping" not in breakdown, (
+            "reCAPTCHA-only should not penalise, got breakdown: " + str(breakdown)
+        )
+
+    def test_score_anti_scraping_cloudflare_still_penalised(self, default_config):
+        """Cloudflare (hard signal) should still trigger the -20 penalty."""
+        audit = AuditData(
+            anti_scraping=AntiScrapingResult(
+                detected=True,
+                cloudflare=True,
+                recaptcha=False,
+                bot_detection_headers=False,
+                js_only_rendering=False,
+            ),
+            robots=RobotsResult(allows_scraping=True),
+            ssl_valid=True,
+        )
+        _, breakdown = compute_score(audit, default_config)
+        assert "has_anti_scraping" in breakdown, (
+            "Cloudflare should trigger penalty, got breakdown: " + str(breakdown)
+        )
+
+    def test_score_anti_scraping_mixed_signal_penalised(self, default_config):
+        """reCAPTCHA + cloudflare together should still trigger the penalty."""
+        audit = AuditData(
+            anti_scraping=AntiScrapingResult(
+                detected=True,
+                recaptcha=True,
+                cloudflare=True,
+                bot_detection_headers=False,
+                js_only_rendering=False,
+            ),
+            robots=RobotsResult(allows_scraping=True),
+            ssl_valid=True,
+        )
+        _, breakdown = compute_score(audit, default_config)
+        assert "has_anti_scraping" in breakdown, (
+            "Mixed recaptcha+cloudflare should trigger penalty, got breakdown: " + str(breakdown)
+        )
+
     # ------------------------------------------------------------------
     # fixture-driven tests — perfect score, zero score, partial data,
     # breakdown→to_dict integration, response time boundaries, tier
@@ -1406,7 +1460,7 @@ class TestScoring:
         # property_count_tiers produce dynamic keys like "property_count_1000+"
         audit = AuditData(
             robots=RobotsResult(allows_scraping=True),
-            anti_scraping=AntiScrapingResult(detected=True),
+            anti_scraping=AntiScrapingResult(detected=True, cloudflare=True),
             api_detection=ApiDetectionResult(detected=True, api_type="rest"),
             property_count=PropertyCountResult(count=1000),
             listing_quality=ListingQualityResult(
