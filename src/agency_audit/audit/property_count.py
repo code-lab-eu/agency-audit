@@ -197,16 +197,28 @@ async def _count_from_sitemap(
                 total += count
             return total, 0.8 if total > 0 else 0.0
 
-        # Regular sitemap — count <url> entries
+        # Regular sitemap — extract and count unique property URLs
         url_count = content.count("<url>") + content.count("<url ")
         if url_count > 0:
-            # Try to filter for property-like URLs
-            property_urls = 0
-            for pattern in LISTING_PATH_PATTERNS:
-                property_urls += len(re.findall(pattern, content, re.IGNORECASE))
+            # Extract <loc> URL values from the sitemap XML
+            loc_urls = re.findall(r"<loc>(.*?)</loc>", content)
+            if loc_urls:
+                # Normalise URLs by stripping leading 2-letter language path
+                # segments (e.g. /en/, /ru/, /de/, /bg/) to collapse multilingual
+                # variants of the same listing into one.
+                lang_prefix = re.compile(r"^/([a-z]{2})/")
+                normalised: set[str] = set()
+                for url in loc_urls:
+                    path = urlsplit(url.strip()).path
+                    if not path or path == "/":
+                        continue
+                    # Strip any leading language prefix
+                    path = lang_prefix.sub("/", path)
+                    if any(re.search(pat, path, re.IGNORECASE) for pat in LISTING_PATH_PATTERNS):
+                        normalised.add(path)
 
-            if property_urls > 0:
-                return property_urls, 0.8
+                if normalised:
+                    return len(normalised), 0.8
 
             # If we can't filter, return total URL count as low-confidence
             return url_count, 0.4

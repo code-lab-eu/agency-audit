@@ -138,6 +138,31 @@ class TestPropertyCountCoverage:
         assert count == 2  # total URL count
         assert conf == 0.4
 
+    async def test_count_from_sitemap_dedup_multilingual(self):
+        """_count_from_sitemap deduplicates multilingual URL variants.
+
+        A WPML site may list the same property under /properties/x,
+        /en/properties/x, and /ru/properties/x. These should all count as
+        one listing.
+        """
+        sitemap_xml = (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/properties/x</loc></url>\n"
+            "<url><loc>https://example.com/en/properties/x</loc></url>\n"
+            "<url><loc>https://example.com/ru/properties/x</loc></url>\n"
+            "<url><loc>https://example.com/properties/y</loc></url>\n"
+            "</urlset>"
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=sitemap_xml, request=req)
+            )
+        ) as client:
+            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+        assert count == 2  # x and y, not 4
+        assert conf == 0.8
+
     async def test_count_from_sitemap_index(self):
         """_count_from_sitemap with sitemap index."""
         index_xml = (
