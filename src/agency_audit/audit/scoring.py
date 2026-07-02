@@ -164,8 +164,15 @@ def compute_score(audit: AuditData, config: dict | None = None) -> tuple[int, di
         breakdown["robots_disallows"] = config["robots_disallows"]
         score += config["robots_disallows"]
 
-    # anti-scraping
-    if audit.anti_scraping.detected:
+    # anti-scraping — only penalise hard, content-blocking signals.
+    # reCAPTCHA on a contact form (WordPress/CF7) is a false positive;
+    # penalise only when cloudflare, bot-detection headers, or JS-only
+    # rendering are present.
+    if (
+        audit.anti_scraping.cloudflare
+        or audit.anti_scraping.bot_detection_headers
+        or audit.anti_scraping.js_only_rendering
+    ):
         breakdown["has_anti_scraping"] = config["has_anti_scraping"]
         score += config["has_anti_scraping"]
 
