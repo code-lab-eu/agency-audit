@@ -841,6 +841,9 @@ class DiscoveryPipeline:
                             "UPDATE cities SET discovery_status = 'failed' WHERE id = $1",
                             city_id,
                         )
+                    # Count the attempt toward the per-country cap so one
+                    # geocoding outage doesn't consume the entire pending queue.
+                    country_summary["cities"] += 1
                     continue
 
                 country_summary["cities"] += 1

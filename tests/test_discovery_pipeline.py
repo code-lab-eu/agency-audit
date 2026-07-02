@@ -591,8 +591,44 @@ class TestDiscoveryPipelineDB:
         )
         assert status == "failed"
 
-        # Summary reflects failure: 0 cities processed
-        assert result["cities_processed"] == 0
+        # Failed cities count toward the per-country cap — one attempt consumed
+        assert result["cities_processed"] == 1
+        assert result["agencies_found"] == 0
+
+    async def test_failed_city_counts_toward_cap_and_next_remains_pending(
+        self,
+        fresh_db: asyncpg.Connection,
+    ) -> None:
+        """When max_cities=1 and the first pending city fails, next city stays pending.
+
+        A geocoding outage must NOT consume every remaining pending city in
+        the country queue — the failed attempt must count toward the cap so
+        the run stops after max_cities_per_country attempts.
+        """
+        city_1 = await _seed_test_city(fresh_db, "test-fail-cap-a", population=10_000_000)
+        city_2 = await _seed_test_city(fresh_db, "test-fail-cap-b", population=9_000_000)
+
+        places_client = PlacesAPIClient(api_key="test")
+        places_client.close = AsyncMock()
+
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(side_effect=RuntimeError("Geocoding failed"))
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
+
+        # City 1 (highest population) was attempted and marked failed
+        assert (
+            await fresh_db.fetchval("SELECT discovery_status FROM cities WHERE id = $1", city_1)
+            == "failed"
+        )
+
+        # City 2 must still be pending — NOT consumed by the failure loop
+        assert (
+            await fresh_db.fetchval("SELECT discovery_status FROM cities WHERE id = $1", city_2)
+            == "pending"
+        )
+
+        # Exactly one attempt was counted
+        assert result["cities_processed"] == 1
         assert result["agencies_found"] == 0
 
     # ── DB writes — upsert & reuse ───────────────────────────────────
