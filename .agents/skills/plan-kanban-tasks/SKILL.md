@@ -52,8 +52,11 @@ that *wants* fleshing out — which is not what this skill produces.
 ## How the plan is turned into cards (what the sections must support)
 
 Whoever creates the board tasks reads this file and creates **one card per
-`## [task]` section**, copying that section's body verbatim. Concretely:
+`## [task]` section**, copying that section's body verbatim, on the Kanban board
+named **`agency-audit`**. Concretely:
 
+- **All cards land on the `agency-audit` board.** State this in the plan so nobody
+  has to guess the target board when creating the tasks.
 - **Each worker starts cold.** A worker sees only its own card body — not the other
   sections, not this file's shared preamble unless it was copied in. So each task's
   body must carry everything the worker needs on its own.
@@ -76,7 +79,8 @@ Whoever creates the board tasks reads this file and creates **one card per
    that `AGENTS.md` is the source of truth, and the merge gate every change must
    pass (`scripts/qa.sh` exits green: lint, format check, mypy, tests). Mark this
    block clearly as "prepend to every task body" so each card carries it. Keep it
-   tight.
+   tight. State once, up front, that every task is a card on the `agency-audit`
+   Kanban board.
 
 2. **State the standing constraints once, in that preamble.** One small change per
    task, on its own branch, reviewable in a single pass, with tests riding along;
@@ -107,6 +111,7 @@ Whoever creates the board tasks reads this file and creates **one card per
 
 ## Shared context — prepend to every task body
 
+Each `## [task]` below is one card on the **`agency-audit`** Kanban board.
 `agency-audit` ("Real Estate Radar") … <stack, checkout path, AGENTS.md pointer>.
 Merge gate: `scripts/qa.sh` exits green (lint, format check, mypy, tests). Every
 task is one small PR on its own branch off `master`, tests riding along, assigned
@@ -133,6 +138,7 @@ Blocked by: <first task title>.
 - [ ] Saved to `docs/prompts/<slug>.md` with the plan title as the `# heading` — not left in chat.
 - [ ] The work is fully decomposed here: one `## [task]` section per card, no seams left to split.
 - [ ] A shared preamble carries stack, checkout path, the `scripts/qa.sh` gate, and the standing constraints — and says to prepend it to every task body.
+- [ ] The plan states the target Kanban board is `agency-audit`.
 - [ ] Every task names `agency-audit-developer` + worktree mode (via the preamble).
 - [ ] Each task has a concrete location and a single-test acceptance bar.
 - [ ] Dependencies are stated as `Blocked by: …`; independent tasks read as independent.
