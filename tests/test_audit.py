@@ -911,6 +911,15 @@ class TestPropertyCount:
         count, conf = _count_from_html(html)
         assert count == 0
 
+    def test_count_from_html_lone_comma_does_not_crash(self):
+        """A lone comma matched by [\\d,]+ must not crash int() parsing."""
+        from agency_audit.audit.property_count import _count_from_html
+
+        html = "<html><body><p>, properties</p></body></html>"
+        count, conf = _count_from_html(html)
+        assert count == 0
+        assert conf == 0.0
+
     # ------------------------------------------------------------------
     # _find_listing_page_url — URL discovery edge cases
     # ------------------------------------------------------------------

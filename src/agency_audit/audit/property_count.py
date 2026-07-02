@@ -72,6 +72,18 @@ LISTING_PATH_PATTERNS = [
 ]
 
 
+def _parse_count(raw: str) -> int | None:
+    """Parse a matched count string into an int, tolerating comma separators.
+
+    Returns None if the string contains no digits (e.g. a lone comma matched by
+    the ``[\\d,]+`` patterns).
+    """
+    digits = raw.replace(",", "")
+    if not digits.isdigit():
+        return None
+    return int(digits)
+
+
 def _count_from_html(html_text: str) -> tuple[int, float]:
     """Try to count properties from HTML listing page.
 
@@ -99,9 +111,8 @@ def _count_from_html(html_text: str) -> tuple[int, float]:
     for pattern in text_patterns:
         match = re.search(pattern, visible_text, re.IGNORECASE)
         if match:
-            raw = match.group(1)
-            count = int(raw.replace(",", ""))
-            if count > 0:
+            count = _parse_count(match.group(1))
+            if count and count > 0:
                 return count, 0.7
 
     # Count listing item elements
@@ -127,9 +138,8 @@ def _count_from_html(html_text: str) -> tuple[int, float]:
         for pattern in json_patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                raw = match.group(1)
-                count = int(raw.replace(",", ""))
-                if count > 0:
+                count = _parse_count(match.group(1))
+                if count and count > 0:
                     return count, 0.5
 
     return 0, 0.0
