@@ -569,6 +569,32 @@ class TestDiscoveryPipelineDB:
         )
         assert status == "done"
 
+    async def test_viewport_resolution_failure_marks_city_failed(
+        self,
+        fresh_db: asyncpg.Connection,
+    ) -> None:
+        """When resolve_city_viewport raises, city is marked 'failed' not stuck in_progress."""
+        city_id = await _seed_test_city(fresh_db, "test-viewport-fail")
+
+        places_client = PlacesAPIClient(api_key="test")
+        places_client.close = AsyncMock()
+
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(
+            side_effect=RuntimeError("Geocoding failed for 'Test Viewport Fail, BG'")
+        )
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
+
+        # City must be marked failed, not stuck in_progress
+        status = await fresh_db.fetchval(
+            "SELECT discovery_status FROM cities WHERE id = $1", city_id
+        )
+        assert status == "failed"
+
+        # Summary reflects failure: 0 cities processed
+        assert result["cities_processed"] == 0
+        assert result["agencies_found"] == 0
+
     # ── DB writes — upsert & reuse ───────────────────────────────────
 
     async def test_upsert_new_website(

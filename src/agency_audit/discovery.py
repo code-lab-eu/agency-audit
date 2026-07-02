@@ -816,18 +816,32 @@ class DiscoveryPipeline:
                         city_id,
                     )
 
-                count = await self.discover_city(
-                    city_id=city_id,
-                    city_label=row["label"],
-                    city_slug=row["slug"],
-                    country_iso=country,
-                    latitude=row["latitude"],
-                    longitude=row["longitude"],
-                    viewport_low_lat=row["viewport_low_lat"],
-                    viewport_low_lng=row["viewport_low_lng"],
-                    viewport_high_lat=row["viewport_high_lat"],
-                    viewport_high_lng=row["viewport_high_lng"],
-                )
+                try:
+                    count = await self.discover_city(
+                        city_id=city_id,
+                        city_label=row["label"],
+                        city_slug=row["slug"],
+                        country_iso=country,
+                        latitude=row["latitude"],
+                        longitude=row["longitude"],
+                        viewport_low_lat=row["viewport_low_lat"],
+                        viewport_low_lng=row["viewport_low_lng"],
+                        viewport_high_lat=row["viewport_high_lat"],
+                        viewport_high_lng=row["viewport_high_lng"],
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Discovery failed for city %s (id=%s): %s — marking as failed",
+                        row["label"],
+                        city_id,
+                        e,
+                    )
+                    async with pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE cities SET discovery_status = 'failed' WHERE id = $1",
+                            city_id,
+                        )
+                    continue
 
                 country_summary["cities"] += 1
                 country_summary["agencies"] += count
