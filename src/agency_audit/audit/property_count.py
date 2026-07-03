@@ -293,8 +293,9 @@ async def _cross_check_wp_rest(
                             api_count,
                         )
                         return api_count, 0.5
-                    # API total is within 2× — no corrective action needed.
-                    return None
+                    # API total is within 2× for this endpoint — keep probing
+                    # the next candidate (a later endpoint may reveal the
+                    # discrepancy).
         except Exception:
             continue
     return None

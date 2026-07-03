@@ -949,6 +949,44 @@ class TestPropertyCount:
         assert result.source == "sitemap"
         assert result.confidence == 0.8
 
+    async def test_sitemap_cross_check_wp_rest_second_candidate_reconciles(
+        self, homepage_empty, sitemap_with_large_count
+    ):
+        """First WP endpoint returns a total that doesn't reconcile;
+        the second one does — the loop probes all candidates."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            url = str(req.url)
+            if "sitemap" in url:
+                return httpx.Response(200, text=sitemap_with_large_count, request=req)
+            if "/wp-json/wp/v2/estate_property" in url:
+                return httpx.Response(
+                    200,
+                    headers={"X-WP-Total": "1500"},
+                    text="[]",
+                    request=req,
+                )
+            if "/wp-json/wp/v2/property" in url:
+                return httpx.Response(
+                    200,
+                    headers={"X-WP-Total": "400"},
+                    text="[]",
+                    request=req,
+                )
+            return httpx.Response(200, text=homepage_empty, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties(
+                "https://example.com",
+                sitemap_urls=["https://example.com/sitemap.xml"],
+                client=client,
+            )
+
+        assert result.count == 400
+        assert result.source == "sitemap"
+        assert result.confidence == 0.5
+
     # ------------------------------------------------------------------
     # _count_from_html — edge cases & confidence values
     # ------------------------------------------------------------------
