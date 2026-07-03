@@ -138,6 +138,55 @@ class TestPropertyCountCoverage:
         assert count == 2  # total URL count
         assert conf == 0.4
 
+    async def test_count_from_sitemap_dedup_multilingual(self):
+        """_count_from_sitemap deduplicates multilingual URL variants.
+
+        A WPML site may list the same property under /properties/x,
+        /en/properties/x, and /ru/properties/x. These should all count as
+        one listing.
+        """
+        sitemap_xml = (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/properties/x</loc></url>\n"
+            "<url><loc>https://example.com/en/properties/x</loc></url>\n"
+            "<url><loc>https://example.com/ru/properties/x</loc></url>\n"
+            "<url><loc>https://example.com/properties/y</loc></url>\n"
+            "</urlset>"
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=sitemap_xml, request=req)
+            )
+        ) as client:
+            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+        assert count == 2  # x and y, not 4
+        assert conf == 0.8
+
+    async def test_count_from_sitemap_dedup_multilingual_preserves_query(self):
+        """_count_from_sitemap preserves query strings when deduplicating.
+
+        /properties/x?id=1 and /en/properties/x?id=1 are the same listing in
+        two languages — collapse to 1.  /properties/x?id=2 is a distinct
+        listing — keep it.  End result: 2 unique listings, not 3 or 1.
+        """
+        sitemap_xml = (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/properties/x?id=1</loc></url>\n"
+            "<url><loc>https://example.com/en/properties/x?id=1</loc></url>\n"
+            "<url><loc>https://example.com/properties/x?id=2</loc></url>\n"
+            "</urlset>"
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, text=sitemap_xml, request=req)
+            )
+        ) as client:
+            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+        assert count == 2  # id=1 and id=2, not 3
+        assert conf == 0.8
+
     async def test_count_from_sitemap_index(self):
         """_count_from_sitemap with sitemap index."""
         index_xml = (
@@ -164,6 +213,92 @@ class TestPropertyCountCoverage:
             count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
         assert count > 0
         assert conf == 0.8
+
+    async def test_count_from_sitemap_index_dedup_multilingual(self):
+        """_count_from_sitemap index deduplicates multilingual variants across sub-sitemaps.
+
+        A WPML site may split language variants across sub-sitemaps:
+        sitemap-properties.xml lists /properties/x and /properties/y
+        sitemap-properties-en.xml lists /en/properties/x and /en/properties/y
+        These should deduplicate to 2, not 4.
+        """
+        index_xml = (
+            '<?xml version="1.0"?>\n'
+            '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<sitemap><loc>https://example.com/sitemap-properties.xml</loc></sitemap>\n"
+            "<sitemap><loc>https://example.com/sitemap-properties-en.xml</loc></sitemap>\n"
+            "</sitemapindex>"
+        )
+        sub_default = (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/properties/x</loc></url>\n"
+            "<url><loc>https://example.com/properties/y</loc></url>\n"
+            "</urlset>"
+        )
+        sub_en = (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/en/properties/x</loc></url>\n"
+            "<url><loc>https://example.com/en/properties/y</loc></url>\n"
+            "</urlset>"
+        )
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            url = str(req.url)
+            if "sitemap-properties-en" in url:
+                return httpx.Response(200, text=sub_en, request=req)
+            if "sitemap-properties" in url:
+                return httpx.Response(200, text=sub_default, request=req)
+            return httpx.Response(200, text=index_xml, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+        assert count == 2  # deduplicated, not 4
+        assert conf == 0.8
+
+    async def test_count_from_sitemap_index_fallback_accumulation(self):
+        """_count_from_sitemap index accumulates fallback counts from children.
+
+        When child sitemaps have <loc> URLs but none match LISTING_PATH_PATTERNS,
+        each child returns a low-confidence fallback count (total URL count, 0.4).
+        The index must accumulate these rather than silently drop them.
+        """
+        index_xml = (
+            '<?xml version="1.0"?>\n'
+            '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<sitemap><loc>https://example.com/sitemap-pages.xml</loc></sitemap>\n"
+            "<sitemap><loc>https://example.com/sitemap-blog.xml</loc></sitemap>\n"
+            "</sitemapindex>"
+        )
+        sub_pages = (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/about</loc></url>\n"
+            "<url><loc>https://example.com/contact</loc></url>\n"
+            "</urlset>"
+        )
+        sub_blog = (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            "<url><loc>https://example.com/blog/post-1</loc></url>\n"
+            "<url><loc>https://example.com/blog/post-2</loc></url>\n"
+            "<url><loc>https://example.com/blog/post-3</loc></url>\n"
+            "</urlset>"
+        )
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            url = str(req.url)
+            if "sitemap-pages" in url:
+                return httpx.Response(200, text=sub_pages, request=req)
+            if "sitemap-blog" in url:
+                return httpx.Response(200, text=sub_blog, request=req)
+            return httpx.Response(200, text=index_xml, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+        assert count == 5  # 2 (pages) + 3 (blog) = 5, not 0
+        assert conf == 0.4
 
     async def test_count_from_sitemap_error(self):
         """_count_from_sitemap with HTTP error."""
