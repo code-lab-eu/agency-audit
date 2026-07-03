@@ -166,8 +166,14 @@ def _find_listing_page_url(base_url: str, html_text: str) -> str | None:
 async def _count_from_sitemap(
     sitemap_url: str,
     client: httpx.AsyncClient,
+    normalised_urls: set[str] | None = None,
 ) -> tuple[int, float]:
     """Count property URLs from a sitemap.
+
+    Deduplicates multilingual URL variants within and across sub-sitemaps:
+    language-prefixed URLs (/en/properties/x, /ru/properties/x) collapse to a
+    single normalised path (/properties/x) via a shared set that is threaded
+    through sitemap-index recursion.
 
     Returns:
         (count, confidence)
@@ -191,22 +197,52 @@ async def _count_from_sitemap(
                 if url:
                     sub_sitemaps.append(url)
 
-            total = 0
+            if normalised_urls is None:
+                normalised_urls = set()
+            fallback_total = 0
             for sub_url in sub_sitemaps[:10]:  # limit to first 10 sub-sitemaps
-                count, _ = await _count_from_sitemap(sub_url, client)
-                total += count
-            return total, 0.8 if total > 0 else 0.0
+                before = len(normalised_urls)
+                child_count, _child_conf = await _count_from_sitemap(
+                    sub_url, client, normalised_urls
+                )
+                # If the child didn't add any property URLs to the shared set,
+                # it fell through to the low-confidence fallback — accumulate
+                # its count so we don't silently drop it.
+                if len(normalised_urls) == before:
+                    fallback_total += child_count
+            if normalised_urls:
+                return len(normalised_urls), 0.8
+            if fallback_total > 0:
+                return fallback_total, 0.4
+            return 0, 0.0
 
-        # Regular sitemap — count <url> entries
+        # Regular sitemap — extract and count unique property URLs
         url_count = content.count("<url>") + content.count("<url ")
         if url_count > 0:
-            # Try to filter for property-like URLs
-            property_urls = 0
-            for pattern in LISTING_PATH_PATTERNS:
-                property_urls += len(re.findall(pattern, content, re.IGNORECASE))
+            # Extract <loc> URL values from the sitemap XML
+            loc_urls = re.findall(r"<loc>(.*?)</loc>", content)
+            if loc_urls:
+                # Normalise URLs by stripping leading 2-letter language path
+                # segments (e.g. /en/, /ru/, /de/, /bg/) to collapse multilingual
+                # variants of the same listing into one.
+                lang_prefix = re.compile(r"^/([a-z]{2})/")
+                if normalised_urls is None:
+                    normalised_urls = set()
+                for url in loc_urls:
+                    parsed = urlsplit(url.strip())
+                    path = parsed.path
+                    if not path or path == "/":
+                        continue
+                    # Strip any leading language prefix from the path
+                    path = lang_prefix.sub("/", path)
+                    # Preserve query identity — distinct query params identify
+                    # distinct listings (e.g. /properties/x?id=1 vs ?id=2).
+                    key = path + ("?" + parsed.query if parsed.query else "")
+                    if any(re.search(pat, path, re.IGNORECASE) for pat in LISTING_PATH_PATTERNS):
+                        normalised_urls.add(key)
 
-            if property_urls > 0:
-                return property_urls, 0.8
+                if normalised_urls:
+                    return len(normalised_urls), 0.8
 
             # If we can't filter, return total URL count as low-confidence
             return url_count, 0.4
