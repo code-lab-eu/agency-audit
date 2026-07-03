@@ -242,8 +242,7 @@ async def _run_city_discovery(city_id: int, iso: str) -> None:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, label, slug, country, latitude, longitude "
-            "FROM cities WHERE id = $1 AND country = $2",
+            "SELECT id, label, slug, country FROM cities WHERE id = $1 AND country = $2",
             city_id,
             iso.upper(),
         )
@@ -257,8 +256,6 @@ async def _run_city_discovery(city_id: int, iso: str) -> None:
             city_label=row["label"],
             city_slug=row["slug"],
             country_iso=row["country"],
-            latitude=row["latitude"],
-            longitude=row["longitude"],
         )
     except Exception:
         logger.exception("Background discovery failed for city %s", city_id)
