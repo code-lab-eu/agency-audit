@@ -25,10 +25,21 @@ from agency_audit.discovery import (
     PlacesAPIClient,
     run_discovery,
 )
+from agency_audit.discovery_geo import Rectangle
 
 # ──────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────
+
+
+def _make_viewport() -> Rectangle:
+    """Small Sofia-area viewport for mocking resolve_city_viewport."""
+    return Rectangle(
+        low_lat=42.6,
+        low_lng=23.2,
+        high_lat=42.8,
+        high_lng=23.5,
+    )
 
 
 def _make_place(
@@ -130,6 +141,7 @@ class TestCloseLifecycle:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         await pipeline.close()
 
         places_client.close.assert_called_once()
@@ -148,6 +160,7 @@ class TestCloseLifecycle:
         places_client._client = mock_http
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         await pipeline.close()
 
         mock_http.aclose.assert_called_once()
@@ -161,6 +174,7 @@ class TestCloseLifecycle:
         places_client._client = mock_http
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         await pipeline.close()
         await pipeline.close()
 
@@ -222,6 +236,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(return_value=places)
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
@@ -286,6 +301,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(return_value=[])
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
@@ -326,6 +342,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         result = await pipeline.run_for_countries(
             country_codes=[test_country], max_cities_per_country=3
         )
@@ -353,6 +370,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(return_value=[_make_place()])
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=2)
 
@@ -391,6 +409,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(side_effect=[[bg_place], [ro_place]])
         result = await pipeline.run_for_countries(
             country_codes=["BG", "RO"], max_cities_per_country=1
@@ -447,6 +466,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(return_value=[ro_place])
         result = await pipeline.run_for_countries(
             country_codes=[no_city_iso, "RO"], max_cities_per_country=1
@@ -485,6 +505,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(side_effect=[[bg_place], [ro_place]])
         result = await pipeline.run_for_countries(country_codes=None, max_cities_per_country=1)
 
@@ -512,6 +533,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
         assert result["cities_processed"] == 1
@@ -535,6 +557,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(side_effect=RuntimeError("API error"))
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
@@ -545,6 +568,68 @@ class TestDiscoveryPipelineDB:
             "SELECT discovery_status FROM cities WHERE id = $1", city_id
         )
         assert status == "done"
+
+    async def test_viewport_resolution_failure_marks_city_failed(
+        self,
+        fresh_db: asyncpg.Connection,
+    ) -> None:
+        """When resolve_city_viewport raises, city is marked 'failed' not stuck in_progress."""
+        city_id = await _seed_test_city(fresh_db, "test-viewport-fail")
+
+        places_client = PlacesAPIClient(api_key="test")
+        places_client.close = AsyncMock()
+
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(
+            side_effect=RuntimeError("Geocoding failed for 'Test Viewport Fail, BG'")
+        )
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
+
+        # City must be marked failed, not stuck in_progress
+        status = await fresh_db.fetchval(
+            "SELECT discovery_status FROM cities WHERE id = $1", city_id
+        )
+        assert status == "failed"
+
+        # Failed cities count toward the per-country cap — one attempt consumed
+        assert result["cities_processed"] == 1
+        assert result["agencies_found"] == 0
+
+    async def test_failed_city_counts_toward_cap_and_next_remains_pending(
+        self,
+        fresh_db: asyncpg.Connection,
+    ) -> None:
+        """When max_cities=1 and the first pending city fails, next city stays pending.
+
+        A geocoding outage must NOT consume every remaining pending city in
+        the country queue — the failed attempt must count toward the cap so
+        the run stops after max_cities_per_country attempts.
+        """
+        city_1 = await _seed_test_city(fresh_db, "test-fail-cap-a", population=10_000_000)
+        city_2 = await _seed_test_city(fresh_db, "test-fail-cap-b", population=9_000_000)
+
+        places_client = PlacesAPIClient(api_key="test")
+        places_client.close = AsyncMock()
+
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(side_effect=RuntimeError("Geocoding failed"))
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
+
+        # City 1 (highest population) was attempted and marked failed
+        assert (
+            await fresh_db.fetchval("SELECT discovery_status FROM cities WHERE id = $1", city_1)
+            == "failed"
+        )
+
+        # City 2 must still be pending — NOT consumed by the failure loop
+        assert (
+            await fresh_db.fetchval("SELECT discovery_status FROM cities WHERE id = $1", city_2)
+            == "pending"
+        )
+
+        # Exactly one attempt was counted
+        assert result["cities_processed"] == 1
+        assert result["agencies_found"] == 0
 
     # ── DB writes — upsert & reuse ───────────────────────────────────
 
@@ -560,6 +645,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(return_value=[place])
         await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
@@ -608,6 +694,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(return_value=[place])
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
@@ -637,6 +724,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(return_value=[place1])
         result1 = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
         assert result1["agencies_found"] == 1
@@ -646,6 +734,7 @@ class TestDiscoveryPipelineDB:
         places_client2.close = AsyncMock()
 
         pipeline2 = DiscoveryPipeline(places_client=places_client2)
+        pipeline2.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline2.search_tiled = AsyncMock(
             return_value=[
                 _make_place(
@@ -679,6 +768,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(return_value=[])
         await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
@@ -700,12 +790,14 @@ class TestDiscoveryPipelineDB:
 
         with (
             patch("agency_audit.discovery.PlacesAPIClient") as mock_client_cls,
+            patch.object(DiscoveryPipeline, "resolve_city_viewport") as mock_resolve,
             patch.object(DiscoveryPipeline, "search_tiled") as mock_search_tiled,
         ):
             places_client = PlacesAPIClient(api_key="test")
             places_client.close = AsyncMock()
             mock_client_cls.return_value = places_client
             mock_search_tiled.return_value = [place]
+            mock_resolve.return_value = _make_viewport()
 
             result = await run_discovery(countries=["BG"], max_cities=1)
 
@@ -761,6 +853,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(side_effect=[kw1, kw2])
         result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
 
@@ -799,6 +892,7 @@ class TestDiscoveryPipelineDB:
         places_client.close = AsyncMock()
 
         pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
         pipeline.search_tiled = AsyncMock(
             side_effect=[
                 [shared, unique_kw1],
