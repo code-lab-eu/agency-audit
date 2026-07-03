@@ -671,6 +671,19 @@ class TestPropertyCount:
             "</sitemapindex>"
         )
 
+    @pytest.fixture
+    def sitemap_with_large_count(self) -> str:
+        """Sitemap with 1600 property-like URLs (simulates an inflated sitemap count)."""
+        entries = "\n".join(
+            f"<url><loc>https://example.com/properties/{i}</loc></url>" for i in range(1600)
+        )
+        return (
+            '<?xml version="1.0"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            f"{entries}\n"
+            "</urlset>"
+        )
+
     # --------------------------------------------------------------
     # count_properties — source="listing_page" (homepage text count)
     # --------------------------------------------------------------
@@ -864,6 +877,66 @@ class TestPropertyCount:
             if "/properties" in url:
                 return httpx.Response(200, text=listing_page_no_count, request=req)
             return httpx.Response(200, text=homepage_with_listing_link, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties(
+                "https://example.com",
+                sitemap_urls=["https://example.com/sitemap.xml"],
+                client=client,
+            )
+
+        assert result.count == 3
+        assert result.source == "sitemap"
+        assert result.confidence == 0.8
+
+    # ------------------------------------------------------------------
+    # count_properties — WP REST cross-check
+    # ------------------------------------------------------------------
+
+    async def test_sitemap_cross_check_wp_rest_discrepancy(
+        self, homepage_empty, sitemap_with_large_count
+    ):
+        """Sitemap yields 1600, WP REST returns X-WP-Total: 400 → count=400, conf < 0.8."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            url = str(req.url)
+            if "sitemap" in url:
+                return httpx.Response(200, text=sitemap_with_large_count, request=req)
+            if "/wp-json/wp/v2/estate_property" in url:
+                return httpx.Response(
+                    200,
+                    headers={"X-WP-Total": "400"},
+                    text="[]",
+                    request=req,
+                )
+            return httpx.Response(200, text=homepage_empty, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties(
+                "https://example.com",
+                sitemap_urls=["https://example.com/sitemap.xml"],
+                client=client,
+            )
+
+        assert result.count == 400
+        assert result.source == "sitemap"
+        assert result.confidence < 0.8
+        assert result.confidence == 0.5
+
+    async def test_sitemap_cross_check_wp_rest_no_endpoint(
+        self, homepage_empty, sitemap_with_property_urls
+    ):
+        """When no WP REST endpoint responds, sitemap count is returned unchanged."""
+        from agency_audit.audit.property_count import count_properties
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            url = str(req.url)
+            if "sitemap" in url:
+                return httpx.Response(200, text=sitemap_with_property_urls, request=req)
+            if "/wp-json/" in url:
+                return httpx.Response(404, text="Not Found", request=req)
+            return httpx.Response(200, text=homepage_empty, request=req)
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             result = await count_properties(
