@@ -831,6 +831,49 @@ class TestApiDetection:
         assert result.detected is True
         assert result.has_listing_api is True
 
+    # --- Regression: JS object literals should NOT match GraphQL patterns ---
+
+    def test_js_object_literal_not_graphql_listing(self):
+        """A plain JS object like `const query = { properties: ... }` must NOT match."""
+        html = "<script>const query = { properties: [] }</script>"
+        assert _endpoints_include_listing_api([], html) is False
+
+    def test_js_object_literal_with_listings_not_detected(self):
+        """const query = { listings: ... } must NOT be detected as listing API."""
+        html = "<script>const query = { listings: [] }</script>"
+        assert _endpoints_include_listing_api([], html) is False
+
+    def test_var_assignment_not_graphql_listing(self):
+        """`var query = { properties: ... }` must NOT match."""
+        html = "<script>var query = { properties: [] }</script>"
+        assert _endpoints_include_listing_api([], html) is False
+
+    def test_let_assignment_not_graphql_listing(self):
+        """`let query = { properties: ... }` must NOT match."""
+        html = "<script>let query = { properties: [] }</script>"
+        assert _endpoints_include_listing_api([], html) is False
+
+    async def test_detect_api_js_object_not_graphql(self):
+        """detect_api must NOT set has_listing_api or api_type=graphql for JS objects."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = (
+            "<html><head>"
+            "<script>const query = { properties: [], listings: [] };</script>"
+            "</head><body></body></html>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        # Should NOT be flagged as a listing API or graphql endpoint
+        assert result.has_listing_api is False
+        assert result.api_type != "graphql"
+
 
 class TestPropertyCount:
     # ------------------------------------------------------------------

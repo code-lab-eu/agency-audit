@@ -39,8 +39,12 @@ API_PATH_PATTERNS = [
 GRAPHQL_PATTERNS = [
     r"__NEXT_DATA__.*?graphql",
     r"application/graphql",
-    r"query\b.{0,300}?\{[^}]*properties",
-    r"query\b.{0,300}?\{[^}]*listings",
+    # Only match actual GraphQL operations — not JS variable assignments like
+    # `const query = { properties: ... }`.  The sub-pattern allows an optional
+    # operation name (\w+) and/or parenthesised variables between `query` and
+    # `{`, but nothing else.
+    r"query\b\s*(\w+\s*)?(\([^)]*\)\s*)?\{[^}]*properties",
+    r"query\b\s*(\w+\s*)?(\([^)]*\)\s*)?\{[^}]*listings",
 ]
 
 # API endpoint paths that indicate a structured real-estate *listing* endpoint
@@ -62,10 +66,10 @@ GRAPHQL_LISTING_PATTERNS = [
     # GraphQL queries referencing property/estate types (handles named,
     # anonymous, and variable-bearing operations, e.g.
     #   query SearchListings($first: Int!) { properties { ... } })
-    r"query\b.{0,300}?\{[^}]*properties",
-    r"query\b.{0,300}?\{[^}]*listings",
-    r"query\b.{0,300}?\{[^}]*estate",
-    r"query\b.{0,300}?\{[^}]*real[_-]?estate",
+    r"query\b\s*(\w+\s*)?(\([^)]*\)\s*)?\{[^}]*properties",
+    r"query\b\s*(\w+\s*)?(\([^)]*\)\s*)?\{[^}]*listings",
+    r"query\b\s*(\w+\s*)?(\([^)]*\)\s*)?\{[^}]*estate",
+    r"query\b\s*(\w+\s*)?(\([^)]*\)\s*)?\{[^}]*real[_-]?estate",
     # GraphQL schema / type definitions referencing property/listing types
     r"type\s+Property\s*[\{\(]",
     r"type\s+Listing\s*[\{\(]",
