@@ -78,8 +78,8 @@ async def _seed_test_city(
     Returns the city's id.
     """
     await conn.execute(
-        "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
-        "VALUES ($1, $2, $3, $4, 42.0, 23.0) "
+        "INSERT INTO cities (country, label, slug, population) "
+        "VALUES ($1, $2, $3, $4) "
         "ON CONFLICT (country, slug) DO NOTHING",
         country,
         slug.replace("-", " ").title(),
@@ -332,8 +332,8 @@ class TestDiscoveryPipelineDB:
         )
         await fresh_db.execute(
             "INSERT INTO cities "
-            "(country, label, slug, population, latitude, longitude, discovery_status) "
-            "VALUES ($1, 'Done City', 'done-city-zz', 1000, 42.0, 23.0, 'done') "
+            "(country, label, slug, population, discovery_status) "
+            "VALUES ($1, 'Done City', 'done-city-zz', 1000, 'done') "
             "ON CONFLICT (country, slug) DO NOTHING",
             test_country,
         )
@@ -448,8 +448,8 @@ class TestDiscoveryPipelineDB:
         )
         await fresh_db.execute(
             "INSERT INTO cities "
-            "(country, label, slug, population, latitude, longitude, discovery_status) "
-            "VALUES ($1, 'Done City', 'done-city-yy', 1000, 42.0, 23.0, 'done') "
+            "(country, label, slug, population, discovery_status) "
+            "VALUES ($1, 'Done City', 'done-city-yy', 1000, 'done') "
             "ON CONFLICT (country, slug) DO NOTHING",
             no_city_iso,
         )

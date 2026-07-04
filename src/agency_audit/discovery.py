@@ -610,8 +610,6 @@ class DiscoveryPipeline:
         city_label: str,
         city_slug: str,
         country_iso: str,
-        latitude: float | None,
-        longitude: float | None,
         viewport_low_lat: float | None = None,
         viewport_low_lng: float | None = None,
         viewport_high_lat: float | None = None,
@@ -629,8 +627,6 @@ class DiscoveryPipeline:
             "label": city_label,
             "slug": city_slug,
             "country": country_iso,
-            "latitude": latitude,
-            "longitude": longitude,
             "viewport_low_lat": viewport_low_lat,
             "viewport_low_lng": viewport_low_lng,
             "viewport_high_lat": viewport_high_lat,
@@ -798,7 +794,7 @@ class DiscoveryPipeline:
                 # Fetch next pending city for this country
                 async with pool.acquire() as conn:
                     row = await conn.fetchrow(
-                        """SELECT id, label, slug, population, latitude, longitude,
+                        """SELECT id, label, slug, population,
                                   viewport_low_lat, viewport_low_lng,
                                   viewport_high_lat, viewport_high_lng
                            FROM cities
@@ -822,8 +818,6 @@ class DiscoveryPipeline:
                         city_label=row["label"],
                         city_slug=row["slug"],
                         country_iso=country,
-                        latitude=row["latitude"],
-                        longitude=row["longitude"],
                         viewport_low_lat=row["viewport_low_lat"],
                         viewport_low_lng=row["viewport_low_lng"],
                         viewport_high_lat=row["viewport_high_lat"],
