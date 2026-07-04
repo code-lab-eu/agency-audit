@@ -50,7 +50,6 @@ class Settings(BaseSettings):
     # -- Google Maps Places API -----------------------------------------------
     google_maps_api_key: str = ""
     places_api_timeout: int = 30
-    places_radius_meters: int = 10000
     places_max_results: int = 60
     places_rate_limit_qps: float = 5.0
 

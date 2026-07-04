@@ -46,7 +46,7 @@ class TestPlacesAPIClientSearchTextRequest:
     """Verify that search_text builds the correct POST body."""
 
     async def test_minimal_request(self):
-        """A query with no location_bias produces minimal body."""
+        """A query with no location_restriction produces minimal body."""
         captured_body = None
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -65,32 +65,6 @@ class TestPlacesAPIClientSearchTextRequest:
         assert captured_body["textQuery"] == "estate agent Sofia"
         assert captured_body["pageSize"] == 20
         assert "locationBias" not in captured_body
-
-    async def test_request_with_location_bias(self):
-        """A query with lat/lng includes a locationBias circle."""
-        captured_body = None
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            nonlocal captured_body
-            import json
-
-            captured_body = json.loads(request.read().decode("utf-8"))
-            return httpx.Response(200, json=build_place_response([]), request=request)
-
-        client = make_mock_client(handler)
-        await client.search_text(
-            "Immobilienmakler Berlin",
-            location_bias=(52.5200, 13.4050),
-            radius=5000,
-            max_results=20,
-        )
-        await client.close()
-
-        assert captured_body is not None
-        bias = captured_body["locationBias"]
-        assert bias["circle"]["center"]["latitude"] == 52.5200
-        assert bias["circle"]["center"]["longitude"] == 13.4050
-        assert bias["circle"]["radius"] == 5000
 
     async def test_page_size_clamped_to_max_results(self):
         """pageSize must not exceed the remaining results needed."""
@@ -139,31 +113,6 @@ class TestPlacesAPIClientSearchTextRequest:
         assert rest["rectangle"]["low"]["longitude"] == 23.0
         assert rest["rectangle"]["high"]["latitude"] == 43.0
         assert rest["rectangle"]["high"]["longitude"] == 24.0
-
-    async def test_location_restriction_overrides_location_bias(self):
-        """When both are given, locationRestriction wins and locationBias is omitted."""
-        captured_body = None
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            nonlocal captured_body
-            import json
-
-            captured_body = json.loads(request.read().decode("utf-8"))
-            return httpx.Response(200, json=build_place_response([]), request=request)
-
-        client = make_mock_client(handler)
-        rect = Rectangle(low_lat=40.0, low_lng=20.0, high_lat=41.0, high_lng=21.0)
-        await client.search_text(
-            "some query",
-            location_bias=(48.0, 8.0),
-            location_restriction=rect,
-            max_results=20,
-        )
-        await client.close()
-
-        assert captured_body is not None
-        assert "locationRestriction" in captured_body
-        assert "locationBias" not in captured_body
 
 
 # ──────────────────────────────────────────────────────────────────────
