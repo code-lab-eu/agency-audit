@@ -23,6 +23,7 @@ from agency_audit.audit.anti_scraping import (
     detect_anti_scraping,
 )
 from agency_audit.audit.api_detection import (
+    GRAPHQL_LISTING_PATTERNS,
     _check_jsonld_structured_data,
     _endpoints_include_listing_api,
     _find_api_endpoints_in_html,
@@ -658,6 +659,79 @@ class TestApiDetection:
             result = await detect_api("https://example.com", client=client)
 
         assert result.has_listing_api is False
+
+    # --- GraphQL listing API detection ---
+
+    def test_graphql_listing_query_detected(self):
+        """A GraphQL query referencing 'properties' in HTML should be a listing API."""
+        html = "<script>const q = `query { properties { id title } }`</script>"
+        assert _endpoints_include_listing_api(["/graphql"], html) is True
+
+    def test_graphql_listing_query_estate(self):
+        """A GraphQL query referencing 'estate' in HTML should be a listing API."""
+        html = "<script>const q = `query { estate { id } }`</script>"
+        assert _endpoints_include_listing_api(["/graphql"], html) is True
+
+    def test_graphql_type_definition_detected(self):
+        """A GraphQL type definition 'type Property {' in HTML should be a listing API."""
+        html = "<script>const schema = `type Property { id: ID, title: String }`</script>"
+        assert _endpoints_include_listing_api([], html) is True
+
+    def test_graphql_no_connection_without_http(self):
+        """A GraphQL query in HTML without any HTTP should still be detected."""
+        html = "<script>const q = `query { listings { id } }`</script>"
+        assert _endpoints_include_listing_api([], html) is True
+
+    async def test_detect_api_graphql_with_listing_schema(self):
+        """detect_api with GraphQL + listing query should set has_listing_api=True."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = (
+            "<html><head>"
+            "<script>"
+            'const FETCH = (q) => fetch("/graphql", {body: JSON.stringify({query: q})});'
+            "FETCH(`query { properties { totalCount } }`)"
+            "</script>"
+            "</head><body></body></html>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.detected is True
+        # The query {properties...} pattern in HTML marks it as a listing API
+        assert result.has_listing_api is True
+
+    async def test_detect_api_graphql_generic_no_listing_api(self):
+        """GraphQL without property/listing types should NOT set has_listing_api."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = (
+            "<html><head>"
+            "<script>"
+            'const FETCH = (q) => fetch("/graphql", {body: JSON.stringify({query: q})});'
+            "FETCH(`query { users { name } }`)"
+            "</script>"
+            "</head><body></body></html>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.detected is True
+        assert result.has_listing_api is False
+
+    def test_graphql_listing_patterns_known(self):
+        """GRAPHQL_LISTING_PATTERNS should be non-empty and importable."""
+        assert len(GRAPHQL_LISTING_PATTERNS) > 0
 
 
 class TestPropertyCount:

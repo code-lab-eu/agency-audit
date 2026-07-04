@@ -53,6 +53,21 @@ LISTING_API_PATTERNS = [
     r"/jsonapi/(property|listing)",
 ]
 
+# GraphQL patterns that specifically indicate a real-estate listing schema
+# (as opposed to a generic GraphQL endpoint that could serve anything).
+GRAPHQL_LISTING_PATTERNS = [
+    # GraphQL queries referencing property/estate types in HTML (inline script, JS, etc.)
+    r"query\s*\{.*?properties",
+    r"query\s*\{.*?listings",
+    r"query\s*\{.*?estate",
+    r"query\s*\{.*?real[_-]?estate",
+    # GraphQL schema / type definitions referencing property/listing types
+    r"type\s+Property\s*[\{\(]",
+    r"type\s+Listing\s*[\{\(]",
+    r"type\s+Estate\s*[\{\(]",
+    r"type\s+RealEstate\s*[\{\(]",
+]
+
 # JSON-LD schema.org types for real estate
 REALESTATE_SCHEMA_TYPES = {
     "Product",
@@ -136,15 +151,22 @@ def _find_api_endpoints_in_html(html_text: str) -> list[str]:
 
 def _endpoints_include_listing_api(endpoints: list[str], html_text: str) -> bool:
     """Check whether any detected endpoint or HTML text references a structured
-    real-estate *listing* API (as opposed to a generic API root)."""
-    # Check endpoints against listing-specific patterns
+    real-estate *listing* API (as opposed to a generic API root).
+
+    Checks both REST URL patterns (in endpoints and HTML) and GraphQL
+    property/listing schemas (in HTML)."""
+    # Check endpoints against listing-specific REST patterns
     for endpoint in endpoints:
         for pattern in LISTING_API_PATTERNS:
             if re.search(pattern, endpoint, re.IGNORECASE):
                 return True
 
-    # Also scan HTML text directly for listing API references
-    return any(re.search(pattern, html_text, re.IGNORECASE) for pattern in LISTING_API_PATTERNS)
+    # Check HTML text for listing-specific REST patterns
+    if any(re.search(pattern, html_text, re.IGNORECASE) for pattern in LISTING_API_PATTERNS):
+        return True
+
+    # Check HTML text for GraphQL property/listing schema evidence
+    return any(re.search(pattern, html_text, re.IGNORECASE) for pattern in GRAPHQL_LISTING_PATTERNS)
 
 
 async def _probe_graphql(
