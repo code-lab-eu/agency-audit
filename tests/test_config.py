@@ -145,7 +145,6 @@ class TestSettingsDefaults:
     def test_places_api_defaults(self):
         s = Settings()
         assert s.places_api_timeout == 30
-        assert s.places_radius_meters == 10000
         assert s.places_max_results == 60
         assert s.places_rate_limit_qps == 5.0
 

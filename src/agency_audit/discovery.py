@@ -78,9 +78,6 @@ COUNTRY_QUERIES: dict[str, list[str]] = {
     "VA": ["agenzia immobiliare"],
 }
 
-# Default Google Maps Text Search radius in meters
-DEFAULT_RADIUS = settings.places_radius_meters
-
 
 @dataclass
 class PlaceResult:
@@ -168,8 +165,6 @@ class PlacesAPIClient:
     async def search_text(
         self,
         query: str,
-        location_bias: tuple[float, float] | None = None,
-        radius: int = DEFAULT_RADIUS,
         max_results: int | None = None,
         location_restriction: Rectangle | None = None,
         max_requests: int | None = None,
@@ -181,14 +176,10 @@ class PlacesAPIClient:
 
         Args:
             query: Text search query (e.g. "real estate agent Sofia").
-            location_bias: Optional (lat, lng) tuple for a circular bias —
-                only used when *location_restriction* is not set.
-            radius: Radius in meters for the circular locationBias.
             max_results: Maximum number of results to return.
             location_restriction: Optional Rectangle bounding-box filter.
                 When provided, emits ``locationRestriction.rectangle`` in
-                the POST body and **omits** ``locationBias`` — the two are
-                mutually exclusive in the Places API.
+                the POST body.
             max_requests: Maximum number of paginated HTTP requests this
                 call is allowed to make.  When set, the pagination loop
                 stops after this many POSTs even if more results are
@@ -237,16 +228,7 @@ class PlacesAPIClient:
                         },
                     }
                 }
-            elif location_bias:
-                body["locationBias"] = {
-                    "circle": {
-                        "center": {
-                            "latitude": float(location_bias[0]),
-                            "longitude": float(location_bias[1]),
-                        },
-                        "radius": radius,
-                    }
-                }
+
             if next_page_token:
                 body["pageToken"] = next_page_token
                 # Rate limit between pages
