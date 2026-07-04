@@ -186,8 +186,10 @@ def compute_score(audit: AuditData, config: dict | None = None) -> tuple[int, di
             breakdown["has_api"] = config["has_api"]
             score += config["has_api"]
 
-    # Structured listing API — awarded on top of generic API detection
-    if audit.api_detection.has_listing_api:
+    # Structured listing API — awarded on top of generic API detection.
+    # Gated on `detected` so a site with only an incidental HTML pattern
+    # match (no actual API endpoint) doesn't score the bonus.
+    if audit.api_detection.detected and audit.api_detection.has_listing_api:
         breakdown["has_listing_api"] = config["has_listing_api"]
         score += config["has_listing_api"]
 

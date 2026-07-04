@@ -1716,6 +1716,26 @@ class TestScoring:
         _, breakdown = compute_score(audit)
         assert "has_listing_api" not in breakdown
 
+    def test_score_no_listing_api_when_no_api_detected(self):
+        """has_listing_api must NOT score when API detection itself failed.
+
+        A page might match a GraphQL listing pattern in its HTML text
+        (e.g. `type Property { ... }` in an inline schema) without any
+        actual API endpoint being found.  In that case has_listing_api may
+        be True but detected is False — the score must gate on detection."""
+        audit = AuditData(
+            api_detection=ApiDetectionResult(
+                detected=False,
+                api_type=None,
+                has_listing_api=True,
+            ),
+            robots=RobotsResult(allows_scraping=True),
+            listing_quality=ListingQualityResult(quality_score=0.5),
+            ssl_valid=True,
+        )
+        _, breakdown = compute_score(audit)
+        assert "has_listing_api" not in breakdown
+
     def test_score_clamped(self):
         """Score should be clamped to min/max."""
         config = load_scoring_config()
