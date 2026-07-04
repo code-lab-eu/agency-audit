@@ -37,6 +37,7 @@ class ApiDetectionResult:
     api_type: str | None = None  # "graphql", "rest", "json-ld"
     api_url: str | None = None
     endpoints_found: list[str] = field(default_factory=list)
+    has_listing_api: bool = False  # structured property-listing endpoint detected
 
 
 @dataclass
@@ -102,6 +103,7 @@ class AuditData:
             "cloudflare": self.anti_scraping.cloudflare,
             "recaptcha": self.anti_scraping.recaptcha,
             "has_api": self.api_detection.detected,
+            "has_listing_api": self.api_detection.has_listing_api,
             "api_type": self.api_detection.api_type,
             "api_url": self.api_detection.api_url,
             "api_endpoints": self.api_detection.endpoints_found,

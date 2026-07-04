@@ -42,6 +42,17 @@ GRAPHQL_PATTERNS = [
     r"query\s*\{.*?listings",
 ]
 
+# API endpoint paths that indicate a structured real-estate *listing* endpoint
+# (as opposed to a generic /wp-json/ root or /api/v1/ that could serve anything).
+LISTING_API_PATTERNS = [
+    # WordPress REST API with a real-estate custom post type
+    r"/wp-json/wp/v2/(estate_property|property|properties|listing|listings|real[_-]?estate)",
+    # REST API paths that explicitly serve properties or listings
+    r"/api/(properties|listings|property|listing)",
+    # JSON:API with property-type resources
+    r"/jsonapi/(property|listing)",
+]
+
 # JSON-LD schema.org types for real estate
 REALESTATE_SCHEMA_TYPES = {
     "Product",
@@ -121,6 +132,19 @@ def _find_api_endpoints_in_html(html_text: str) -> list[str]:
         endpoints.update(matches)
 
     return sorted(endpoints)
+
+
+def _endpoints_include_listing_api(endpoints: list[str], html_text: str) -> bool:
+    """Check whether any detected endpoint or HTML text references a structured
+    real-estate *listing* API (as opposed to a generic API root)."""
+    # Check endpoints against listing-specific patterns
+    for endpoint in endpoints:
+        for pattern in LISTING_API_PATTERNS:
+            if re.search(pattern, endpoint, re.IGNORECASE):
+                return True
+
+    # Also scan HTML text directly for listing API references
+    return any(re.search(pattern, html_text, re.IGNORECASE) for pattern in LISTING_API_PATTERNS)
 
 
 async def _probe_graphql(
@@ -209,6 +233,12 @@ async def detect_api(
                 result.api_type = "graphql"
                 result.api_url = graphql_url
                 result.endpoints_found.append(graphql_url)
+
+        # Detect structured listing API (separate from generic API detection)
+        if result.endpoints_found:
+            result.has_listing_api = _endpoints_include_listing_api(
+                result.endpoints_found, html_text
+            )
 
     except Exception as exc:
         logger.warning("API detection failed for %s: %s", base_url, exc)

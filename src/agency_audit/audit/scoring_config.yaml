@@ -14,6 +14,7 @@ has_anti_scraping: -20
 # API detection — bonus for having a structured API
 has_api: 20
 has_graphql_api: 25  # extra bonus for GraphQL
+has_listing_api: 15  # bonus for structured property-listing endpoint
 
 # property count — tiered (first matching tier is applied, higher = more points)
 property_count_tiers:

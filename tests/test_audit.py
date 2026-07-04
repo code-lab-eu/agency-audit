@@ -24,6 +24,7 @@ from agency_audit.audit.anti_scraping import (
 )
 from agency_audit.audit.api_detection import (
     _check_jsonld_structured_data,
+    _endpoints_include_listing_api,
     _find_api_endpoints_in_html,
 )
 from agency_audit.audit.auditor import audit_website
@@ -588,10 +589,75 @@ class TestApiDetection:
         endpoints = _find_api_endpoints_in_html(html)
         assert len(endpoints) == 0
 
+    # --- listing API detection ---
 
-# ---------------------------------------------------------------------------
-# Property count
-# ---------------------------------------------------------------------------
+    def test_listing_api_wp_estate_property_endpoint(self):
+        """Endpoint /wp-json/wp/v2/estate_property should be a listing API."""
+        assert _endpoints_include_listing_api(["/wp-json/wp/v2/estate_property"], "") is True
+
+    def test_listing_api_wp_properties_endpoint(self):
+        """Endpoint /wp-json/wp/v2/properties should be a listing API."""
+        assert _endpoints_include_listing_api(["/wp-json/wp/v2/properties"], "") is True
+
+    def test_listing_api_rest_properties(self):
+        """Endpoint /api/properties should be a listing API."""
+        assert _endpoints_include_listing_api(["/api/properties"], "") is True
+
+    def test_listing_api_rest_listings(self):
+        """Endpoint /api/listings should be a listing API."""
+        assert _endpoints_include_listing_api(["/api/listings"], "") is True
+
+    def test_generic_wp_json_root_not_listing_api(self):
+        """A bare /wp-json/ root should NOT be a listing API."""
+        assert _endpoints_include_listing_api(["/wp-json/"], "") is False
+
+    def test_generic_api_v1_not_listing_api(self):
+        """A generic /api/v1/ should NOT be a listing API."""
+        assert _endpoints_include_listing_api(["/api/v1/"], "") is False
+
+    def test_listing_api_in_html(self):
+        """A fetch call to /api/properties in HTML should be detected."""
+        html = '<script>fetch("/api/properties")</script>'
+        assert _endpoints_include_listing_api([], html) is True
+
+    async def test_detect_api_sets_has_listing_api(self):
+        """detect_api should set has_listing_api=True when a listing endpoint is found."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = (
+            "<html><head>"
+            '<script>fetch("/wp-json/wp/v2/estate_property")</script>'
+            "</head><body></body></html>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.detected is True
+        assert result.has_listing_api is True
+
+    async def test_detect_api_generic_no_listing_api(self):
+        """detect_api should NOT set has_listing_api for generic /wp-json/."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = (
+            "<html><head>"
+            '<link rel="https://api.w.org/" href="https://example.com/wp-json/" />'
+            "</head><body></body></html>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.has_listing_api is False
 
 
 class TestPropertyCount:
@@ -1402,6 +1468,39 @@ class TestScoring:
         graphql_score, _ = compute_score(graphql_audit)
         assert graphql_score > rest_score
 
+    def test_score_listing_api_bonus(self):
+        """Structured listing API should add extra points on top of generic API."""
+        # Generic REST API with no listing API
+        generic = AuditData(
+            api_detection=ApiDetectionResult(detected=True, api_type="rest", has_listing_api=False),
+            robots=RobotsResult(allows_scraping=True),
+            listing_quality=ListingQualityResult(quality_score=0.5),
+            ssl_valid=True,
+        )
+        # REST API with a structured listing endpoint
+        listing = AuditData(
+            api_detection=ApiDetectionResult(detected=True, api_type="rest", has_listing_api=True),
+            robots=RobotsResult(allows_scraping=True),
+            listing_quality=ListingQualityResult(quality_score=0.5),
+            ssl_valid=True,
+        )
+        generic_score, generic_bd = compute_score(generic)
+        listing_score, listing_bd = compute_score(listing)
+        assert listing_score > generic_score
+        assert "has_listing_api" in listing_bd
+        assert listing_bd["has_listing_api"] == 15
+
+    def test_score_no_listing_api_for_generic(self):
+        """A site with only generic /wp-json/ should NOT get has_listing_api points."""
+        audit = AuditData(
+            api_detection=ApiDetectionResult(detected=True, api_type="rest", has_listing_api=False),
+            robots=RobotsResult(allows_scraping=True),
+            listing_quality=ListingQualityResult(quality_score=0.5),
+            ssl_valid=True,
+        )
+        _, breakdown = compute_score(audit)
+        assert "has_listing_api" not in breakdown
+
     def test_score_clamped(self):
         """Score should be clamped to min/max."""
         config = load_scoring_config()
@@ -1557,6 +1656,7 @@ class TestScoring:
             "has_anti_scraping",
             "has_api",
             "has_graphql_api",
+            "has_listing_api",
             "has_structured_data",
             "listings_have_prices",
             "listings_have_locations",
@@ -2126,6 +2226,7 @@ class TestAuditDataToDictContract:
             "cloudflare",
             "recaptcha",
             "has_api",
+            "has_listing_api",
             "api_type",
             "api_url",
             "api_endpoints",
@@ -2162,6 +2263,7 @@ class TestAuditDataToDictContract:
         assert "score" in data
         assert "technology_stack" in data
         assert "listing_quality_score" in data
+        assert "has_listing_api" in data
 
     def test_to_dict_scores_int(self, default_audit: AuditData):
         """score must always be int, score_breakdown must be dict."""
@@ -2191,6 +2293,7 @@ class TestAuditDataToDictContract:
             "cloudflare",
             "recaptcha",
             "has_api",
+            "has_listing_api",
             "api_type",
             "api_url",
             "api_endpoints",

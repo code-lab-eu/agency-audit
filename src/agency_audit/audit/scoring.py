@@ -38,6 +38,7 @@ DEFAULT_CONFIG: dict = {
     # API detection
     "has_api": 20,
     "has_graphql_api": 25,  # bonus for GraphQL
+    "has_listing_api": 15,  # bonus for structured property-listing API
     # property count (first matching tier is applied)
     "property_count_tiers": [
         {"min": 1000, "points": 30},
@@ -184,6 +185,11 @@ def compute_score(audit: AuditData, config: dict | None = None) -> tuple[int, di
         else:
             breakdown["has_api"] = config["has_api"]
             score += config["has_api"]
+
+    # Structured listing API — awarded on top of generic API detection
+    if audit.api_detection.has_listing_api:
+        breakdown["has_listing_api"] = config["has_listing_api"]
+        score += config["has_listing_api"]
 
     # property count (tiered — first match wins)
     count = audit.property_count.count
