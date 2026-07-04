@@ -7,6 +7,9 @@ fixture (private database with pool redirection) rather than ``db_conn``.
 
 from __future__ import annotations
 
+import importlib
+import os
+
 import asyncpg
 
 from agency_audit.scripts.discovery_helper import list_pending
@@ -51,3 +54,16 @@ async def test_list_pending_country_no_pending(fresh_db: asyncpg.Connection) -> 
     """A country with no pending cities returns an empty list."""
     results = await list_pending(country_iso="ZZ", limit=5)
     assert results == []
+
+
+async def test_import_preserves_cwd(fresh_db: asyncpg.Connection) -> None:
+    """Importing discovery_helper must not change the caller's working directory."""
+    import agency_audit.scripts.discovery_helper as dh
+
+    cwd_before = os.getcwd()
+    importlib.reload(dh)
+    cwd_after = os.getcwd()
+
+    assert cwd_before == cwd_after, (
+        f"cwd changed from {cwd_before!r} to {cwd_after!r} — import must not mutate cwd"
+    )
