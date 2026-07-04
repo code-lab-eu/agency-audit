@@ -160,7 +160,7 @@ async def list_pending(country_iso: str | None = None, limit: int = 5):
     async with pool.acquire() as conn:
         if country_iso:
             rows = await conn.fetch(
-                """SELECT id, label, country, population, latitude, longitude
+                """SELECT id, label, country, population
                    FROM cities
                    WHERE discovery_status = 'pending' AND country = $1
                    ORDER BY population DESC LIMIT $2""",
@@ -169,7 +169,7 @@ async def list_pending(country_iso: str | None = None, limit: int = 5):
             )
         else:
             rows = await conn.fetch(
-                """SELECT id, label, country, population, latitude, longitude
+                """SELECT id, label, country, population
                    FROM cities
                    WHERE discovery_status = 'pending'
                    ORDER BY population DESC LIMIT $2""",
