@@ -733,6 +733,104 @@ class TestApiDetection:
         """GRAPHQL_LISTING_PATTERNS should be non-empty and importable."""
         assert len(GRAPHQL_LISTING_PATTERNS) > 0
 
+    # --- GraphQL named / variable operations ---
+
+    def test_graphql_named_query_listing_detected(self):
+        """A named GraphQL query with properties should be detected."""
+        html = "<script>query SearchListings { properties { id title } }</script>"
+        assert _endpoints_include_listing_api(["/graphql"], html) is True
+
+    def test_graphql_query_with_variables_detected(self):
+        """A GraphQL query with variables referencing listings should be detected."""
+        html = (
+            "<script>query SearchListings($first: Int!, $after: String) "
+            "{ listings { id } }</script>"
+        )
+        assert _endpoints_include_listing_api(["/graphql"], html) is True
+
+    def test_graphql_anonymous_query_with_variables_detected(self):
+        """An anonymous GraphQL query with variables referencing properties should be detected."""
+        html = "<script>query($first: Int) { properties { id } }</script>"
+        assert _endpoints_include_listing_api([], html) is True
+
+    def test_graphql_named_query_estate_detected(self):
+        """A named GraphQL query referencing estate should be detected."""
+        html = "<script>query GetEstates { estate { id price } }</script>"
+        assert _endpoints_include_listing_api([], html) is True
+
+    # --- Versioned REST listing paths ---
+
+    def test_listing_api_versioned_rest_properties(self):
+        """An endpoint /api/v1/properties should be a listing API."""
+        assert _endpoints_include_listing_api(["/api/v1/properties"], "") is True
+
+    def test_listing_api_versioned_rest_listings(self):
+        """An endpoint /api/v2/listings should be a listing API."""
+        assert _endpoints_include_listing_api(["/api/v2/listings"], "") is True
+
+    # --- JSON:API detection (guard removal) ---
+
+    def test_listing_api_jsonapi_in_html_no_endpoints(self):
+        """JSON:API path in HTML should be detected even with empty endpoints list."""
+        html = '<script>fetch("/jsonapi/property")</script>'
+        assert _endpoints_include_listing_api([], html) is True
+
+    async def test_detect_api_jsonapi_listing(self):
+        """detect_api should set has_listing_api for JSON:API property endpoint in HTML."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = '<html><script>fetch("/jsonapi/property")</script></html>'
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.has_listing_api is True
+
+    # --- Versioned REST integration ---
+
+    async def test_detect_api_versioned_rest_listing(self):
+        """detect_api should set has_listing_api for /api/v1/properties in HTML."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = '<html><script>fetch("/api/v1/properties")</script></html>'
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.detected is True
+        assert result.has_listing_api is True
+
+    async def test_detect_api_graphql_named_query_listing(self):
+        """detect_api with a named GraphQL query should set has_listing_api."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = (
+            "<html><head>"
+            "<script>"
+            "const gql = `query SearchListings($first: Int!) { properties { totalCount } }`;"
+            'fetch("/graphql", {body: JSON.stringify({query: gql})})'
+            "</script>"
+            "</head><body></body></html>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.detected is True
+        assert result.has_listing_api is True
+
 
 class TestPropertyCount:
     # ------------------------------------------------------------------

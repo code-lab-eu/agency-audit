@@ -32,14 +32,15 @@ API_PATH_PATTERNS = [
     r"/graphql",
     r"/api/graphql",
     r"/.well-known/",
+    r"/jsonapi/",
 ]
 
 # GraphQL indicators in HTML
 GRAPHQL_PATTERNS = [
     r"__NEXT_DATA__.*?graphql",
     r"application/graphql",
-    r"query\s*\{.*?properties",
-    r"query\s*\{.*?listings",
+    r"query\b.{0,300}?\{[^}]*properties",
+    r"query\b.{0,300}?\{[^}]*listings",
 ]
 
 # API endpoint paths that indicate a structured real-estate *listing* endpoint
@@ -51,16 +52,20 @@ LISTING_API_PATTERNS = [
     r"/api/(properties|listings|property|listing)",
     # JSON:API with property-type resources
     r"/jsonapi/(property|listing)",
+    # Versioned REST API listing paths (e.g. /api/v1/properties)
+    r"/api/v\d+/(properties|listings|property|listing)",
 ]
 
 # GraphQL patterns that specifically indicate a real-estate listing schema
 # (as opposed to a generic GraphQL endpoint that could serve anything).
 GRAPHQL_LISTING_PATTERNS = [
-    # GraphQL queries referencing property/estate types in HTML (inline script, JS, etc.)
-    r"query\s*\{.*?properties",
-    r"query\s*\{.*?listings",
-    r"query\s*\{.*?estate",
-    r"query\s*\{.*?real[_-]?estate",
+    # GraphQL queries referencing property/estate types (handles named,
+    # anonymous, and variable-bearing operations, e.g.
+    #   query SearchListings($first: Int!) { properties { ... } })
+    r"query\b.{0,300}?\{[^}]*properties",
+    r"query\b.{0,300}?\{[^}]*listings",
+    r"query\b.{0,300}?\{[^}]*estate",
+    r"query\b.{0,300}?\{[^}]*real[_-]?estate",
     # GraphQL schema / type definitions referencing property/listing types
     r"type\s+Property\s*[\{\(]",
     r"type\s+Listing\s*[\{\(]",
@@ -256,11 +261,11 @@ async def detect_api(
                 result.api_url = graphql_url
                 result.endpoints_found.append(graphql_url)
 
-        # Detect structured listing API (separate from generic API detection)
-        if result.endpoints_found:
-            result.has_listing_api = _endpoints_include_listing_api(
-                result.endpoints_found, html_text
-            )
+        # Detect structured listing API (separate from generic API detection).
+        # Run unconditionally — html_text may contain listing indicators even
+        # when no endpoints were collected (e.g. JSON:API paths not in
+        # API_PATH_PATTERNS, or GraphQL listings exposed via a named query).
+        result.has_listing_api = _endpoints_include_listing_api(result.endpoints_found, html_text)
 
     except Exception as exc:
         logger.warning("API detection failed for %s: %s", base_url, exc)
