@@ -172,7 +172,7 @@ async def list_pending(country_iso: str | None = None, limit: int = 5):
                 """SELECT id, label, country, population
                    FROM cities
                    WHERE discovery_status = 'pending'
-                   ORDER BY population DESC LIMIT $2""",
+                   ORDER BY population DESC LIMIT $1""",
                 limit,
             )
         return [dict(r) for r in rows]
