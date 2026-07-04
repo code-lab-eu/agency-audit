@@ -15,8 +15,10 @@ import json
 import os
 import sys
 
-os.chdir("/opt/data/workspace/agency-audit")
-sys.path.insert(0, "src")
+_here = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if os.path.isdir(_here):
+    os.chdir(_here)
+sys.path.insert(0, os.path.join(_here, "src"))
 from agency_audit.db import get_pool  # noqa: E402  (import after sys.path setup)
 
 
