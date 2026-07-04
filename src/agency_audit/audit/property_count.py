@@ -253,6 +253,54 @@ async def _count_from_sitemap(
     return 0, 0.0
 
 
+async def _cross_check_wp_rest(
+    base_url: str,
+    sitemap_count: int,
+    client: httpx.AsyncClient,
+) -> tuple[int, float] | None:
+    """Cross-check sitemap count against WordPress REST API ``X-WP-Total``.
+
+    Probes a short list of candidate listing endpoints under ``/wp-json/wp/v2/``
+    with ``per_page=1``.  If any endpoint responds with an ``X-WP-Total`` header
+    whose value is less than half the sitemap count, the authoritative API total
+    is returned along with a reduced confidence score.  Any error (network,
+    parse, status) skips the cross-check, leaving the sitemap result untouched.
+
+    Returns:
+        ``(api_count, 0.5)`` when a significant discrepancy is found,
+        ``None`` when no reconcilable REST endpoint responded.
+    """
+    WP_REST_CANDIDATES: list[str] = [
+        "/wp-json/wp/v2/estate_property",
+        "/wp-json/wp/v2/property",
+        "/wp-json/wp/v2/properties",
+    ]
+    parts = urlsplit(base_url)
+    for candidate in WP_REST_CANDIDATES:
+        url = f"{parts.scheme}://{parts.netloc}{candidate}?per_page=1"
+        try:
+            resp = await client.get(url, timeout=settings.sitemap_timeout)
+            if resp.status_code == 200:
+                raw = resp.headers.get("X-WP-Total")
+                if raw is not None:
+                    api_count = int(raw)
+                    if api_count > 0 and sitemap_count > api_count * 2:
+                        logger.debug(
+                            "WP REST cross-check: sitemap=%d, %s=%d — "
+                            "preferring authoritative API count",
+                            sitemap_count,
+                            candidate,
+                            api_count,
+                        )
+                        return api_count, 0.5
+                    # API total is within 2× for this endpoint — keep probing
+                    # the next candidate (a later endpoint may reveal the
+                    # discrepancy).
+        except Exception:
+            continue
+    return None
+
+
 async def count_properties(
     base_url: str,
     homepage_response: httpx.Response | None = None,
@@ -309,9 +357,13 @@ async def count_properties(
             for sitemap_url in sitemap_urls[:5]:  # limit
                 count, conf = await _count_from_sitemap(sitemap_url, client)
                 if count > 0:
-                    result.count = count
+                    reconciled = await _cross_check_wp_rest(base_url, count, client)
+                    if reconciled is not None:
+                        result.count, result.confidence = reconciled
+                    else:
+                        result.count = count
+                        result.confidence = conf
                     result.source = "sitemap"
-                    result.confidence = conf
                     return result
 
         # Strategy 4: Try common sitemap URL if none found
@@ -320,9 +372,13 @@ async def count_properties(
             default_sitemap = f"{parts.scheme}://{parts.netloc}/sitemap.xml"
             count, conf = await _count_from_sitemap(default_sitemap, client)
             if count > 0:
-                result.count = count
+                reconciled = await _cross_check_wp_rest(base_url, count, client)
+                if reconciled is not None:
+                    result.count, result.confidence = reconciled
+                else:
+                    result.count = count
+                    result.confidence = conf
                 result.source = "sitemap"
-                result.confidence = conf
                 return result
 
     except Exception as exc:
