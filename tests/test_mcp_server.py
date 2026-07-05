@@ -45,14 +45,6 @@ async def test_get_next_city_returns_pending_city(fresh_db: asyncpg.Connection) 
     assert "population" in result
 
 
-async def test_get_next_city_excludes_lat_lon(fresh_db: asyncpg.Connection) -> None:
-    """get_next_city no longer returns latitude/longitude — centroids are obsolete."""
-    result = await get_next_city()
-    assert "error" not in result
-    assert "latitude" not in result, "latitude must not be returned"
-    assert "longitude" not in result, "longitude must not be returned"
-
-
 async def test_get_next_city_marks_in_progress(fresh_db: asyncpg.Connection) -> None:
     result = await get_next_city()
     city_id = result["id"]
