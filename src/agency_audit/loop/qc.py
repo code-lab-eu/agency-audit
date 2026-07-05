@@ -20,6 +20,10 @@ from agency_audit.db import get_pool
 
 logger = logging.getLogger(__name__)
 
+# Minimum number of distinct positive signals in score_breakdown required
+# before a score of 100 is considered genuine rather than suspicious.
+MIN_POSITIVE_SIGNALS = 4
+
 
 @dataclass
 class QCFinding:
@@ -54,8 +58,9 @@ async def flag_suspicious_scores(country: str | None = None) -> list[QCFinding]:
     findings: list[QCFinding] = []
 
     async with pool.acquire() as conn:
-        # Find websites with score 0 or 100 that haven't been QC-checked yet
-        query = """SELECT id, url, score, audit_status
+        # Find websites with score 0 or 100 that haven't been QC-checked yet.
+        # Also fetch audit_data so we can inspect score_breakdown for 100s.
+        query = """SELECT id, url, score, audit_status, audit_data
                FROM websites
                WHERE (score = 0 OR score = 100)
                  AND audit_status = 'audited'
@@ -78,7 +83,28 @@ async def flag_suspicious_scores(country: str | None = None) -> list[QCFinding]:
             if score == 0:
                 reason = "Suspicious score 0 — possible audit failure or no usable data"
             else:
-                reason = "Suspicious score 100 — verify audit is genuine (not default values)"
+                # For score 100, only flag when the breakdown is thin —
+                # a genuine multi-signal 100 should not be flagged.
+                audit_data = row["audit_data"]
+                if isinstance(audit_data, str):
+                    audit_data = json.loads(audit_data)
+                breakdown = (audit_data or {}).get("score_breakdown", {})
+                positive_signals = sum(
+                    1 for v in breakdown.values() if isinstance(v, (int, float)) and v > 0
+                )
+                if positive_signals >= MIN_POSITIVE_SIGNALS:
+                    logger.debug(
+                        "QC: website %d score 100 backed by %d positive signals — "
+                        "skipping suspicious-score flag",
+                        wid,
+                        positive_signals,
+                    )
+                    continue
+                reason = (
+                    f"Suspicious score 100 — only {positive_signals} positive "
+                    f"signals in breakdown (min {MIN_POSITIVE_SIGNALS}); "
+                    f"verify audit is genuine (not default values)"
+                )
 
             findings.append(QCFinding(website_id=wid, url=url, reason=reason, severity="warning"))
 

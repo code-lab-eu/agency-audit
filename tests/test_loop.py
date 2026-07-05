@@ -14,6 +14,7 @@ exact-count assertions are safe.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import asyncpg
@@ -292,6 +293,73 @@ class TestQC:
         )
         assert hundred_row["needs_review"] is True
         assert "score 100" in hundred_row["review_reason"].lower()
+
+    async def test_genuine_multi_signal_100_not_flagged(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """A score 100 backed by many positive signals should NOT be flagged.
+
+        A full audit yields ~10 positive scoring factors.  The suspicious-score
+        check should skip such sites so QA effort focuses on hollow 100s.
+        """
+        from agency_audit.loop.qc import MIN_POSITIVE_SIGNALS, flag_suspicious_scores
+
+        # Rich breakdown: 3 signals *above* the threshold so both branches are tested.
+        rich_signals = MIN_POSITIVE_SIGNALS + 3
+        rich_breakdown = {f"signal_{i}": 20 for i in range(rich_signals)}
+
+        ws = await _seed_website(fresh_db, "rich-100", score=100, audit_status="audited")
+        await fresh_db.execute(
+            "UPDATE websites SET audit_data = $1::jsonb WHERE id = $2",
+            json.dumps({"score_breakdown": rich_breakdown}),
+            ws["id"],
+        )
+
+        findings = await flag_suspicious_scores(country=TEST_COUNTRY)
+        finding_ids = {f.website_id for f in findings}
+        assert ws["id"] not in finding_ids, (
+            f"Genuine 100 ({rich_signals} positive signals) should NOT be flagged"
+        )
+
+    async def test_hollow_100_still_flagged(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """A score 100 with too few positive signals SHOULD be flagged."""
+        from agency_audit.loop.qc import flag_suspicious_scores
+
+        # Sparse breakdown — below the threshold.
+        sparse_breakdown = {"robots_allows": 20, "ssl_valid": 5}
+
+        ws = await _seed_website(fresh_db, "sparse-100", score=100, audit_status="audited")
+        await fresh_db.execute(
+            "UPDATE websites SET audit_data = $1::jsonb WHERE id = $2",
+            json.dumps({"score_breakdown": sparse_breakdown}),
+            ws["id"],
+        )
+
+        findings = await flag_suspicious_scores(country=TEST_COUNTRY)
+        finding_ids = {f.website_id for f in findings}
+        assert ws["id"] in finding_ids, (
+            f"Hollow 100 (only {len(sparse_breakdown)} positive signals) should be flagged"
+        )
+
+    async def test_score_100_empty_breakdown_still_flagged(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """A score 100 with an empty score_breakdown SHOULD be flagged."""
+        from agency_audit.loop.qc import flag_suspicious_scores
+
+        ws = await _seed_website(fresh_db, "empty-bd-100", score=100, audit_status="audited")
+        # audit_data defaults to '{}'::jsonb, which means score_breakdown is absent.
+        # But let's be explicit.
+        await fresh_db.execute(
+            "UPDATE websites SET audit_data = '{\"score_breakdown\": {}}'::jsonb WHERE id = $1",
+            ws["id"],
+        )
+
+        findings = await flag_suspicious_scores(country=TEST_COUNTRY)
+        finding_ids = {f.website_id for f in findings}
+        assert ws["id"] in finding_ids, "100 with empty score_breakdown should be flagged"
 
     async def test_detect_duplicates_empty(
         self, fresh_db: asyncpg.Connection, seed_test_country: None
