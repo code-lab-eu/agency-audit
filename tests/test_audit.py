@@ -23,7 +23,9 @@ from agency_audit.audit.anti_scraping import (
     detect_anti_scraping,
 )
 from agency_audit.audit.api_detection import (
+    GRAPHQL_LISTING_PATTERNS,
     _check_jsonld_structured_data,
+    _endpoints_include_listing_api,
     _find_api_endpoints_in_html,
 )
 from agency_audit.audit.auditor import audit_website
@@ -588,10 +590,289 @@ class TestApiDetection:
         endpoints = _find_api_endpoints_in_html(html)
         assert len(endpoints) == 0
 
+    # --- listing API detection ---
 
-# ---------------------------------------------------------------------------
-# Property count
-# ---------------------------------------------------------------------------
+    def test_listing_api_wp_estate_property_endpoint(self):
+        """Endpoint /wp-json/wp/v2/estate_property should be a listing API."""
+        assert _endpoints_include_listing_api(["/wp-json/wp/v2/estate_property"], "") is True
+
+    def test_listing_api_wp_properties_endpoint(self):
+        """Endpoint /wp-json/wp/v2/properties should be a listing API."""
+        assert _endpoints_include_listing_api(["/wp-json/wp/v2/properties"], "") is True
+
+    def test_listing_api_rest_properties(self):
+        """Endpoint /api/properties should be a listing API."""
+        assert _endpoints_include_listing_api(["/api/properties"], "") is True
+
+    def test_listing_api_rest_listings(self):
+        """Endpoint /api/listings should be a listing API."""
+        assert _endpoints_include_listing_api(["/api/listings"], "") is True
+
+    def test_generic_wp_json_root_not_listing_api(self):
+        """A bare /wp-json/ root should NOT be a listing API."""
+        assert _endpoints_include_listing_api(["/wp-json/"], "") is False
+
+    def test_generic_api_v1_not_listing_api(self):
+        """A generic /api/v1/ should NOT be a listing API."""
+        assert _endpoints_include_listing_api(["/api/v1/"], "") is False
+
+    def test_listing_api_in_html(self):
+        """A fetch call to /api/properties in HTML should be detected."""
+        html = '<script>fetch("/api/properties")</script>'
+        assert _endpoints_include_listing_api([], html) is True
+
+    async def test_detect_api_sets_has_listing_api(self):
+        """detect_api should set has_listing_api=True when a listing endpoint is found."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = (
+            "<html><head>"
+            '<script>fetch("/wp-json/wp/v2/estate_property")</script>'
+            "</head><body></body></html>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.detected is True
+        assert result.has_listing_api is True
+
+    async def test_detect_api_generic_no_listing_api(self):
+        """detect_api should NOT set has_listing_api for generic /wp-json/."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = (
+            "<html><head>"
+            '<link rel="https://api.w.org/" href="https://example.com/wp-json/" />'
+            "</head><body></body></html>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.has_listing_api is False
+
+    # --- GraphQL listing API detection ---
+
+    def test_graphql_listing_query_detected(self):
+        """A GraphQL query referencing 'properties' in HTML should be a listing API."""
+        html = "<script>const q = `query { properties { id title } }`</script>"
+        assert _endpoints_include_listing_api(["/graphql"], html) is True
+
+    def test_graphql_listing_query_estate(self):
+        """A GraphQL query referencing 'estate' in HTML should be a listing API."""
+        html = "<script>const q = `query { estate { id } }`</script>"
+        assert _endpoints_include_listing_api(["/graphql"], html) is True
+
+    def test_graphql_type_definition_detected(self):
+        """A GraphQL type definition 'type Property {' in HTML should be a listing API."""
+        html = "<script>const schema = `type Property { id: ID, title: String }`</script>"
+        assert _endpoints_include_listing_api([], html) is True
+
+    def test_graphql_no_connection_without_http(self):
+        """A GraphQL query in HTML without any HTTP should still be detected."""
+        html = "<script>const q = `query { listings { id } }`</script>"
+        assert _endpoints_include_listing_api([], html) is True
+
+    async def test_detect_api_graphql_with_listing_schema(self):
+        """detect_api with GraphQL + listing query should set has_listing_api=True."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = (
+            "<html><head>"
+            "<script>"
+            'const FETCH = (q) => fetch("/graphql", {body: JSON.stringify({query: q})});'
+            "FETCH(`query { properties { totalCount } }`)"
+            "</script>"
+            "</head><body></body></html>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.detected is True
+        # The query {properties...} pattern in HTML marks it as a listing API
+        assert result.has_listing_api is True
+
+    async def test_detect_api_graphql_generic_no_listing_api(self):
+        """GraphQL without property/listing types should NOT set has_listing_api."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = (
+            "<html><head>"
+            "<script>"
+            'const FETCH = (q) => fetch("/graphql", {body: JSON.stringify({query: q})});'
+            "FETCH(`query { users { name } }`)"
+            "</script>"
+            "</head><body></body></html>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.detected is True
+        assert result.has_listing_api is False
+
+    def test_graphql_listing_patterns_known(self):
+        """GRAPHQL_LISTING_PATTERNS should be non-empty and importable."""
+        assert len(GRAPHQL_LISTING_PATTERNS) > 0
+
+    # --- GraphQL named / variable operations ---
+
+    def test_graphql_named_query_listing_detected(self):
+        """A named GraphQL query with properties should be detected."""
+        html = "<script>query SearchListings { properties { id title } }</script>"
+        assert _endpoints_include_listing_api(["/graphql"], html) is True
+
+    def test_graphql_query_with_variables_detected(self):
+        """A GraphQL query with variables referencing listings should be detected."""
+        html = (
+            "<script>query SearchListings($first: Int!, $after: String) "
+            "{ listings { id } }</script>"
+        )
+        assert _endpoints_include_listing_api(["/graphql"], html) is True
+
+    def test_graphql_anonymous_query_with_variables_detected(self):
+        """An anonymous GraphQL query with variables referencing properties should be detected."""
+        html = "<script>query($first: Int) { properties { id } }</script>"
+        assert _endpoints_include_listing_api([], html) is True
+
+    def test_graphql_named_query_estate_detected(self):
+        """A named GraphQL query referencing estate should be detected."""
+        html = "<script>query GetEstates { estate { id price } }</script>"
+        assert _endpoints_include_listing_api([], html) is True
+
+    # --- Versioned REST listing paths ---
+
+    def test_listing_api_versioned_rest_properties(self):
+        """An endpoint /api/v1/properties should be a listing API."""
+        assert _endpoints_include_listing_api(["/api/v1/properties"], "") is True
+
+    def test_listing_api_versioned_rest_listings(self):
+        """An endpoint /api/v2/listings should be a listing API."""
+        assert _endpoints_include_listing_api(["/api/v2/listings"], "") is True
+
+    # --- JSON:API detection (guard removal) ---
+
+    def test_listing_api_jsonapi_in_html_no_endpoints(self):
+        """JSON:API path in HTML should be detected even with empty endpoints list."""
+        html = '<script>fetch("/jsonapi/property")</script>'
+        assert _endpoints_include_listing_api([], html) is True
+
+    async def test_detect_api_jsonapi_listing(self):
+        """detect_api should set has_listing_api for JSON:API property endpoint in HTML."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = '<html><script>fetch("/jsonapi/property")</script></html>'
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.has_listing_api is True
+
+    # --- Versioned REST integration ---
+
+    async def test_detect_api_versioned_rest_listing(self):
+        """detect_api should set has_listing_api for /api/v1/properties in HTML."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = '<html><script>fetch("/api/v1/properties")</script></html>'
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.detected is True
+        assert result.has_listing_api is True
+
+    async def test_detect_api_graphql_named_query_listing(self):
+        """detect_api with a named GraphQL query should set has_listing_api."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = (
+            "<html><head>"
+            "<script>"
+            "const gql = `query SearchListings($first: Int!) { properties { totalCount } }`;"
+            'fetch("/graphql", {body: JSON.stringify({query: gql})})'
+            "</script>"
+            "</head><body></body></html>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        assert result.detected is True
+        assert result.has_listing_api is True
+
+    # --- Regression: JS object literals should NOT match GraphQL patterns ---
+
+    def test_js_object_literal_not_graphql_listing(self):
+        """A plain JS object like `const query = { properties: ... }` must NOT match."""
+        html = "<script>const query = { properties: [] }</script>"
+        assert _endpoints_include_listing_api([], html) is False
+
+    def test_js_object_literal_with_listings_not_detected(self):
+        """const query = { listings: ... } must NOT be detected as listing API."""
+        html = "<script>const query = { listings: [] }</script>"
+        assert _endpoints_include_listing_api([], html) is False
+
+    def test_var_assignment_not_graphql_listing(self):
+        """`var query = { properties: ... }` must NOT match."""
+        html = "<script>var query = { properties: [] }</script>"
+        assert _endpoints_include_listing_api([], html) is False
+
+    def test_let_assignment_not_graphql_listing(self):
+        """`let query = { properties: ... }` must NOT match."""
+        html = "<script>let query = { properties: [] }</script>"
+        assert _endpoints_include_listing_api([], html) is False
+
+    async def test_detect_api_js_object_not_graphql(self):
+        """detect_api must NOT set has_listing_api or api_type=graphql for JS objects."""
+        import httpx
+
+        from agency_audit.audit.api_detection import detect_api
+
+        html = (
+            "<html><head>"
+            "<script>const query = { properties: [], listings: [] };</script>"
+            "</head><body></body></html>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
+        ) as client:
+            result = await detect_api("https://example.com", client=client)
+
+        # Should NOT be flagged as a listing API or graphql endpoint
+        assert result.has_listing_api is False
+        assert result.api_type != "graphql"
 
 
 class TestPropertyCount:
@@ -1402,6 +1683,59 @@ class TestScoring:
         graphql_score, _ = compute_score(graphql_audit)
         assert graphql_score > rest_score
 
+    def test_score_listing_api_bonus(self):
+        """Structured listing API should add extra points on top of generic API."""
+        # Generic REST API with no listing API
+        generic = AuditData(
+            api_detection=ApiDetectionResult(detected=True, api_type="rest", has_listing_api=False),
+            robots=RobotsResult(allows_scraping=True),
+            listing_quality=ListingQualityResult(quality_score=0.5),
+            ssl_valid=True,
+        )
+        # REST API with a structured listing endpoint
+        listing = AuditData(
+            api_detection=ApiDetectionResult(detected=True, api_type="rest", has_listing_api=True),
+            robots=RobotsResult(allows_scraping=True),
+            listing_quality=ListingQualityResult(quality_score=0.5),
+            ssl_valid=True,
+        )
+        generic_score, generic_bd = compute_score(generic)
+        listing_score, listing_bd = compute_score(listing)
+        assert listing_score > generic_score
+        assert "has_listing_api" in listing_bd
+        assert listing_bd["has_listing_api"] == 15
+
+    def test_score_no_listing_api_for_generic(self):
+        """A site with only generic /wp-json/ should NOT get has_listing_api points."""
+        audit = AuditData(
+            api_detection=ApiDetectionResult(detected=True, api_type="rest", has_listing_api=False),
+            robots=RobotsResult(allows_scraping=True),
+            listing_quality=ListingQualityResult(quality_score=0.5),
+            ssl_valid=True,
+        )
+        _, breakdown = compute_score(audit)
+        assert "has_listing_api" not in breakdown
+
+    def test_score_no_listing_api_when_no_api_detected(self):
+        """has_listing_api must NOT score when API detection itself failed.
+
+        A page might match a GraphQL listing pattern in its HTML text
+        (e.g. `type Property { ... }` in an inline schema) without any
+        actual API endpoint being found.  In that case has_listing_api may
+        be True but detected is False — the score must gate on detection."""
+        audit = AuditData(
+            api_detection=ApiDetectionResult(
+                detected=False,
+                api_type=None,
+                has_listing_api=True,
+            ),
+            robots=RobotsResult(allows_scraping=True),
+            listing_quality=ListingQualityResult(quality_score=0.5),
+            ssl_valid=True,
+        )
+        _, breakdown = compute_score(audit)
+        assert "has_listing_api" not in breakdown
+
     def test_score_clamped(self):
         """Score should be clamped to min/max."""
         config = load_scoring_config()
@@ -1557,6 +1891,7 @@ class TestScoring:
             "has_anti_scraping",
             "has_api",
             "has_graphql_api",
+            "has_listing_api",
             "has_structured_data",
             "listings_have_prices",
             "listings_have_locations",
@@ -2126,6 +2461,7 @@ class TestAuditDataToDictContract:
             "cloudflare",
             "recaptcha",
             "has_api",
+            "has_listing_api",
             "api_type",
             "api_url",
             "api_endpoints",
@@ -2162,6 +2498,7 @@ class TestAuditDataToDictContract:
         assert "score" in data
         assert "technology_stack" in data
         assert "listing_quality_score" in data
+        assert "has_listing_api" in data
 
     def test_to_dict_scores_int(self, default_audit: AuditData):
         """score must always be int, score_breakdown must be dict."""
@@ -2191,6 +2528,7 @@ class TestAuditDataToDictContract:
             "cloudflare",
             "recaptcha",
             "has_api",
+            "has_listing_api",
             "api_type",
             "api_url",
             "api_endpoints",

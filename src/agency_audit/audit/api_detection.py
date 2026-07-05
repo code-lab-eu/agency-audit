@@ -32,14 +32,49 @@ API_PATH_PATTERNS = [
     r"/graphql",
     r"/api/graphql",
     r"/.well-known/",
+    r"/jsonapi/",
 ]
 
 # GraphQL indicators in HTML
 GRAPHQL_PATTERNS = [
     r"__NEXT_DATA__.*?graphql",
     r"application/graphql",
-    r"query\s*\{.*?properties",
-    r"query\s*\{.*?listings",
+    # Only match actual GraphQL operations — not JS variable assignments like
+    # `const query = { properties: ... }`.  The sub-pattern allows an optional
+    # operation name (\w+) and/or parenthesised variables between `query` and
+    # `{`, but nothing else.
+    r"query\b\s*(\w+\s*)?(\([^)]*\)\s*)?\{[^}]*properties",
+    r"query\b\s*(\w+\s*)?(\([^)]*\)\s*)?\{[^}]*listings",
+]
+
+# API endpoint paths that indicate a structured real-estate *listing* endpoint
+# (as opposed to a generic /wp-json/ root or /api/v1/ that could serve anything).
+LISTING_API_PATTERNS = [
+    # WordPress REST API with a real-estate custom post type
+    r"/wp-json/wp/v2/(estate_property|property|properties|listing|listings|real[_-]?estate)",
+    # REST API paths that explicitly serve properties or listings
+    r"/api/(properties|listings|property|listing)",
+    # JSON:API with property-type resources
+    r"/jsonapi/(property|listing)",
+    # Versioned REST API listing paths (e.g. /api/v1/properties)
+    r"/api/v\d+/(properties|listings|property|listing)",
+]
+
+# GraphQL patterns that specifically indicate a real-estate listing schema
+# (as opposed to a generic GraphQL endpoint that could serve anything).
+GRAPHQL_LISTING_PATTERNS = [
+    # GraphQL queries referencing property/estate types (handles named,
+    # anonymous, and variable-bearing operations, e.g.
+    #   query SearchListings($first: Int!) { properties { ... } })
+    r"query\b\s*(\w+\s*)?(\([^)]*\)\s*)?\{[^}]*properties",
+    r"query\b\s*(\w+\s*)?(\([^)]*\)\s*)?\{[^}]*listings",
+    r"query\b\s*(\w+\s*)?(\([^)]*\)\s*)?\{[^}]*estate",
+    r"query\b\s*(\w+\s*)?(\([^)]*\)\s*)?\{[^}]*real[_-]?estate",
+    # GraphQL schema / type definitions referencing property/listing types
+    r"type\s+Property\s*[\{\(]",
+    r"type\s+Listing\s*[\{\(]",
+    r"type\s+Estate\s*[\{\(]",
+    r"type\s+RealEstate\s*[\{\(]",
 ]
 
 # JSON-LD schema.org types for real estate
@@ -121,6 +156,26 @@ def _find_api_endpoints_in_html(html_text: str) -> list[str]:
         endpoints.update(matches)
 
     return sorted(endpoints)
+
+
+def _endpoints_include_listing_api(endpoints: list[str], html_text: str) -> bool:
+    """Check whether any detected endpoint or HTML text references a structured
+    real-estate *listing* API (as opposed to a generic API root).
+
+    Checks both REST URL patterns (in endpoints and HTML) and GraphQL
+    property/listing schemas (in HTML)."""
+    # Check endpoints against listing-specific REST patterns
+    for endpoint in endpoints:
+        for pattern in LISTING_API_PATTERNS:
+            if re.search(pattern, endpoint, re.IGNORECASE):
+                return True
+
+    # Check HTML text for listing-specific REST patterns
+    if any(re.search(pattern, html_text, re.IGNORECASE) for pattern in LISTING_API_PATTERNS):
+        return True
+
+    # Check HTML text for GraphQL property/listing schema evidence
+    return any(re.search(pattern, html_text, re.IGNORECASE) for pattern in GRAPHQL_LISTING_PATTERNS)
 
 
 async def _probe_graphql(
@@ -209,6 +264,12 @@ async def detect_api(
                 result.api_type = "graphql"
                 result.api_url = graphql_url
                 result.endpoints_found.append(graphql_url)
+
+        # Detect structured listing API (separate from generic API detection).
+        # Run unconditionally — html_text may contain listing indicators even
+        # when no endpoints were collected (e.g. JSON:API paths not in
+        # API_PATH_PATTERNS, or GraphQL listings exposed via a named query).
+        result.has_listing_api = _endpoints_include_listing_api(result.endpoints_found, html_text)
 
     except Exception as exc:
         logger.warning("API detection failed for %s: %s", base_url, exc)
