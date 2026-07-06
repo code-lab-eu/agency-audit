@@ -19,5 +19,8 @@
                 aria-label="Refresh discovery for {{ ci.label }}">↻</button>
         {% endif %}
         {% if error %}<div class="text-danger small mt-1">{{ error }}</div>{% endif %}
+        {% if ci.discovery_status == 'failed' and ci.discovery_error %}
+        <div class="text-danger small mt-1">{{ ci.discovery_error }}</div>
+        {% endif %}
     </td>
 </tr>

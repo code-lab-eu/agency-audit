@@ -782,17 +782,51 @@ async def test_run_city_discovery_marks_failed_on_error(fresh_db: asyncpg.Connec
         # Discovery uses the city's stored country, not a caller-supplied ISO.
         assert pipeline.discover_city.call_args.kwargs["country_iso"] == "BG"
 
-        # Verify the city was marked 'failed' in the real database.
+        # Verify the city was marked 'failed' with error stored.
         from agency_audit.db import get_pool
 
         pool = await get_pool()
         async with pool.acquire() as conn:
-            status = await conn.fetchval(
-                "SELECT discovery_status FROM cities WHERE id = $1", sofia_id
+            row = await conn.fetchrow(
+                "SELECT discovery_status, discovery_error FROM cities WHERE id = $1",
+                sofia_id,
             )
-        assert status == "failed"
+        assert row["discovery_status"] == "failed"
+        assert row["discovery_error"] == "boom"
 
         pipeline.close.assert_awaited_once()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# HTMX: rendered row shows discovery error for failed cities
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_htmx_city_row_shows_discovery_error(
+    client: TestClient,
+    sofia_city_id: int,
+) -> None:
+    """When a city failed with a stored error, the row HTML shows the message."""
+    import asyncio
+
+    # Write the failed state directly so the web app's pool sees it.
+    async def _seed() -> None:
+        conn = await asyncpg.connect(dsn=settings.dsn)
+        try:
+            await conn.execute(
+                "UPDATE cities SET discovery_status = 'failed', "
+                "discovery_error = 'Geocoding API not enabled' WHERE id = $1",
+                sofia_city_id,
+            )
+        finally:
+            await conn.close()
+
+    asyncio.run(_seed())
+
+    response = client.get(f"/htmx/country/BG/cities/{sofia_city_id}/row")
+    assert response.status_code == 200
+    assert "Geocoding API not enabled" in response.text
+    assert "Failed" in response.text  # status badge
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -13,3 +13,4 @@ ALTER TABLE cities ADD COLUMN IF NOT EXISTS viewport_low_lat  NUMERIC(9, 6);
 ALTER TABLE cities ADD COLUMN IF NOT EXISTS viewport_low_lng  NUMERIC(9, 6);
 ALTER TABLE cities ADD COLUMN IF NOT EXISTS viewport_high_lat NUMERIC(9, 6);
 ALTER TABLE cities ADD COLUMN IF NOT EXISTS viewport_high_lng NUMERIC(9, 6);
+ALTER TABLE cities ADD COLUMN IF NOT EXISTS discovery_error TEXT;
