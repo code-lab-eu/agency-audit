@@ -71,16 +71,12 @@ def parse_geonames_line(line: str) -> dict | None:
         return None
 
     name = fields[GEONAMES_COLUMNS["asciiname"]] or fields[GEONAMES_COLUMNS["name"]]
-    lat = float(fields[GEONAMES_COLUMNS["latitude"]])
-    lng = float(fields[GEONAMES_COLUMNS["longitude"]])
 
     return {
         "country": country_code,
         "label": name,
         "slug": _slugify(name),
         "population": population,
-        "latitude": lat,
-        "longitude": lng,
     }
 
 
@@ -146,20 +142,15 @@ async def import_geonames(
     console.print(f"[green]Found {len(cities)} cities to import.[/]")
 
     # Batch insert using executemany
-    rows = [
-        (c["country"], c["label"], c["slug"], c["population"], c["latitude"], c["longitude"])
-        for c in cities
-    ]
+    rows = [(c["country"], c["label"], c["slug"], c["population"]) for c in cities]
 
     await conn.executemany(
         """
-        INSERT INTO cities (country, label, slug, population, latitude, longitude)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO cities (country, label, slug, population)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (country, slug) DO UPDATE SET
             label = EXCLUDED.label,
-            population = EXCLUDED.population,
-            latitude = EXCLUDED.latitude,
-            longitude = EXCLUDED.longitude
+            population = EXCLUDED.population
         """,
         rows,
     )
@@ -193,19 +184,14 @@ async def import_geonames_for_countries(
             results[code] = 0
             continue
 
-        rows_data = [
-            (c["country"], c["label"], c["slug"], c["population"], c["latitude"], c["longitude"])
-            for c in cities
-        ]
+        rows_data = [(c["country"], c["label"], c["slug"], c["population"]) for c in cities]
         await conn.executemany(
             """
-            INSERT INTO cities (country, label, slug, population, latitude, longitude)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO cities (country, label, slug, population)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT (country, slug) DO UPDATE SET
                 label = EXCLUDED.label,
-                population = EXCLUDED.population,
-                latitude = EXCLUDED.latitude,
-                longitude = EXCLUDED.longitude
+                population = EXCLUDED.population
             """,
             rows_data,
         )

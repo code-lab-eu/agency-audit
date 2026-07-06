@@ -133,9 +133,9 @@ async def _test_brussels_city(fresh_db: asyncpg.Connection) -> int:
     city_id: int | None = await fresh_db.fetchval(
         """\
         INSERT INTO cities (country, label, slug, population,
-                            latitude, longitude, discovery_status)
+                            discovery_status)
         VALUES ('BE', 'Brussels (test)', 'test-brussels',
-                1000000, 50.85, 4.35, 'pending')
+                1000000, 'pending')
         RETURNING id
         """
     )

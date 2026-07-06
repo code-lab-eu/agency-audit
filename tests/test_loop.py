@@ -37,8 +37,8 @@ async def seed_test_country(fresh_db: asyncpg.Connection) -> None:
         TEST_COUNTRY,
     )
     await fresh_db.execute(
-        "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
-        "VALUES ($1, 'Test City', 'test-city', 1000, 0, 0) "
+        "INSERT INTO cities (country, label, slug, population) "
+        "VALUES ($1, 'Test City', 'test-city', 1000) "
         "ON CONFLICT (country, slug) DO NOTHING",
         TEST_COUNTRY,
     )
@@ -379,8 +379,8 @@ class TestQC:
 
         # Insert second test city
         city2_id = await fresh_db.fetchval(
-            "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
-            "VALUES ($1, 'Test City 2', 'test-city-2', 2000, 1, 1) "
+            "INSERT INTO cities (country, label, slug, population) "
+            "VALUES ($1, 'Test City 2', 'test-city-2', 2000) "
             "ON CONFLICT (country, slug) DO UPDATE SET id = cities.id "
             "RETURNING id",
             TEST_COUNTRY,
@@ -540,8 +540,8 @@ class TestReaudit:
 
         # Insert second test city
         await fresh_db.fetchval(
-            "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
-            "VALUES ($1, 'Test City 2', 'test-city-2', 2000, 1, 1) "
+            "INSERT INTO cities (country, label, slug, population) "
+            "VALUES ($1, 'Test City 2', 'test-city-2', 2000) "
             "ON CONFLICT (country, slug) DO UPDATE SET id = cities.id "
             "RETURNING id",
             TEST_COUNTRY,

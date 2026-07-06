@@ -196,8 +196,8 @@ class TestReauditWithResults:
         # Insert an ES city for a non-BG control — country 'ES' exists in the
         # reference seed (44 countries), but has no cities yet.
         madrid_id = await fresh_db.fetchval(
-            "INSERT INTO cities (country, label, slug, population, latitude, longitude) "
-            "VALUES ('ES', 'Madrid', 'madrid', 3200000, 40.4168, -3.7038) RETURNING id"
+            "INSERT INTO cities (country, label, slug, population) "
+            "VALUES ('ES', 'Madrid', 'madrid', 3200000) RETURNING id"
         )
         assert madrid_id is not None
 
