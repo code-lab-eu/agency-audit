@@ -179,6 +179,7 @@ async def _country_detail(pool: asyncpg.Pool, iso: str) -> dict[str, Any] | None
             """
             SELECT
                 ci.id, ci.label, ci.slug, ci.population, ci.discovery_status,
+                ci.discovery_error,
                 COUNT(DISTINCT wc.website_id) AS website_count,
                 COUNT(DISTINCT CASE WHEN w.audit_status = 'audited'
                     THEN wc.website_id END) AS audited_count
@@ -186,7 +187,8 @@ async def _country_detail(pool: asyncpg.Pool, iso: str) -> dict[str, Any] | None
             LEFT JOIN website_cities wc ON wc.city_id = ci.id
             LEFT JOIN websites w ON w.id = wc.website_id
             WHERE ci.country = $1
-            GROUP BY ci.id, ci.label, ci.slug, ci.population, ci.discovery_status
+            GROUP BY ci.id, ci.label, ci.slug, ci.population,
+                     ci.discovery_status, ci.discovery_error
             ORDER BY ci.population DESC
             """,
             iso.upper(),
@@ -213,6 +215,7 @@ async def _city_row_data(pool: asyncpg.Pool, city_id: int, iso: str) -> dict[str
             """
             SELECT
                 ci.id, ci.label, ci.slug, ci.population, ci.discovery_status,
+                ci.discovery_error,
                 COUNT(DISTINCT wc.website_id) AS website_count,
                 COUNT(DISTINCT CASE WHEN w.audit_status = 'audited'
                     THEN wc.website_id END) AS audited_count
@@ -220,7 +223,8 @@ async def _city_row_data(pool: asyncpg.Pool, city_id: int, iso: str) -> dict[str
             LEFT JOIN website_cities wc ON wc.city_id = ci.id
             LEFT JOIN websites w ON w.id = wc.website_id
             WHERE ci.id = $1 AND ci.country = $2
-            GROUP BY ci.id, ci.label, ci.slug, ci.population, ci.discovery_status
+            GROUP BY ci.id, ci.label, ci.slug, ci.population,
+                     ci.discovery_status, ci.discovery_error
             """,
             city_id,
             iso.upper(),
@@ -257,11 +261,16 @@ async def _run_city_discovery(city_id: int, iso: str) -> None:
             city_slug=row["slug"],
             country_iso=row["country"],
         )
-    except Exception:
+        # Success: clear any stale error from a prior failed run.
+        async with pool.acquire() as conn:
+            await conn.execute("UPDATE cities SET discovery_error = NULL WHERE id = $1", city_id)
+    except Exception as exc:
         logger.exception("Background discovery failed for city %s", city_id)
         async with pool.acquire() as conn:
             await conn.execute(
-                "UPDATE cities SET discovery_status = 'failed' WHERE id = $1", city_id
+                "UPDATE cities SET discovery_status = 'failed', discovery_error = $2 WHERE id = $1",
+                city_id,
+                str(exc),
             )
     finally:
         await pipeline.close()
@@ -524,7 +533,8 @@ async def htmx_discover_city(
     # so we never enqueue duplicate Google Places runs for the same city.
     async with pool.acquire() as conn:
         transitioned = await conn.fetchval(
-            "UPDATE cities SET discovery_status = 'in_progress' "
+            "UPDATE cities SET discovery_status = 'in_progress', "
+            "discovery_error = NULL "
             "WHERE id = $1 AND country = $2 AND discovery_status <> 'in_progress' "
             "RETURNING id",
             city_id,
