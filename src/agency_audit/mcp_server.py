@@ -63,8 +63,8 @@ async def get_next_city(country: str | None = None) -> dict[str, Any]:
             highest-population pending city from any country is returned.
 
     Returns:
-        City dict with id, country, label, slug, population, latitude,
-        longitude — or {"error": "no pending cities"} if none available.
+        City dict with id, country, label, slug, population
+        — or {"error": "no pending cities"} if none available.
     """
     pool = await get_pool()
     where = "discovery_status = 'pending'"
@@ -84,7 +84,7 @@ async def get_next_city(country: str | None = None) -> dict[str, Any]:
             LIMIT 1
             FOR UPDATE SKIP LOCKED
         )
-        RETURNING id, country, label, slug, population, latitude, longitude
+        RETURNING id, country, label, slug, population
         """,
         *params,
     )

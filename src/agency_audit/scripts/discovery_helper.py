@@ -15,8 +15,8 @@ import json
 import os
 import sys
 
-os.chdir("/opt/data/workspace/agency-audit")
-sys.path.insert(0, "src")
+_here = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+sys.path.insert(0, os.path.join(_here, "src"))
 from agency_audit.db import get_pool  # noqa: E402  (import after sys.path setup)
 
 
@@ -160,7 +160,7 @@ async def list_pending(country_iso: str | None = None, limit: int = 5):
     async with pool.acquire() as conn:
         if country_iso:
             rows = await conn.fetch(
-                """SELECT id, label, country, population, latitude, longitude
+                """SELECT id, label, country, population
                    FROM cities
                    WHERE discovery_status = 'pending' AND country = $1
                    ORDER BY population DESC LIMIT $2""",
@@ -169,10 +169,10 @@ async def list_pending(country_iso: str | None = None, limit: int = 5):
             )
         else:
             rows = await conn.fetch(
-                """SELECT id, label, country, population, latitude, longitude
+                """SELECT id, label, country, population
                    FROM cities
                    WHERE discovery_status = 'pending'
-                   ORDER BY population DESC LIMIT $2""",
+                   ORDER BY population DESC LIMIT $1""",
                 limit,
             )
         return [dict(r) for r in rows]
@@ -223,4 +223,6 @@ async def main():
 
 
 if __name__ == "__main__":
+    if os.path.isdir(_here):
+        os.chdir(_here)
     asyncio.run(main())
