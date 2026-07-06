@@ -18,9 +18,7 @@ CREATE TABLE IF NOT EXISTS cities (
     country    TEXT NOT NULL REFERENCES countries(iso) ON DELETE CASCADE,
     label      TEXT NOT NULL,
     slug       TEXT NOT NULL,
-    population INTEGER NOT NULL,
-    latitude   NUMERIC(9, 6),
-    longitude  NUMERIC(9, 6)
+    population INTEGER NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cities_country_slug ON cities (country, slug);

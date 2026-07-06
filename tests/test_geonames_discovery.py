@@ -34,8 +34,6 @@ class TestParseGeonamesLine:
         assert result["label"] == "Sofia"
         assert result["slug"] == "sofia"
         assert result["population"] == 1236047
-        assert result["latitude"] == 42.69751
-        assert result["longitude"] == 23.32415
 
     def test_non_populated_place(self):
         """Feature class != 'P' should be filtered out."""
@@ -356,23 +354,26 @@ class TestGeonamesAsync:
 
         # Verify the specific rows we inserted exist with correct values
         row = await db_conn.fetchrow(
-            "SELECT label, slug, population, latitude, longitude FROM cities "
-            "WHERE country = 'BG' AND slug = 'sofia'"
+            "SELECT label, slug, population FROM cities WHERE country = 'BG' AND slug = 'sofia'"
         )
         assert row is not None
         assert row["label"] == "Sofia"
         assert row["population"] == 1236047
-        assert float(row["latitude"]) == 42.69751
+
+        # latitude and longitude columns are no longer part of the cities table
+        sofia_full = await db_conn.fetchrow(
+            "SELECT * FROM cities WHERE country = 'BG' AND slug = 'sofia'"
+        )
+        assert sofia_full is not None
+        assert "latitude" not in sofia_full
+        assert "longitude" not in sofia_full
 
         row = await db_conn.fetchrow(
-            "SELECT label, slug, population, latitude, longitude FROM cities "
-            "WHERE country = 'BG' AND slug = 'plovdiv'"
+            "SELECT label, slug, population FROM cities WHERE country = 'BG' AND slug = 'plovdiv'"
         )
         assert row is not None
         assert row["label"] == "Plovdiv"
         assert row["population"] == 346893
-        assert float(row["latitude"]) == 42.15
-        assert float(row["longitude"]) == 24.75
 
     @pytest.mark.asyncio
     async def test_import_geonames_upsert(self, db_conn):
@@ -403,14 +404,11 @@ class TestGeonamesAsync:
         count1 = await import_geonames(db_conn, zip_content=buf1.getvalue())
         assert count1 == 1
 
-        rows = await db_conn.fetch(
-            "SELECT label, population, latitude, longitude FROM cities WHERE slug = 'sofia'"
-        )
+        rows = await db_conn.fetch("SELECT label, population FROM cities WHERE slug = 'sofia'")
         assert len(rows) == 1
         assert rows[0]["population"] == 1000000
-        assert float(rows[0]["latitude"]) == 42.69751
 
-        # Second import: same Sofia but population changed to 2000000, lat/lng also changed
+        # Second import: same Sofia but population changed to 2000000
         buf2 = io.BytesIO()
         with zipfile.ZipFile(buf2, "w") as zf:
             zf.writestr(
@@ -422,13 +420,9 @@ class TestGeonamesAsync:
         assert count2 == 1
 
         # Should still be exactly one row — updated, not duplicated
-        rows = await db_conn.fetch(
-            "SELECT label, population, latitude, longitude FROM cities WHERE slug = 'sofia'"
-        )
+        rows = await db_conn.fetch("SELECT label, population FROM cities WHERE slug = 'sofia'")
         assert len(rows) == 1
         assert rows[0]["population"] == 2000000
-        assert float(rows[0]["latitude"]) == 43.0
-        assert float(rows[0]["longitude"]) == 24.0
 
     @pytest.mark.asyncio
     async def test_import_geonames_empty(self, db_conn):
