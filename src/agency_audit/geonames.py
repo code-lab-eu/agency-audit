@@ -23,8 +23,6 @@ GEONAMES_COLUMNS = {
     "name": 1,
     "asciiname": 2,
     "alternatenames": 3,
-    "latitude": 4,
-    "longitude": 5,
     "feature_class": 6,
     "feature_code": 7,
     "country_code": 8,
