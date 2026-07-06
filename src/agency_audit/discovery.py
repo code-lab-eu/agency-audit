@@ -667,6 +667,14 @@ class DiscoveryPipeline:
                     f"{len(found_places)} total unique"
                 )
 
+            except httpx.HTTPStatusError as e:
+                # Hard auth / permission failure — abort the city so it
+                # surfaces via the run_for_countries failure path rather
+                # than being swallowed into an empty "done" with no signal.
+                if e.response.status_code in (401, 403):
+                    raise
+                logger.error(f"Error searching '{search_query}': {e}")
+                continue
             except Exception as e:
                 logger.error(f"Error searching '{search_query}': {e}")
                 continue
@@ -814,8 +822,11 @@ class DiscoveryPipeline:
                     )
                     async with pool.acquire() as conn:
                         await conn.execute(
-                            "UPDATE cities SET discovery_status = 'failed' WHERE id = $1",
+                            "UPDATE cities SET discovery_status = 'failed',"
+                            " discovery_error = $2"
+                            " WHERE id = $1",
                             city_id,
+                            str(e),
                         )
                     # Count the attempt toward the per-country cap so one
                     # geocoding outage doesn't consume the entire pending queue.

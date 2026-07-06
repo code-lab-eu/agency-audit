@@ -17,6 +17,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
+import httpx
 import pytest
 
 from agency_audit.discovery import (
@@ -911,3 +912,58 @@ class TestDiscoveryPipelineDB:
             "SELECT COUNT(*) FROM websites WHERE maps_place_id = 'shared-pid'"
         )
         assert count == 1, "Shared place_id should be inserted exactly once"
+
+    async def test_places_auth_failure_marks_city_failed_with_reason(
+        self,
+        fresh_db: asyncpg.Connection,
+    ) -> None:
+        """A Places API auth/permission error (401/403) propagates to
+        city 'failed' with the reason, not silently swallowed into 'done'."""
+        city_id = await _seed_test_city(fresh_db, "test-places-auth-fail")
+
+        # Build an httpx.HTTPStatusError mimicking a 403 PERMISSION_DENIED
+        # from the Places API.
+        request = httpx.Request("POST", "https://places.googleapis.com/v1/places:searchText")
+        response = httpx.Response(
+            403,
+            json={
+                "error": {
+                    "code": 403,
+                    "message": "Places API is not enabled for this API key.",
+                    "status": "PERMISSION_DENIED",
+                }
+            },
+            request=request,
+        )
+        auth_error = httpx.HTTPStatusError(
+            "403 Forbidden",
+            request=request,
+            response=response,
+        )
+
+        places_client = PlacesAPIClient(api_key="test")
+        places_client.close = AsyncMock()
+
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
+        pipeline.search_tiled = AsyncMock(side_effect=auth_error)
+
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=1)
+
+        # City must be marked failed, not done
+        status = await fresh_db.fetchval(
+            "SELECT discovery_status FROM cities WHERE id = $1", city_id
+        )
+        assert status == "failed", f"Expected 'failed', got '{status}'"
+
+        # The error reason must be persisted
+        error_reason = await fresh_db.fetchval(
+            "SELECT discovery_error FROM cities WHERE id = $1", city_id
+        )
+        assert error_reason is not None, "discovery_error must be set"
+        assert "403" in error_reason
+        assert "Forbidden" in error_reason
+
+        # The failed attempt counts toward the cap
+        assert result["cities_processed"] == 1
+        assert result["agencies_found"] == 0
