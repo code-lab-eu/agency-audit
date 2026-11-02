@@ -7,22 +7,14 @@
             <th>Website</th>
             <th class="text-end">Score</th>
             <th>Status</th>
+            <th class="text-end">Actions</th>
         </tr>
     </thead>
     <tbody>
         {% for w in websites %}
-        <tr onclick="window.location='/website/{{ w.id }}'">
-            <td>
-                <strong>{{ w.label or w.url }}</strong>
-                <br><small class="text-muted">{{ w.url }}</small>
-            </td>
-            <td class="text-end">
-                <span class="{{ w.score | score_color }}">{{ w.score }}</span>
-            </td>
-            <td>{{ w.audit_status | status_badge }}</td>
-        </tr>
+        {% include "_website_row.html" %}
         {% else %}
-        <tr><td colspan="3" class="text-muted text-center py-3">No websites discovered yet</td></tr>
+        <tr><td colspan="4" class="text-muted text-center py-3">No websites discovered yet</td></tr>
         {% endfor %}
     </tbody>
 </table>

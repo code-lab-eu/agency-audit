@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
 import pytest
@@ -462,6 +462,138 @@ def test_htmx_country_websites(client: TestClient, _seed_bg_website: int) -> Non
     assert 'id="websites-table"' in response.text
     assert "discoveryComplete from:body" in response.text
     assert "Example BG Agency" in response.text
+    assert "Actions</th>" in response.text
+    assert f"/htmx/country/BG/websites/{_seed_bg_website}/audit" in response.text
+
+
+# ──────────────────────────────────────────────────────────────────────
+# HTMX per-website audit button
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _fake_audit_result(score: int) -> MagicMock:
+    result = MagicMock()
+    result.score = score
+    result.to_dict.return_value = {"score": score, "modules": {}}
+    return result
+
+
+async def _fetch_website(website_id: int) -> asyncpg.Record:
+    """Read a website row on a fresh connection (sync tests run their own loop)."""
+    conn = await asyncpg.connect(dsn=settings.dsn)
+    try:
+        row = await conn.fetchrow("SELECT * FROM websites WHERE id = $1", website_id)
+    finally:
+        await conn.close()
+    assert row is not None
+    return row
+
+
+async def _set_audit_status(website_id: int, status: str) -> None:
+    conn = await asyncpg.connect(dsn=settings.dsn)
+    try:
+        await conn.execute(
+            "UPDATE websites SET audit_status = $1 WHERE id = $2", status, website_id
+        )
+    finally:
+        await conn.close()
+
+
+def test_htmx_audit_website_success(client: TestClient, _seed_bg_website: int) -> None:
+    """Clicking the button returns an 'auditing' row; the audit then stores the score."""
+    # One event loop for both requests: the app's pool is bound to the loop it was created on.
+    with client:
+        with patch(
+            "agency_audit.loop.orchestrator.retry",
+            new_callable=AsyncMock,
+            return_value=_fake_audit_result(77),
+        ) as mock_retry:
+            response = client.post(f"/htmx/country/BG/websites/{_seed_bg_website}/audit")
+
+        assert response.status_code == 200
+        assert "Auditing" in response.text
+        assert 'hx-trigger="every 3s"' in response.text
+        mock_retry.assert_awaited_once()
+        assert mock_retry.await_args is not None
+        assert mock_retry.await_args.args[1] == "https://test-bg.example.com"
+
+        # Polling the row after the audit shows the new score and stops polling.
+        row_response = client.get(f"/htmx/country/BG/websites/{_seed_bg_website}/row")
+        assert row_response.status_code == 200
+        assert ">77<" in row_response.text
+        assert "every 3s" not in row_response.text
+        assert f"/htmx/country/BG/websites/{_seed_bg_website}/audit" in row_response.text
+
+    row = asyncio.run(_fetch_website(_seed_bg_website))
+    assert row["audit_status"] == "audited"
+    assert row["score"] == 77
+    assert row["last_audited_at"] is not None
+
+
+def test_htmx_audit_website_failure_marks_failed(client: TestClient, _seed_bg_website: int) -> None:
+    """An audit that fails after retries marks the row 'failed' with the error."""
+    with patch(
+        "agency_audit.loop.orchestrator.retry",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("Server disconnected"),
+    ):
+        response = client.post(f"/htmx/country/BG/websites/{_seed_bg_website}/audit")
+    assert response.status_code == 200
+
+    row = asyncio.run(_fetch_website(_seed_bg_website))
+    assert row["audit_status"] == "failed"
+    assert row["audit_last_error"] == "Server disconnected"
+    assert row["audit_attempts"] == 1
+    assert row["score"] == 42  # previous score is kept
+
+
+def test_htmx_audit_website_unexpected_error_does_not_leave_row_auditing(
+    client: TestClient, _seed_bg_website: int
+) -> None:
+    """If storing the result itself blows up, the row is still marked 'failed'."""
+    with patch(
+        "agency_audit.loop.orchestrator.audit_and_store_website",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("db gone"),
+    ):
+        client.post(f"/htmx/country/BG/websites/{_seed_bg_website}/audit")
+
+    row = asyncio.run(_fetch_website(_seed_bg_website))
+    assert row["audit_status"] == "failed"
+    assert row["audit_last_error"] == "db gone"
+
+
+def test_htmx_audit_website_already_auditing_does_not_start_second_audit(
+    client: TestClient, _seed_bg_website: int
+) -> None:
+    asyncio.run(_set_audit_status(_seed_bg_website, "auditing"))
+    with patch("agency_audit.loop.orchestrator.retry", new_callable=AsyncMock) as mock_retry:
+        response = client.post(f"/htmx/country/BG/websites/{_seed_bg_website}/audit")
+    assert response.status_code == 200
+    assert "Auditing" in response.text
+    mock_retry.assert_not_awaited()
+
+
+def test_htmx_audit_website_wrong_country_or_missing_is_404(
+    client: TestClient, _seed_bg_website: int
+) -> None:
+    with (
+        client,
+        patch("agency_audit.loop.orchestrator.retry", new_callable=AsyncMock) as mock_retry,
+    ):
+        assert client.post(f"/htmx/country/BE/websites/{_seed_bg_website}/audit").status_code == 404
+        assert client.post("/htmx/country/BG/websites/999999/audit").status_code == 404
+        assert client.get(f"/htmx/country/BE/websites/{_seed_bg_website}/row").status_code == 404
+    mock_retry.assert_not_awaited()
+
+
+def test_htmx_website_row_polls_while_auditing(client: TestClient, _seed_bg_website: int) -> None:
+    asyncio.run(_set_audit_status(_seed_bg_website, "auditing"))
+    response = client.get(f"/htmx/country/BG/websites/{_seed_bg_website}/row")
+    assert response.status_code == 200
+    assert 'hx-trigger="every 3s"' in response.text
+    assert "spinner-border" in response.text
+    assert "/audit" not in response.text
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -167,6 +167,49 @@ async def _country_websites(pool: asyncpg.Pool, iso: str) -> list[dict[str, Any]
     return [dict(r) for r in rows]
 
 
+async def _website_row_data(pool: asyncpg.Pool, website_id: int, iso: str) -> dict[str, Any] | None:
+    """One row of a country's Websites table, or None if the website is not in that country."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT w.id, w.url, w.label, w.score, w.audit_status
+            FROM websites w
+            WHERE w.id = $1
+              AND EXISTS (
+                  SELECT 1 FROM website_cities wc
+                  JOIN cities ci ON ci.id = wc.city_id
+                  WHERE wc.website_id = w.id AND ci.country = $2
+              )
+            """,
+            website_id,
+            iso.upper(),
+        )
+    return dict(row) if row else None
+
+
+async def _run_website_audit(website_id: int, url: str) -> None:
+    """Background task: audit one website and store the result.
+
+    ``audit_and_store_website`` marks the row ``audited`` or ``failed``. If even
+    that bookkeeping raises (e.g. the database dropped), mark the row ``failed``
+    so its polling row stops spinning instead of staying ``auditing`` forever.
+    """
+    from agency_audit.loop.orchestrator import audit_and_store_website
+
+    pool = await get_pool()
+    try:
+        await audit_and_store_website(pool, website_id, url)
+    except Exception as exc:
+        logger.exception("Dashboard audit failed for website %d", website_id)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE websites SET audit_status = 'failed', audit_last_error = $1 "
+                "WHERE id = $2 AND audit_status = 'auditing'",
+                str(exc)[:500],
+                website_id,
+            )
+
+
 async def _country_detail(pool: asyncpg.Pool, iso: str) -> dict[str, Any] | None:
     async with pool.acquire() as conn:
         country = await conn.fetchrow(
@@ -585,6 +628,58 @@ async def htmx_country_websites(request: Request, iso: str):
         request,
         "_websites_table.html",
         {"websites": websites, "iso": iso},
+    )
+
+
+@app.post(
+    "/htmx/country/{iso}/websites/{website_id}/audit",
+    response_class=HTMLResponse,
+)
+async def htmx_audit_website(
+    request: Request,
+    iso: str,
+    website_id: int,
+    background_tasks: BackgroundTasks,
+):
+    """Trigger an audit for a single website in the background and return its row."""
+    pool = await get_pool()
+    website = await _website_row_data(pool, website_id, iso)
+    if website is None:
+        return HTMLResponse("Not found", status_code=404)
+
+    # Atomic, idempotent transition: only the request that flips the row into
+    # 'auditing' enqueues an audit, so double-clicks never start two audits.
+    async with pool.acquire() as conn:
+        transitioned = await conn.fetchval(
+            "UPDATE websites SET audit_status = 'auditing' "
+            "WHERE id = $1 AND audit_status <> 'auditing' RETURNING id",
+            website_id,
+        )
+    if transitioned is not None:
+        background_tasks.add_task(_run_website_audit, website_id, website["url"])
+
+    website["audit_status"] = "auditing"
+    return templates.TemplateResponse(
+        request,
+        "_website_row.html",
+        {"w": website, "iso": iso},
+    )
+
+
+@app.get(
+    "/htmx/country/{iso}/websites/{website_id}/row",
+    response_class=HTMLResponse,
+)
+async def htmx_website_row(request: Request, iso: str, website_id: int):
+    """Re-render a single website row. Auditing rows poll this until the audit ends."""
+    pool = await get_pool()
+    website = await _website_row_data(pool, website_id, iso)
+    if website is None:
+        return HTMLResponse("Not found", status_code=404)
+    return templates.TemplateResponse(
+        request,
+        "_website_row.html",
+        {"w": website, "iso": iso},
     )
 
 
