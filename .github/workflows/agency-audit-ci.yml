@@ -19,22 +19,26 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10
+
+      # Install the exact versions pinned in uv.lock (same as local dev and
+      # scripts/qa.sh). --locked fails if uv.lock is out of date with
+      # pyproject.toml instead of silently resolving newer releases.
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+        run: uv sync --locked --extra dev
 
       - name: Lint (ruff)
-        run: ruff check src/ tests/
+        run: uv run --extra dev ruff check src/ tests/
 
       - name: Format check (ruff)
-        run: ruff format --check src/ tests/
+        run: uv run --extra dev ruff format --check src/ tests/
 
       - name: No new DB mocks in tests
-        run: python scripts/check_test_db_mocks.py
+        run: uv run python scripts/check_test_db_mocks.py
 
       - name: Type check (mypy)
-        run: mypy src/
+        run: uv run --extra dev mypy src/
 
   test:
     needs: quality
@@ -64,10 +68,14 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10
+
+      # Install the exact versions pinned in uv.lock (same as local dev and
+      # scripts/qa.sh). --locked fails if uv.lock is out of date with
+      # pyproject.toml instead of silently resolving newer releases.
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+        run: uv sync --locked --extra dev
 
       - name: Set up test database
         env:
@@ -76,7 +84,7 @@ jobs:
           AGENCY_AUDIT_PG_USER: testuser
           AGENCY_AUDIT_PG_PASSWORD: testpass
           AGENCY_AUDIT_PG_DATABASE: testdb
-        run: python scripts/seed-test-db.py
+        run: uv run python scripts/seed-test-db.py
 
       - name: Run tests with coverage
         env:
@@ -86,7 +94,7 @@ jobs:
           AGENCY_AUDIT_PG_PASSWORD: testpass
           AGENCY_AUDIT_PG_DATABASE: testdb
         run: |
-          pytest \
+          uv run --extra dev pytest \
             --cov=src/agency_audit \
             --cov-report=term-missing \
             --cov-report=xml \
@@ -98,5 +106,5 @@ jobs:
         run: |
           echo "## Coverage Report" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          coverage report 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          uv run --extra dev coverage report 2>&1 | tee -a $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
