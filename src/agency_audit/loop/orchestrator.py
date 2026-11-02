@@ -22,6 +22,8 @@ import logging
 import time
 from typing import Any
 
+import asyncpg
+
 from agency_audit.audit.auditor import audit_website
 from agency_audit.db import get_pool
 from agency_audit.discovery import DiscoveryPipeline, PlacesAPIClient
@@ -310,6 +312,57 @@ async def run_all_countries(
 # ──────────────────────────────────────────────────────────────────────
 
 
+async def audit_and_store_website(pool: asyncpg.Pool, website_id: int, url: str) -> str | None:
+    """Audit one website (retrying up to 3 times) and store the outcome.
+
+    On success the score and audit data are saved and the row is marked
+    ``audited``; on failure the row is marked ``failed`` with the error and its
+    ``audit_attempts`` counter is incremented. Shared by the country loop and
+    the dashboard's per-website audit button so both behave identically.
+
+    Returns:
+        ``None`` on success, otherwise the error message.
+    """
+    try:
+        audit_result = await retry(
+            audit_website,
+            url,
+            max_attempts=3,
+            base_delay=2.0,
+        )
+
+        async with pool.acquire() as c:
+            await c.execute(
+                """UPDATE websites
+                   SET audit_data = $1::jsonb,
+                       score = $2,
+                       audit_status = 'audited',
+                       last_audited_at = now(),
+                       audit_attempts = 0,
+                       audit_last_error = NULL
+                   WHERE id = $3""",
+                json.dumps(audit_result.to_dict()),
+                audit_result.score,
+                website_id,
+            )
+        logger.info("Audit succeeded: %s (score=%d)", url, audit_result.score)
+        return None
+
+    except Exception as exc:
+        logger.error("Audit failed for %s: %s", url, exc)
+        async with pool.acquire() as c:
+            await c.execute(
+                """UPDATE websites
+                   SET audit_status = 'failed',
+                       audit_last_error = $1,
+                       audit_attempts = audit_attempts + 1
+                   WHERE id = $2""",
+                str(exc)[:500],
+                website_id,
+            )
+        return str(exc)
+
+
 async def _audit_country_websites(
     country_iso: str,
     concurrency: int = 3,
@@ -350,50 +403,12 @@ async def _audit_country_websites(
     async def _audit_one(wid: int, url: str) -> None:
         nonlocal succeeded, failed
         async with semaphore:
-            try:
-                # Retry up to 3 times
-                audit_result = await retry(
-                    audit_website,
-                    url,
-                    max_attempts=3,
-                    base_delay=2.0,
-                )
-
-                # Store result in DB
-                async with pool.acquire() as c:
-                    await c.execute(
-                        """UPDATE websites
-                           SET audit_data = $1::jsonb,
-                               score = $2,
-                               audit_status = 'audited',
-                               last_audited_at = now(),
-                               audit_attempts = 0,
-                               audit_last_error = NULL
-                           WHERE id = $3""",
-                        json.dumps(audit_result.to_dict()),
-                        audit_result.score,
-                        wid,
-                    )
+            error = await audit_and_store_website(pool, wid, url)
+            if error is None:
                 succeeded += 1
-                logger.info("Audit succeeded: %s (score=%d)", url, audit_result.score)
-
-            except Exception as exc:
+            else:
                 failed += 1
-                error_msg = f"{url}: {exc}"
-                errors.append(error_msg)
-                logger.error("Audit failed for %s: %s", url, exc)
-
-                # Mark as failed after retries exhausted
-                async with pool.acquire() as c:
-                    await c.execute(
-                        """UPDATE websites
-                           SET audit_status = 'failed',
-                               audit_last_error = $1,
-                               audit_attempts = audit_attempts + 1
-                           WHERE id = $2""",
-                        str(exc)[:500],
-                        wid,
-                    )
+                errors.append(f"{url}: {error}")
 
     tasks = [_audit_one(row["id"], row["url"]) for row in rows]
     await asyncio.gather(*tasks)
