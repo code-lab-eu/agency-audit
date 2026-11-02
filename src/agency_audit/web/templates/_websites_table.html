@@ -5,6 +5,7 @@
     <thead class="table-light">
         <tr>
             <th>Website</th>
+            <th>City</th>
             <th class="text-end">Score</th>
             <th>Status</th>
         </tr>
@@ -16,13 +17,14 @@
                 <strong>{{ w.label or w.url }}</strong>
                 <br><small class="text-muted">{{ w.url }}</small>
             </td>
+            <td>{{ w.cities }}</td>
             <td class="text-end">
                 <span class="{{ w.score | score_color }}">{{ w.score }}</span>
             </td>
             <td>{{ w.audit_status | status_badge }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="3" class="text-muted text-center py-3">No websites discovered yet</td></tr>
+        <tr><td colspan="4" class="text-muted text-center py-3">No websites discovered yet</td></tr>
         {% endfor %}
     </tbody>
 </table>

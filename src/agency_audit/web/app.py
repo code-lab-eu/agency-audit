@@ -151,15 +151,22 @@ async def _country_list(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 
 
 async def _country_websites(pool: asyncpg.Pool, iso: str) -> list[dict[str, Any]]:
-    """Websites discovered for a country, highest score first."""
+    """Websites discovered for a country, highest score first.
+
+    ``cities`` lists every city in the country the website was discovered in
+    (comma-separated, alphabetical); a website found in several cities still
+    appears once.
+    """
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT w.id, w.url, w.label, w.score, w.audit_status
+            SELECT w.id, w.url, w.label, w.score, w.audit_status,
+                   string_agg(DISTINCT ci.label, ', ' ORDER BY ci.label) AS cities
             FROM websites w
             JOIN website_cities wc ON wc.website_id = w.id
             JOIN cities ci ON ci.id = wc.city_id
             WHERE ci.country = $1
+            GROUP BY w.id
             ORDER BY w.score DESC, w.label
             """,
             iso.upper(),

@@ -462,6 +462,31 @@ def test_htmx_country_websites(client: TestClient, _seed_bg_website: int) -> Non
     assert 'id="websites-table"' in response.text
     assert "discoveryComplete from:body" in response.text
     assert "Example BG Agency" in response.text
+    assert "<th>City</th>" in response.text
+    assert "<td>Sofia</td>" in response.text
+
+
+@pytest.mark.asyncio
+async def test_country_websites_lists_each_site_once_with_all_cities(
+    fresh_db: asyncpg.Connection, _app_pool: asyncpg.Pool, _seed_bg_website: int
+) -> None:
+    """A website discovered in two cities appears once, with both city names."""
+    from agency_audit.web.app import _country_websites
+
+    plovdiv_id = await fresh_db.fetchval(
+        "SELECT id FROM cities WHERE country = 'BG' AND slug = 'plovdiv'"
+    )
+    assert plovdiv_id is not None, "Plovdiv must exist in the seeded database"
+    await fresh_db.execute(
+        "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)",
+        _seed_bg_website,
+        plovdiv_id,
+    )
+
+    websites = await _country_websites(_app_pool, "BG")
+    assert len(websites) == 1
+    assert websites[0]["id"] == _seed_bg_website
+    assert websites[0]["cities"] == "Plovdiv, Sofia"
 
 
 # ──────────────────────────────────────────────────────────────────────
