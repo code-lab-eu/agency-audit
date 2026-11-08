@@ -177,6 +177,7 @@ agency-audit/
     qa.sh                     # Full local QA gate (lint + format + mypy + tests); run before every push
   pyproject.toml              # Project metadata, deps, ruff, pytest, mypy config
   docker-compose.yml          # Local PostgreSQL 16
+  quadlet/                    # Podman Quadlet units (see README)
   .github/workflows/agency-audit-ci.yml  # CI: lint, format check, mypy
 ```
 

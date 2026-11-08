@@ -106,6 +106,14 @@ PublishPort=
 PublishPort=127.0.0.1:8123:8000
 ```
 
+After a change to the units, check them with a dry run of the Quadlet
+generator, which prints the systemd units without installing them. The path of
+the generator differs between distributions:
+
+```bash
+QUADLET_UNIT_DIRS="$PWD/quadlet" /usr/lib/systemd/system-generators/podman-system-generator --user --dryrun
+```
+
 ## Configuration
 
 All configuration is read from environment variables prefixed with
