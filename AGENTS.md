@@ -26,7 +26,8 @@ country-by-country through the orchestrator.
 ## Branch and PR discipline (non-negotiable)
 
 - ALWAYS create a feature branch off master before touching any code:
-  `git checkout master && git pull && git checkout -b fix/<slug>` or `feat/<slug>`.
+  `git checkout master && git pull && git checkout -b bug/<slug>` or
+  `feature/<slug>`.
 - NEVER push directly to master. Not for small fixes, not for typos, not ever.
 - When your work is complete, push your branch and open a pull request against
   master. Do NOT merge the PR yourself — the gate runs, a human reviews.
