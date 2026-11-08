@@ -37,7 +37,7 @@ class TestHelpText:
     def test_db_init_help(self):
         result = runner.invoke(app, ["db-init", "--help"])
         assert result.exit_code == 0
-        assert "Apply migrations" in result.output
+        assert "Apply pending migrations" in result.output
 
     def test_seed_countries_help(self):
         result = runner.invoke(app, ["seed-countries", "--help"])
@@ -535,7 +535,10 @@ def test_serve_command_executes():
         mock_server = mock_server_cls.return_value
         mock_server.run = MagicMock()  # prevent actual server start
 
-        with patch("agency_audit.cli.asyncio.run"):
+        with (
+            patch("agency_audit.cli._migrate_database"),
+            patch("agency_audit.cli.asyncio.run"),
+        ):
             result = runner.invoke(app, ["serve", "--host", "127.0.0.1", "--port", "9999"])
             assert result.exit_code == 0
             assert "Starting Agency Audit dashboard" in result.output
@@ -548,7 +551,10 @@ def test_serve_default_bind_address():
         mock_server = mock_server_cls.return_value
         mock_server.run = MagicMock()
 
-        with patch("agency_audit.cli.asyncio.run"):
+        with (
+            patch("agency_audit.cli._migrate_database"),
+            patch("agency_audit.cli.asyncio.run"),
+        ):
             result = runner.invoke(app, ["serve"])
             assert result.exit_code == 0
             # Verify uvicorn.Config received host="127.0.0.1"
@@ -559,3 +565,36 @@ def test_serve_default_bind_address():
 
             if isinstance(config_call[0][0], Config):
                 assert config_call[0][0].host == "127.0.0.1"
+
+
+def test_serve_applies_migrations_before_start():
+    """serve applies the pending migrations before the server starts."""
+    calls = MagicMock()
+    with (
+        patch("uvicorn.Server") as mock_server_cls,
+        patch("agency_audit.cli._migrate_database", calls.migrate),
+        patch("agency_audit.cli.asyncio.run"),
+    ):
+        mock_server_cls.return_value.run = calls.run
+        result = runner.invoke(app, ["serve"])
+        assert result.exit_code == 0
+        assert [c[0] for c in calls.mock_calls] == ["migrate", "run"]
+
+
+def test_db_init_applies_migrations():
+    """db-init applies the pending migrations."""
+    with patch("agency_audit.cli._migrate_database") as mock_migrate:
+        result = runner.invoke(app, ["db-init"])
+        assert result.exit_code == 0
+        mock_migrate.assert_called_once_with()
+
+
+def test_serve_does_not_start_when_migrations_fail():
+    """A failed migration stops serve before the server starts."""
+    with (
+        patch("uvicorn.Server") as mock_server_cls,
+        patch("agency_audit.cli._migrate_database", side_effect=OSError("no database")),
+    ):
+        result = runner.invoke(app, ["serve"])
+        assert result.exit_code != 0
+        mock_server_cls.assert_not_called()

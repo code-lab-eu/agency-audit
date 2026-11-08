@@ -55,6 +55,7 @@ Dockerfile
 .dockerignore
 docker-compose*.yml
 docker-compose*.yaml
+quadlet/
 
 # Lockfiles (only need requirements.txt)
 uv.lock

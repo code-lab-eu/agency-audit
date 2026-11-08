@@ -44,12 +44,12 @@ agency-audit application serving the dashboard.
    docker compose up -d --build
    ```
 
-   The dashboard is available at <http://localhost:8000>.
+   The dashboard is available at <http://localhost:8000>. It applies the
+   database migrations when it starts.
 
-3. Initialize the database and load reference data:
+3. Load the reference data:
 
    ```bash
-   docker compose exec app agency-audit db-init
    docker compose exec app agency-audit seed-countries
    docker compose exec app agency-audit import-geonames
    ```
@@ -60,6 +60,51 @@ agency-audit application serving the dashboard.
    curl http://localhost:8000/health
    docker compose exec app agency-audit stats
    ```
+
+### Podman Quadlet
+
+**Prerequisites:** Linux with systemd and Podman 6.1 or newer.
+
+The unit files are in `quadlet/`: the image build, the application, the
+PostgreSQL container with its volume, and their network. Only the dashboard is
+published, on `127.0.0.1:8000`; the database is not reachable from the host.
+
+1. Create the database password and the Google Maps API key as podman secrets:
+   ```bash
+   openssl rand -hex 32 | podman secret create agency-audit-db-password -
+   read -rs KEY && printf %s "$KEY" | podman secret create agency-audit-google-maps-api-key -
+   ```
+
+2. Link the unit directory into the Podman configuration of your user, load the
+   units and start the stack. The first start builds the image:
+   ```bash
+   mkdir -p ~/.config/containers/systemd
+   ln -s "$PWD/quadlet" ~/.config/containers/systemd/agency-audit
+   systemctl --user daemon-reload
+   systemctl --user start agency-audit
+   ```
+   Quadlet follows the link and resolves the build context `..` of
+   `agency-audit.build` against the repository. `podman quadlet install` copies
+   the units without the repository, so do not use it here.
+
+3. Load the reference data:
+   ```bash
+   podman exec agency-audit agency-audit seed-countries
+   podman exec agency-audit agency-audit import-geonames
+   ```
+
+The stack starts at boot when systemd starts your user instance at boot:
+`loginctl enable-linger "$USER"`.
+
+To publish the dashboard on another address or port, create
+`~/.config/containers/systemd/agency-audit.container.d/settings.conf` and run
+`systemctl --user daemon-reload`. The empty `PublishPort=` removes the default:
+
+```ini
+[Container]
+PublishPort=
+PublishPort=127.0.0.1:8123:8000
+```
 
 ## Configuration
 

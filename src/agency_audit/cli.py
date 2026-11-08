@@ -28,7 +28,12 @@ app = typer.Typer(
 
 @app.command("db-init")
 def db_init():
-    """Apply migrations to a fresh database."""
+    """Apply pending migrations to the database, new or existing."""
+    _migrate_database()
+
+
+def _migrate_database() -> None:
+    """Apply the migrations that the database does not have yet."""
 
     async def _run():
         conn = await asyncpg.connect(dsn=settings.dsn)
@@ -135,6 +140,9 @@ def serve(
 ):
     """Start the FastAPI + HTMX web dashboard.
 
+    The migrations that the database does not have yet are applied first, as
+    db-init does, so a new version of the code starts on an up-to-date schema.
+
     Structured JSON logging is enabled by default (set AGENCY_AUDIT_LOG_FORMAT=console
     for human-readable output). The server handles SIGTERM/SIGINT gracefully: it stops
     accepting new requests, finishes in-flight ones, and closes the database pool.
@@ -150,6 +158,8 @@ def serve(
         settings.log_level = log_level
 
     setup_logging()
+
+    _migrate_database()
 
     console.print(f"[cyan]Starting Agency Audit dashboard on http://{host}:{port} ...[/]")
     if settings.log_format == "json":

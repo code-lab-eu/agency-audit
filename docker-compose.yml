@@ -15,7 +15,9 @@ services:
       - pgdata:/var/lib/postgresql
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${AGENCY_AUDIT_PG_USER:-agency_audit}"]
+      # Over TCP: the temporary server of the first start only listens on the
+      # Unix socket and must not count as ready.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${AGENCY_AUDIT_PG_USER:-agency_audit}"]
       interval: 5s
       timeout: 5s
       retries: 5

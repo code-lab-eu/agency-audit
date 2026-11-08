@@ -1,0 +1,32 @@
+[Unit]
+Description=PostgreSQL database of Agency Audit
+
+[Container]
+ContainerName=agency-audit-db
+Image=docker.io/library/postgres:18-alpine
+Environment=POSTGRES_USER=agency_audit
+Environment=POSTGRES_DB=agency_audit
+Environment=POSTGRES_PASSWORD_FILE=/run/secrets/db_password
+Network=agency-audit.network
+# The Agency Audit container connects to the host name "db". No port is
+# published: only the containers of the network reach the database.
+NetworkAlias=db
+# PostgreSQL 18 keeps its data in a subdirectory of /var/lib/postgresql that
+# is named after the major version, such as 18/docker.
+Volume=agency-audit-db.volume:/var/lib/postgresql
+# Over TCP: during its first start the image runs a temporary server that only
+# listens on the Unix socket, and that server must not count as ready.
+HealthCmd=pg_isready -h 127.0.0.1 -U agency_audit -d agency_audit
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=5
+HealthStartPeriod=30s
+# systemd counts the unit as started when the health check passes, so the
+# Agency Audit container is started after the database accepts connections.
+Notify=healthy
+Secret=agency-audit-db-password,target=db_password
+
+[Service]
+Restart=always
+# The first start downloads the image, which has to fit in this time.
+TimeoutStartSec=900

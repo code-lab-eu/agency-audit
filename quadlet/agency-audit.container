@@ -1,0 +1,30 @@
+[Unit]
+Description=Agency Audit
+Requires=agency-audit-db.container
+After=agency-audit-db.container
+
+[Container]
+ContainerName=agency-audit
+# The command of the image applies the database migrations, then starts the
+# dashboard on port 8000.
+Image=agency-audit.build
+Environment=AGENCY_AUDIT_PG_HOST=db
+Network=agency-audit.network
+# Loopback only by default: the dashboard has no login. A host sets its own
+# address and port in a drop-in file.
+PublishPort=127.0.0.1:8000:8000
+HealthCmd=curl -f http://localhost:8000/health
+HealthInterval=10s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=30s
+# systemd counts the unit as started when the health check passes.
+Notify=healthy
+Secret=agency-audit-db-password,type=env,target=AGENCY_AUDIT_PG_PASSWORD
+Secret=agency-audit-google-maps-api-key,type=env,target=AGENCY_AUDIT_GOOGLE_MAPS_API_KEY
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
