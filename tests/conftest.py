@@ -23,6 +23,8 @@ Architecture
   template into a private, uniquely named database, redirects
   ``get_pool()`` onto it, applies the overridable ``seed_reference`` /
   ``seed_scenario`` fixtures, and drops the database on teardown.
+- ``cd_tmp_path`` (function, sync) — runs the test from an empty temporary
+  directory, so ``Settings`` does not read the developer's ``.env``.
 
 This design avoids event-loop mismatch errors and connection-concurrency
 issues while keeping session-scoped container startup (one container per
@@ -333,6 +335,19 @@ async def db_conn(
     finally:
         await tr.rollback()
         await conn.close()
+
+
+@pytest.fixture
+def cd_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Run the test from an empty temporary directory.
+
+    ``Settings`` reads ``.env`` relative to the working directory, so without
+    this fixture a test sees the values in the developer's own ``.env``. The
+    fixture has the name and behaviour of the one in the test suite of
+    pydantic-settings. pytest restores the working directory afterwards.
+    """
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
 
 
 # ---------------------------------------------------------------------------

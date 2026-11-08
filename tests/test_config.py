@@ -114,6 +114,7 @@ class TestSettingsValidation:
         s.ensure_ready_for("all")
 
 
+@pytest.mark.usefixtures("cd_tmp_path")
 class TestSettingsDefaults:
     """Tests for default configuration values."""
 

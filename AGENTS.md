@@ -204,6 +204,11 @@ agency-audit/
 - **Mocking database:** Patch `agency_audit.*.get_pool` with an async mock
   (see `tests/test_loop.py` for the pattern).  The default test run must NEVER
   require a live PostgreSQL instance
+- **Settings and `.env`:** `Settings()` reads `.env` from the working
+  directory, so a test that checks values from `Settings()` sees the
+  developer's own `.env`. Use the `cd_tmp_path` fixture (`tests/conftest.py`),
+  which runs the test from an empty temporary directory, as the test suite of
+  pydantic-settings does
 - **Test structure:** Module-level test files mirror source layout
   (`test_audit.py` → `src/agency_audit/audit/`, `test_loop.py` →
   `src/agency_audit/loop/`)
