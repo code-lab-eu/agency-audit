@@ -292,6 +292,13 @@ class TestSettingsEnvOverride:
         assert s.audit_concurrency == 12
         assert isinstance(s.audit_concurrency, int)
 
+    def test_password_trailing_newline_is_stripped(self, monkeypatch):
+        """A secret passed with a trailing newline must not keep the newline."""
+        monkeypatch.setenv("AGENCY_AUDIT_PG_PASSWORD", "s3cret\n")
+        s = Settings()
+        assert s.pg_password == "s3cret"
+        assert _dsn_parts(s.dsn)["password"] == "s3cret"
+
     def test_float_env_var_parsing(self, monkeypatch):
         """Float fields should be parsed from string env var values."""
         monkeypatch.setenv("AGENCY_AUDIT_PLACES_RATE_LIMIT_QPS", "3.5")

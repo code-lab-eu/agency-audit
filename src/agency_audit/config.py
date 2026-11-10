@@ -28,6 +28,9 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # A podman secret created from `openssl rand ... | podman secret create`
+        # keeps the trailing newline, which would end up in the password.
+        str_strip_whitespace=True,
     )
 
     # -- PostgreSQL connection ------------------------------------------------
