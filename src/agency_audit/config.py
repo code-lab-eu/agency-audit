@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     # ── Places tiling / discovery knobs ──────────────────────
     # How many layers of recursive quadtree subdivision before giving up
     places_tile_max_depth: int = 3
-    # Minimum result count in a tile to consider it "saturated" (stop subdividing)
+    # Result count at which a tile is "saturated" and is subdivided further
     places_tile_saturation_threshold: int = 60
     # Hard cap on Places API calls per city during tiled discovery
     places_max_calls_per_city: int = 200
