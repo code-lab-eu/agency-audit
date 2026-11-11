@@ -468,6 +468,20 @@ def test_htmx_country_websites(client: TestClient, _seed_bg_website: int) -> Non
     assert f"/htmx/country/BG/websites/{_seed_bg_website}/audit" in response.text
 
 
+async def test_htmx_country_websites_lists_multi_city_website_once(
+    client: TestClient, fresh_db: asyncpg.Connection, _seed_bg_website: int
+) -> None:
+    """A website linked to two cities of one country is one row, not one per city."""
+    await fresh_db.execute(
+        "INSERT INTO website_cities (website_id, city_id) "
+        "SELECT $1, id FROM cities WHERE country = 'BG' AND slug = 'plovdiv'",
+        _seed_bg_website,
+    )
+    response = client.get("/htmx/country/BG/websites")
+    assert response.status_code == 200
+    assert response.text.count(f"window.location='/website/{_seed_bg_website}'") == 1
+
+
 # ──────────────────────────────────────────────────────────────────────
 # HTMX per-website audit button
 # ──────────────────────────────────────────────────────────────────────

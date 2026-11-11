@@ -157,9 +157,11 @@ async def _country_websites(pool: asyncpg.Pool, iso: str) -> list[dict[str, Any]
             """
             SELECT w.id, w.url, w.label, w.score, w.audit_status
             FROM websites w
-            JOIN website_cities wc ON wc.website_id = w.id
-            JOIN cities ci ON ci.id = wc.city_id
-            WHERE ci.country = $1
+            WHERE EXISTS (
+                SELECT 1 FROM website_cities wc
+                JOIN cities ci ON ci.id = wc.city_id
+                WHERE wc.website_id = w.id AND ci.country = $1
+            )
             ORDER BY w.score DESC, w.label
             """,
             iso.upper(),
