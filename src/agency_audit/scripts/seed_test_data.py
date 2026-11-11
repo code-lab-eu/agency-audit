@@ -6,6 +6,7 @@ import json
 import asyncpg
 
 from agency_audit.config import settings
+from agency_audit.urls import website_key
 
 
 async def main():
@@ -104,7 +105,9 @@ async def main():
     ]
 
     for url, label, score, status, audit_data in websites:
-        existing = await conn.fetchval("SELECT id FROM websites WHERE url = $1", url)
+        existing = await conn.fetchval(
+            "SELECT id FROM websites WHERE url_key = $1", website_key(url)
+        )
         if existing:
             await conn.execute(
                 "UPDATE websites SET score=$1, audit_status=$2, audit_data=$3::jsonb, "
@@ -117,9 +120,10 @@ async def main():
             wid = existing
         else:
             wid = await conn.fetchval(
-                "INSERT INTO websites (url, label, score, audit_status, audit_data, "
-                "last_audited_at) VALUES ($1, $2, $3, $4, $5::jsonb, now()) RETURNING id",
+                "INSERT INTO websites (url, url_key, label, score, audit_status, audit_data, "
+                "last_audited_at) VALUES ($1, $2, $3, $4, $5, $6::jsonb, now()) RETURNING id",
                 url,
+                website_key(url),
                 label,
                 score,
                 status,

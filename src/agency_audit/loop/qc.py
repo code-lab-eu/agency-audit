@@ -2,7 +2,7 @@
 
 Detects:
   - Suspicious scores (0 or 100 — likely errors or insufficient data)
-  - Duplicate domains across different cities
+  - Websites linked to several cities (agency chains)
   - Websites needing manual review
 
 Flags issues on the websites table via needs_review / review_reason / qc_checks columns.
@@ -14,7 +14,6 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
 
 from agency_audit.db import get_pool
 
@@ -129,23 +128,13 @@ async def flag_suspicious_scores(country: str | None = None) -> list[QCFinding]:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _extract_domain(url: str) -> str:
-    """Extract the normalized domain from a URL."""
-    parsed = urlparse(url)
-    domain = parsed.netloc or parsed.path.split("/")[0]
-    domain = domain.lower()
-    # Remove www. prefix for comparison
-    if domain.startswith("www."):
-        domain = domain[4:]
-    return domain
-
-
 async def detect_duplicates(country: str | None = None) -> list[QCFinding]:
-    """Detect websites with the same domain appearing in multiple cities.
+    """Detect websites linked to several cities.
 
     A real estate agency might have branches in many cities with the same
-    corporate website. This is normal but should be flagged so we don't
-    count it as a new discovery each time.
+    corporate website. Discovery stores such a website once (one row per
+    ``websites.url_key``) and links it to every city; this check flags those
+    websites for review.
 
     Args:
         country: Optional ISO country code to scope the check to.
@@ -157,7 +146,7 @@ async def detect_duplicates(country: str | None = None) -> list[QCFinding]:
     findings: list[QCFinding] = []
 
     async with pool.acquire() as conn:
-        # Find domains that appear for multiple cities
+        # Find websites linked to several cities
         query = """SELECT w.url,
                       COUNT(DISTINCT wc.city_id) AS city_count,
                       ARRAY_AGG(DISTINCT c.label ORDER BY c.label) AS cities,
@@ -171,7 +160,7 @@ async def detect_duplicates(country: str | None = None) -> list[QCFinding]:
             query += " AND c.country = $1"
             params.append(country)
         query += (
-            "\n               GROUP BY w.url"
+            "\n               GROUP BY w.id, w.url"
             "\n               HAVING COUNT(DISTINCT wc.city_id) > 1"
             "\n               ORDER BY city_count DESC"
         )
@@ -183,7 +172,7 @@ async def detect_duplicates(country: str | None = None) -> list[QCFinding]:
             website_ids = row["website_ids"]
             city_count = row["city_count"]
 
-            reason = f"Same domain in {city_count} cities: {', '.join(cities)}"
+            reason = f"Same website in {city_count} cities: {', '.join(cities)}"
             findings.append(
                 QCFinding(
                     website_id=website_ids[0],

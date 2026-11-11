@@ -18,6 +18,7 @@ import asyncpg
 from fastmcp import FastMCP
 
 from agency_audit.db import get_pool
+from agency_audit.urls import clean_website_url, website_key
 
 logger = logging.getLogger(__name__)
 
@@ -140,19 +141,21 @@ async def report_website(
             return {"error": f"city not found: {city}"}
         city_id = city_row["id"]
 
-        # Insert or fetch website
-        existing = await conn.fetchrow("SELECT id FROM websites WHERE url = $1", url)
+        # Insert or fetch website: one row per website key
+        url_key = website_key(url)
+        existing = await conn.fetchrow("SELECT id FROM websites WHERE url_key = $1", url_key)
         created = False
         if existing:
             website_id = existing["id"]
         else:
             website_id = await conn.fetchval(
                 """
-                INSERT INTO websites (url, label, maps_place_id, address, phone)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO websites (url, url_key, label, maps_place_id, address, phone)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING id
                 """,
-                url,
+                clean_website_url(url),
+                url_key,
                 name,
                 place_id,
                 address,

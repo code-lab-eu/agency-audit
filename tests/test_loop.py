@@ -20,6 +20,8 @@ from unittest.mock import AsyncMock, patch
 import asyncpg
 import pytest
 
+from agency_audit.urls import website_key
+
 # ──────────────────────────────────────────────────────────────────────
 # Test data helpers
 # ──────────────────────────────────────────────────────────────────────
@@ -66,12 +68,12 @@ async def _seed_website(
     defaults["url"] = url  # URL always has the prefix
 
     website_id = await conn.fetchval(
-        """INSERT INTO websites (url, label, score, audit_status,
+        """INSERT INTO websites (url, url_key, label, score, audit_status,
                                  audit_attempts, audit_last_error,
                                  needs_review, review_reason,
                                  last_audited_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (url) DO UPDATE
+           VALUES ($1, $10, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (url_key) DO UPDATE
            SET score = $3, audit_status = $4,
                audit_attempts = $5, audit_last_error = $6,
                needs_review = $7, review_reason = $8,
@@ -86,6 +88,7 @@ async def _seed_website(
         defaults.get("needs_review", False),
         defaults.get("review_reason"),
         defaults.get("last_audited_at"),
+        website_key(defaults["url"]),
     )
 
     # Link to the first city in the requested country
@@ -242,16 +245,6 @@ class TestRetry:
 class TestQC:
     """Tests for quality control checks."""
 
-    def test_extract_domain(self):
-        """_extract_domain should normalize URLs correctly."""
-        from agency_audit.loop.qc import _extract_domain
-
-        assert _extract_domain("https://www.example.com/page") == "example.com"
-        assert _extract_domain("https://example.com") == "example.com"
-        assert _extract_domain("http://www.example.co.uk/path") == "example.co.uk"
-        assert _extract_domain("https://subdomain.example.com") == "subdomain.example.com"
-        assert _extract_domain("HTTP://WWW.EXAMPLE.COM") == "example.com"
-
     async def test_flag_suspicious_scores_empty(
         self, fresh_db: asyncpg.Connection, seed_test_country: None
     ):
@@ -387,11 +380,12 @@ class TestQC:
         )
         url = f"{TEST_URL_PREFIX}duplicate-agency"
         wid = await fresh_db.fetchval(
-            """INSERT INTO websites (url, label, audit_status)
-               VALUES ($1, 'Dup Agency', 'audited')
-               ON CONFLICT (url) DO UPDATE SET audit_status = 'audited'
+            """INSERT INTO websites (url, url_key, label, audit_status)
+               VALUES ($1, $2, 'Dup Agency', 'audited')
+               ON CONFLICT (url_key) DO UPDATE SET audit_status = 'audited'
                RETURNING id""",
             url,
+            website_key(url),
         )
         # Get the first test city ID
         city1_id = await fresh_db.fetchval(
@@ -413,7 +407,7 @@ class TestQC:
         assert len(findings) == 1, f"Expected exactly 1 finding, got: {findings}"
         assert findings[0].url == url
         assert findings[0].severity == "info"
-        assert "2 cities" in findings[0].reason
+        assert findings[0].reason.startswith("Same website in 2 cities: ")
 
         # Verify DB was updated with needs_review
         row = await fresh_db.fetchrow(
@@ -549,13 +543,14 @@ class TestReaudit:
         old_date = datetime.now(UTC) - timedelta(days=45)
         url = f"{TEST_URL_PREFIX}multi-city-agency"
         wid = await fresh_db.fetchval(
-            """INSERT INTO websites (url, label, score, audit_status, last_audited_at)
-               VALUES ($1, 'Multi-City Agency', 80, 'audited', $2)
-               ON CONFLICT (url) DO UPDATE
+            """INSERT INTO websites (url, url_key, label, score, audit_status, last_audited_at)
+               VALUES ($1, $3, 'Multi-City Agency', 80, 'audited', $2)
+               ON CONFLICT (url_key) DO UPDATE
                SET score = 80, audit_status = 'audited', last_audited_at = $2
                RETURNING id""",
             url,
             old_date,
+            website_key(url),
         )
         city1_id = await fresh_db.fetchval(
             "SELECT id FROM cities WHERE country = $1 AND slug = 'test-city'",

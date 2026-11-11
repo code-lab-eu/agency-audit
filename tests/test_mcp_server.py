@@ -129,6 +129,27 @@ async def test_report_website_idempotent_url(fresh_db: asyncpg.Connection) -> No
     assert r2["created"] is False
 
 
+async def test_report_website_ignores_tracking_parameters(fresh_db: asyncpg.Connection) -> None:
+    """Links that differ only by tracking parameters are one website."""
+    r1 = await report_website(
+        url="https://www.test-track.example.com/?utm_campaign=gmb+sofia",
+        name="Track Agency",
+        city="sofia",
+    )
+    r2 = await report_website(
+        url="http://test-track.example.com/?utm_campaign=gmb+plovdiv&gclid=x",
+        name="Track Agency",
+        city="plovdiv",
+    )
+    assert r1["website_id"] == r2["website_id"]
+    assert r2["created"] is False
+    row = await fresh_db.fetchrow(
+        "SELECT url, url_key FROM websites WHERE id = $1", r1["website_id"]
+    )
+    assert row["url"] == "https://www.test-track.example.com/"
+    assert row["url_key"] == "test-track.example.com"
+
+
 async def test_report_website_unknown_city(fresh_db: asyncpg.Connection) -> None:
     result = await report_website(
         url="https://test-unknown.example.com",

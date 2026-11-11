@@ -32,8 +32,9 @@ class TestQCMarkForReview:
         from agency_audit.loop.qc import mark_for_manual_review
 
         website_id = await fresh_db.fetchval(
-            "INSERT INTO websites (url, label) "
-            "VALUES ('https://test-mr1.example.com', 'Test MR1') RETURNING id"
+            "INSERT INTO websites (url, url_key, label) "
+            "VALUES ('https://test-mr1.example.com', 'test-mr1.example.com', "
+            "'Test MR1') RETURNING id"
         )
         assert website_id is not None
         await mark_for_manual_review(website_id, "test reason", severity="warning")
@@ -54,8 +55,9 @@ class TestQCMarkForReview:
         from agency_audit.loop.qc import mark_for_manual_review
 
         website_id = await fresh_db.fetchval(
-            "INSERT INTO websites (url, label) "
-            "VALUES ('https://test-mr2.example.com', 'Test MR2') RETURNING id"
+            "INSERT INTO websites (url, url_key, label) "
+            "VALUES ('https://test-mr2.example.com', 'test-mr2.example.com', "
+            "'Test MR2') RETURNING id"
         )
         assert website_id is not None
         await mark_for_manual_review(website_id, "critical issue", severity="error")
@@ -126,13 +128,15 @@ class TestQCGetWebsitesNeedingReview:
 
         # Insert one website flagged for review, one not.
         await fresh_db.execute(
-            "INSERT INTO websites (url, label, score, needs_review, review_reason, qc_checks) "
-            "VALUES ('https://test-review.example.com', 'Test Review', 0, true, "
+            "INSERT INTO websites (url, url_key, label, "
+            "score, needs_review, review_reason, qc_checks) "
+            "VALUES ('https://test-review.example.com', 'test-review.example.com', "
+            "'Test Review', 0, true, "
             "'Suspicious score 0', '[{\"check\":\"suspicious_score\"}]'::jsonb)"
         )
         await fresh_db.execute(
-            "INSERT INTO websites (url, label, score, needs_review) "
-            "VALUES ('https://test-ok.example.com', 'Test OK', 85, false)"
+            "INSERT INTO websites (url, url_key, label, score, needs_review) "
+            "VALUES ('https://test-ok.example.com', 'test-ok.example.com', 'Test OK', 85, false)"
         )
 
         result = await get_websites_needing_review()
@@ -162,9 +166,10 @@ class TestReauditWithResults:
 
         # Insert an audited website with an old last_audited_at date.
         website_id = await fresh_db.fetchval(
-            "INSERT INTO websites (url, label, score, audit_status, "
+            "INSERT INTO websites (url, url_key, label, score, audit_status, "
             "needs_review, last_audited_at, audit_attempts) "
-            "VALUES ('https://test-old.example.com', 'Old Agency', 50, 'audited', "
+            "VALUES ('https://test-old.example.com', 'test-old.example.com', "
+            "'Old Agency', 50, 'audited', "
             "false, now() - INTERVAL '45 days', 0) RETURNING id"
         )
         assert website_id is not None
@@ -203,9 +208,9 @@ class TestReauditWithResults:
 
         # Two BG websites — overdue, linked to seeded BG cities.
         w1 = await fresh_db.fetchval(
-            "INSERT INTO websites (url, label, score, audit_status, "
+            "INSERT INTO websites (url, url_key, label, score, audit_status, "
             "needs_review, last_audited_at, audit_attempts) "
-            "VALUES ('https://test-a.example.com', 'A', 60, 'audited', "
+            "VALUES ('https://test-a.example.com', 'test-a.example.com', 'A', 60, 'audited', "
             "false, now() - INTERVAL '40 days', 0) RETURNING id"
         )
         assert w1 is not None
@@ -213,9 +218,9 @@ class TestReauditWithResults:
             "INSERT INTO website_cities (website_id, city_id) VALUES ($1, $2)", w1, sofia_id
         )
         w2 = await fresh_db.fetchval(
-            "INSERT INTO websites (url, label, score, audit_status, "
+            "INSERT INTO websites (url, url_key, label, score, audit_status, "
             "needs_review, last_audited_at, audit_attempts) "
-            "VALUES ('https://test-b.example.com', 'B', 70, 'audited', "
+            "VALUES ('https://test-b.example.com', 'test-b.example.com', 'B', 70, 'audited', "
             "false, now() - INTERVAL '50 days', 0) RETURNING id"
         )
         assert w2 is not None
@@ -225,9 +230,10 @@ class TestReauditWithResults:
 
         # Non-BG control — overdue, linked to the ES city.
         w3 = await fresh_db.fetchval(
-            "INSERT INTO websites (url, label, score, audit_status, "
+            "INSERT INTO websites (url, url_key, label, score, audit_status, "
             "needs_review, last_audited_at, audit_attempts) "
-            "VALUES ('https://test-es.example.com', 'ES Agency', 80, 'audited', "
+            "VALUES ('https://test-es.example.com', 'test-es.example.com', "
+            "'ES Agency', 80, 'audited', "
             "false, now() - INTERVAL '60 days', 0) RETURNING id"
         )
         assert w3 is not None
@@ -283,8 +289,9 @@ class TestRetryMarkFailed:
         assert sofia_id is not None
 
         website_id = await fresh_db.fetchval(
-            "INSERT INTO websites (url, label, audit_status, audit_attempts) "
-            "VALUES ('https://test-fail.example.com', 'Fail', 'audited', 1) RETURNING id"
+            "INSERT INTO websites (url, url_key, label, audit_status, audit_attempts) "
+            "VALUES ('https://test-fail.example.com', 'test-fail.example.com', "
+            "'Fail', 'audited', 1) RETURNING id"
         )
         assert website_id is not None
         await fresh_db.execute(
@@ -420,8 +427,9 @@ class TestTrackingLogFunctions:
         assert sofia_id is not None
 
         website_id = await fresh_db.fetchval(
-            "INSERT INTO websites (url, label) "
-            "VALUES ('https://test-audit.example.com', 'Test Audit') RETURNING id"
+            "INSERT INTO websites (url, url_key, label) "
+            "VALUES ('https://test-audit.example.com', 'test-audit.example.com', "
+            "'Test Audit') RETURNING id"
         )
         assert website_id is not None
         await fresh_db.execute(
@@ -452,8 +460,9 @@ class TestTrackingLogFunctions:
         from agency_audit.loop.tracking import log_audit_run
 
         website_id = await fresh_db.fetchval(
-            "INSERT INTO websites (url, label) "
-            "VALUES ('https://test-audit2.example.com', 'Test Audit 2') RETURNING id"
+            "INSERT INTO websites (url, url_key, label) "
+            "VALUES ('https://test-audit2.example.com', 'test-audit2.example.com', "
+            "'Test Audit 2') RETURNING id"
         )
         assert website_id is not None
 

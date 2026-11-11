@@ -18,6 +18,7 @@ import sys
 _here = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.join(_here, "src"))
 from agency_audit.db import get_pool  # noqa: E402  (import after sys.path setup)
+from agency_audit.urls import clean_website_url, website_key  # noqa: E402
 
 
 async def insert_agency(
@@ -32,18 +33,20 @@ async def insert_agency(
     """Insert a single agency into the database."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Check if this URL already exists
-        existing = await conn.fetchval("SELECT id FROM websites WHERE url = $1", url)
+        # Check if this website already exists
+        url_key = website_key(url)
+        existing = await conn.fetchval("SELECT id FROM websites WHERE url_key = $1", url_key)
         if existing:
             website_id = existing
             created = False
         else:
             website_id = await conn.fetchval(
-                """INSERT INTO websites (url, label, maps_place_id, address, phone)
-                   VALUES ($1, $2, $3, $4, $5)
-                   ON CONFLICT (url) DO UPDATE SET label = EXCLUDED.label
+                """INSERT INTO websites (url, url_key, label, maps_place_id, address, phone)
+                   VALUES ($1, $2, $3, $4, $5, $6)
+                   ON CONFLICT (url_key) DO UPDATE SET label = EXCLUDED.label
                    RETURNING id""",
-                url,
+                clean_website_url(url),
+                url_key,
                 name,
                 place_id,
                 address,
@@ -95,16 +98,18 @@ async def batch_insert(city_id: int, search_query: str, agencies: list[dict]):
                 if not url:
                     continue
 
-            existing = await conn.fetchval("SELECT id FROM websites WHERE url = $1", url)
+            url_key = website_key(url)
+            existing = await conn.fetchval("SELECT id FROM websites WHERE url_key = $1", url_key)
             if existing:
                 website_id = existing
             else:
                 website_id = await conn.fetchval(
-                    """INSERT INTO websites (url, label, maps_place_id, address, phone)
-                       VALUES ($1, $2, $3, $4, $5)
-                       ON CONFLICT (url) DO UPDATE SET label = EXCLUDED.label
+                    """INSERT INTO websites (url, url_key, label, maps_place_id, address, phone)
+                       VALUES ($1, $2, $3, $4, $5, $6)
+                       ON CONFLICT (url_key) DO UPDATE SET label = EXCLUDED.label
                        RETURNING id""",
-                    url,
+                    clean_website_url(url),
+                    url_key,
                     name,
                     place_id or None,
                     address or None,
