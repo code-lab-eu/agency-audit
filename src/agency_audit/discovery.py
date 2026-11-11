@@ -20,6 +20,7 @@ import httpx
 from agency_audit.config import settings
 from agency_audit.db import get_pool
 from agency_audit.discovery_geo import Rectangle, is_saturated, subdivide
+from agency_audit.urls import clean_website_url, website_key
 
 logger = logging.getLogger(__name__)
 
@@ -685,7 +686,8 @@ class DiscoveryPipeline:
         reported = 0
         pool = await self._get_pool()
         for place in found_places:
-            url = place.website or f"https://maps.google.com/?cid={place.place_id}"
+            raw_url = place.website or f"https://maps.google.com/?cid={place.place_id}"
+            url = clean_website_url(raw_url)
             async with pool.acquire() as conn:
                 # Insert or find website
                 existing = await conn.fetchrow(
@@ -695,11 +697,13 @@ class DiscoveryPipeline:
                     website_id = existing["id"]
                 else:
                     website_id = await conn.fetchval(
-                        """INSERT INTO websites (url, label, maps_place_id, address, phone)
-                           VALUES ($1, $2, $3, $4, $5)
-                           ON CONFLICT (url) DO UPDATE SET label = EXCLUDED.label
+                        """INSERT INTO websites (url, url_key, label, maps_place_id, address,
+                                                 phone)
+                           VALUES ($1, $2, $3, $4, $5, $6)
+                           ON CONFLICT (url_key) DO UPDATE SET label = EXCLUDED.label
                            RETURNING id""",
                         url,
+                        website_key(raw_url),
                         place.name,
                         place.place_id,
                         place.formatted_address,

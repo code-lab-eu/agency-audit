@@ -681,8 +681,9 @@ class TestDiscoveryPipelineDB:
         """When website already exists by maps_place_id, reuse its id."""
         _city_id = await _seed_test_city(fresh_db, "test-reuse-existing")
         existing_id = await fresh_db.fetchval(
-            "INSERT INTO websites (url, label, maps_place_id) "
-            "VALUES ('https://test-existing.example.com', 'Existing Agency', "
+            "INSERT INTO websites (url, url_key, label, maps_place_id) "
+            "VALUES ('https://test-existing.example.com', 'test-existing.example.com', "
+            "'Existing Agency', "
             "'existing-pid') RETURNING id"
         )
 
@@ -715,7 +716,7 @@ class TestDiscoveryPipelineDB:
         self,
         fresh_db: asyncpg.Connection,
     ) -> None:
-        """ON CONFLICT (url) DO UPDATE — same URL updates label, NOT maps_place_id."""
+        """ON CONFLICT (url_key) DO UPDATE — same URL updates label, NOT maps_place_id."""
         _city1 = await _seed_test_city(fresh_db, "test-upsert-url-1")
         _city2 = await _seed_test_city(fresh_db, "test-upsert-url-2")
 
@@ -755,6 +756,39 @@ class TestDiscoveryPipelineDB:
         assert len(rows) == 1
         assert rows[0]["label"] == "Second Agency Updated"
         assert rows[0]["maps_place_id"] == "pid-first"
+
+    async def test_branches_with_tracking_links_share_one_website(
+        self,
+        fresh_db: asyncpg.Connection,
+    ) -> None:
+        """Two branches whose links differ only by utm_* parameters → one website row."""
+        antwerpen = await _seed_test_city(fresh_db, "test-branch-1", population=9_999_999)
+        hasselt = await _seed_test_city(fresh_db, "test-branch-2", population=9_999_998)
+        link = "https://www.test-heylen.example.com/?utm_source=organic&utm_campaign=gmb+{}"
+
+        places_client = PlacesAPIClient(api_key="test")
+        places_client.close = AsyncMock()
+        pipeline = DiscoveryPipeline(places_client=places_client)
+        pipeline.resolve_city_viewport = AsyncMock(return_value=_make_viewport())
+
+        async def branch_of(query: str, city: dict, max_calls: int | None = None) -> list:
+            branch = "antwerpen" if city["id"] == antwerpen else "hasselt"
+            return [_make_place(f"pid-{branch}", "Heylen", link.format(branch))]
+
+        pipeline.search_tiled = AsyncMock(side_effect=branch_of)
+        result = await pipeline.run_for_countries(country_codes=["BG"], max_cities_per_country=2)
+        assert result["agencies_found"] == 2
+
+        rows = await fresh_db.fetch(
+            "SELECT id, url FROM websites WHERE url_key = 'test-heylen.example.com'"
+        )
+        assert len(rows) == 1
+        assert rows[0]["url"] == "https://www.test-heylen.example.com/"
+        cities = await fresh_db.fetch(
+            "SELECT city_id FROM website_cities WHERE website_id = $1 ORDER BY city_id",
+            rows[0]["id"],
+        )
+        assert [r["city_id"] for r in cities] == sorted([antwerpen, hasselt])
 
     # ── Status lifecycle ─────────────────────────────────────────────
 

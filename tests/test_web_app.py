@@ -62,8 +62,8 @@ async def _test_website(fresh_db: asyncpg.Connection) -> int:
     """Insert a test website and return its id."""
     row = await fresh_db.fetchrow(
         """\
-        INSERT INTO websites (url, label, score, audit_data, audit_status)
-        VALUES ('https://test-website.example.com', 'Test Agency', 75,
+        INSERT INTO websites (url, url_key, label, score, audit_data, audit_status)
+        VALUES ('https://test-website.example.com', 'test-website.example.com', 'Test Agency', 75,
                 '{"score":75,"modules":{}}', 'audited')
         RETURNING id\
         """
@@ -86,11 +86,12 @@ async def _test_website_with_listing_fields(
     }
     row = await fresh_db.fetchrow(
         """\
-        INSERT INTO websites (url, label, score, audit_data, audit_status)
-        VALUES ($1, $2, $3, $4, 'audited')
+        INSERT INTO websites (url, url_key, label, score, audit_data, audit_status)
+        VALUES ($1, $2, $3, $4, $5, 'audited')
         RETURNING id\
         """,
         "https://price-location-test.example.com",
+        "price-location-test.example.com",
         "Price & Location Agency",
         80,
         json.dumps(audit_data),
@@ -113,8 +114,9 @@ async def _seed_bg_website(fresh_db: asyncpg.Connection) -> int:
     assert city_id is not None, "Sofia must exist in the seeded database"
     row = await fresh_db.fetchrow(
         """\
-        INSERT INTO websites (url, label, score, audit_status)
-        VALUES ('https://test-bg.example.com', 'Example BG Agency', 42, 'audited')
+        INSERT INTO websites (url, url_key, label, score, audit_status)
+        VALUES ('https://test-bg.example.com', 'test-bg.example.com',
+            'Example BG Agency', 42, 'audited')
         RETURNING id\
         """
     )
@@ -466,6 +468,20 @@ def test_htmx_country_websites(client: TestClient, _seed_bg_website: int) -> Non
     assert f"/htmx/country/BG/websites/{_seed_bg_website}/audit" in response.text
 
 
+async def test_htmx_country_websites_lists_multi_city_website_once(
+    client: TestClient, fresh_db: asyncpg.Connection, _seed_bg_website: int
+) -> None:
+    """A website linked to two cities of one country is one row, not one per city."""
+    await fresh_db.execute(
+        "INSERT INTO website_cities (website_id, city_id) "
+        "SELECT $1, id FROM cities WHERE country = 'BG' AND slug = 'plovdiv'",
+        _seed_bg_website,
+    )
+    response = client.get("/htmx/country/BG/websites")
+    assert response.status_code == 200
+    assert response.text.count(f"window.location='/website/{_seed_bg_website}'") == 1
+
+
 # ──────────────────────────────────────────────────────────────────────
 # HTMX per-website audit button
 # ──────────────────────────────────────────────────────────────────────
@@ -670,12 +686,13 @@ async def test_overview_stats(_app_pool: asyncpg.Pool) -> None:
     async with _app_pool.acquire() as conn:
         await conn.execute(
             """\
-            INSERT INTO websites (url, label, score, audit_status) VALUES
-                ('https://test-high.example.com', 'High', 80, 'audited'),
-                ('https://test-mid.example.com', 'Mid', 30, 'audited'),
-                ('https://test-low.example.com', 'Low', 10, 'audited'),
-                ('https://test-neg.example.com', 'Neg', -5, 'audited'),
-                ('https://test-pending.example.com', 'Pend', 0, 'pending')\
+            INSERT INTO websites (url, url_key, label, score, audit_status) VALUES
+                ('https://test-high.example.com', 'test-high.example.com', 'High', 80, 'audited'),
+                ('https://test-mid.example.com', 'test-mid.example.com', 'Mid', 30, 'audited'),
+                ('https://test-low.example.com', 'test-low.example.com', 'Low', 10, 'audited'),
+                ('https://test-neg.example.com', 'test-neg.example.com', 'Neg', -5, 'audited'),
+                ('https://test-pending.example.com', 'test-pending.example.com',
+                    'Pend', 0, 'pending')\
             """
         )
 
@@ -730,8 +747,9 @@ async def test_country_list_with_websites(_app_pool: asyncpg.Pool) -> None:
 
         row = await conn.fetchrow(
             """\
-            INSERT INTO websites (url, label, score, audit_status)
-            VALUES ('https://test-list.example.com', 'List Agency', 60, 'audited')
+            INSERT INTO websites (url, url_key, label, score, audit_status)
+            VALUES ('https://test-list.example.com', 'test-list.example.com',
+                'List Agency', 60, 'audited')
             RETURNING id\
             """
         )
@@ -783,8 +801,8 @@ async def test_website_detail(_app_pool: asyncpg.Pool) -> None:
 
         row = await conn.fetchrow(
             """\
-            INSERT INTO websites (url, label, score, audit_data, audit_status)
-            VALUES ('https://test-detail.example.com', 'Test Detail', 80,
+            INSERT INTO websites (url, url_key, label, score, audit_data, audit_status)
+            VALUES ('https://test-detail.example.com', 'test-detail.example.com', 'Test Detail', 80,
                     '{"score":80,"modules":{"robots":true}}', 'audited')
             RETURNING id\
             """
@@ -856,8 +874,9 @@ async def test_recent_activity_with_data(_app_pool: asyncpg.Pool) -> None:
 
         row = await conn.fetchrow(
             """\
-            INSERT INTO websites (url, label, score, audit_status)
-            VALUES ('https://test-activity.example.com', 'Test Activity', 0, 'pending')
+            INSERT INTO websites (url, url_key, label, score, audit_status)
+            VALUES ('https://test-activity.example.com', 'test-activity.example.com',
+                'Test Activity', 0, 'pending')
             RETURNING id\
             """
         )
