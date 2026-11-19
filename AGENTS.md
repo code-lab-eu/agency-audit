@@ -220,6 +220,9 @@ agency-audit/
 
 ## Contribution workflow
 
+Give every GitHub issue one label `priority:high`, `priority:normal` or
+`priority:low`; the body has no priority line.
+
 Multiple agents work in parallel, so every branch must start from — and stay
 current with — the latest remote `master`. Stale branches are the main source of
 merge conflicts.
