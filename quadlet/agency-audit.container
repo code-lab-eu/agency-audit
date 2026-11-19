@@ -22,6 +22,7 @@ HealthStartPeriod=30s
 Notify=healthy
 Secret=agency-audit-db-password,type=env,target=AGENCY_AUDIT_PG_PASSWORD
 Secret=agency-audit-google-maps-api-key,type=env,target=AGENCY_AUDIT_GOOGLE_MAPS_API_KEY
+Secret=agency-audit-phorge-api-token,type=env,target=AGENCY_AUDIT_PHORGE_API_TOKEN
 
 [Service]
 Restart=always

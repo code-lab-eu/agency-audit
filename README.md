@@ -69,10 +69,12 @@ The unit files are in `quadlet/`: the image build, the application, the
 PostgreSQL container with its volume, and their network. Only the dashboard is
 published, on `127.0.0.1:8000`; the database is not reachable from the host.
 
-1. Create the database password and the Google Maps API key as podman secrets:
+1. Create the database password, the Google Maps API key and the Conduit API
+   token of the Phorge bot account as podman secrets:
    ```bash
    openssl rand -hex 32 | podman secret create agency-audit-db-password -
    read -rs KEY && printf %s "$KEY" | podman secret create agency-audit-google-maps-api-key -
+   read -rs KEY && printf %s "$KEY" | podman secret create agency-audit-phorge-api-token -
    ```
 
 2. Link the unit directory into the Podman configuration of your user, load the

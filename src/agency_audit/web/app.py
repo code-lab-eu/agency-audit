@@ -7,11 +7,13 @@ from pathlib import Path
 from typing import Any
 
 import asyncpg
+import httpx
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
+from agency_audit import phorge
 from agency_audit.config import settings
 from agency_audit.db import get_pool
 
@@ -60,6 +62,7 @@ def _status_badge(status: str) -> str:
 
 
 templates.env.filters["status_badge"] = _status_badge
+templates.env.globals["phorge_task_url"] = phorge.task_url
 
 
 # --- Query helpers -------------------------------------------------------------
@@ -326,7 +329,8 @@ async def _website_detail(pool: asyncpg.Pool, website_id: int) -> dict[str, Any]
         row = await conn.fetchrow(
             """
             SELECT id, url, label, score, audit_data, audit_status,
-                   last_audited_at, created_at, maps_place_id, address, phone
+                   last_audited_at, created_at, maps_place_id, address, phone,
+                   phorge_task_id, phorge_task_phid
             FROM websites WHERE id = $1
             """,
             website_id,
@@ -336,10 +340,13 @@ async def _website_detail(pool: asyncpg.Pool, website_id: int) -> dict[str, Any]
 
         cities = await conn.fetch(
             """
-            SELECT c.id, c.label, c.slug, c.country, wc.discovered_via
+            SELECT c.id, c.label, c.slug, c.country, c.population,
+                   co.label AS country_label, wc.discovered_via
             FROM website_cities wc
             JOIN cities c ON c.id = wc.city_id
+            JOIN countries co ON co.iso = c.country
             WHERE wc.website_id = $1
+            ORDER BY c.population DESC, c.label
             """,
             website_id,
         )
@@ -491,7 +498,7 @@ async def website_detail(request: Request, website_id: int):
     return templates.TemplateResponse(
         request,
         "website_detail.html",
-        {"data": data, "page": "websites"},
+        {"data": data, "page": "websites", "phorge_enabled": bool(settings.phorge_api_token)},
     )
 
 
@@ -683,6 +690,62 @@ async def htmx_website_row(request: Request, iso: str, website_id: int):
         "_website_row.html",
         {"w": website, "iso": iso},
     )
+
+
+@app.post("/htmx/website/{website_id}/phorge-task", response_class=HTMLResponse)
+async def htmx_phorge_task(request: Request, website_id: int):
+    """Link the website to its Phorge scraping task: find the existing one, else create it.
+
+    Several matching tasks are listed for the developer to pick in Phorge; nothing
+    is stored then.  A Conduit error stores nothing either.
+    """
+    pool = await get_pool()
+    data = await _website_detail(pool, website_id)
+    if data is None:
+        return HTMLResponse("Not found", status_code=404)
+    website = data["website"]
+
+    def render(**context: Any) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request, "_phorge_task.html", {"website_id": website_id, **context}
+        )
+
+    if website["phorge_task_id"] is not None:
+        return render(task_id=website["phorge_task_id"])
+    if not settings.phorge_api_token:
+        return render(error="No Phorge API token configured")
+    if website["audit_status"] != "audited":
+        return render(error="The website is not audited")
+
+    client = phorge.conduit_client()
+    try:
+        matches = await phorge.find_tasks(client, phorge.website_host(website["url"]))
+        if len(matches) > 1:
+            return render(matches=[m.id for m in matches])
+        if matches:
+            task = matches[0]
+        else:
+            task = await phorge.create_task(
+                client,
+                phorge.task_title(website, data["cities"]),
+                phorge.task_description(
+                    website,
+                    data["cities"],
+                    f"{settings.base_url.rstrip('/')}/website/{website_id}",
+                ),
+            )
+    except (phorge.ConduitError, httpx.HTTPError) as exc:
+        logger.exception("Phorge task for website %d failed", website_id)
+        return render(error=f"Phorge: {exc}")
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE websites SET phorge_task_id = $2, phorge_task_phid = $3 WHERE id = $1",
+            website_id,
+            task.id,
+            task.phid,
+        )
+    return render(task_id=task.id)
 
 
 @app.get("/htmx/recent-activity", response_class=HTMLResponse)

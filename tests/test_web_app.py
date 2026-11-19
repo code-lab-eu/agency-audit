@@ -16,13 +16,16 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from agency_audit.config import settings
+from agency_audit.phorge import ConduitError, PhorgeTask
 from agency_audit.web.app import _score_color, _status_badge, app
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1023,3 +1026,182 @@ def test_migration_004_allows_failed_status() -> None:
     )
     assert "'failed'" in sql
     assert "cities_discovery_status_check" in sql
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Phorge scraping task: /website/{id} button and /htmx/website/{id}/phorge-task
+# ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def phorge_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "phorge_api_token", "set")
+
+
+@pytest.fixture
+def conduit() -> MagicMock:
+    """The Conduit client the route gets; no request leaves the test."""
+    client = MagicMock()
+    client.maniphest_search = AsyncMock(return_value=[])
+    client.maniphest_edit = AsyncMock(return_value=PhorgeTask(1500, "PHID-TASK-new"))
+    with patch("agency_audit.phorge.conduit_client", return_value=client):
+        yield client
+
+
+async def _phorge_task(fresh_db: asyncpg.Connection, website_id: int) -> tuple[Any, Any]:
+    row = await fresh_db.fetchrow(
+        "SELECT phorge_task_id, phorge_task_phid FROM websites WHERE id = $1", website_id
+    )
+    return row["phorge_task_id"], row["phorge_task_phid"]
+
+
+def _hit(task_id: int, name: str) -> dict[str, Any]:
+    return {"id": task_id, "phid": f"PHID-TASK-{task_id}", "fields": {"name": name}}
+
+
+def test_website_page_shows_phorge_button(
+    client: TestClient, _seed_bg_website: int, phorge_token: None
+) -> None:
+    html = client.get(f"/website/{_seed_bg_website}").text
+    assert f'hx-post="/htmx/website/{_seed_bg_website}/phorge-task"' in html
+    assert "Create Phorge ticket" in html
+
+
+async def test_website_page_shows_phorge_link(
+    client: TestClient, fresh_db: asyncpg.Connection, _seed_bg_website: int, phorge_token: None
+) -> None:
+    await fresh_db.execute(
+        "UPDATE websites SET phorge_task_id = 1426, phorge_task_phid = 'PHID-TASK-x' WHERE id = $1",
+        _seed_bg_website,
+    )
+    html = client.get(f"/website/{_seed_bg_website}").text
+    assert f'href="{settings.phorge_url}/T1426"' in html
+    assert "Create Phorge ticket" not in html
+
+
+async def test_website_page_hides_phorge_when_not_audited(
+    client: TestClient, fresh_db: asyncpg.Connection, _seed_bg_website: int, phorge_token: None
+) -> None:
+    await fresh_db.execute(
+        "UPDATE websites SET audit_status = 'pending' WHERE id = $1", _seed_bg_website
+    )
+    html = client.get(f"/website/{_seed_bg_website}").text
+    assert "Phorge" not in html
+
+
+def test_website_page_hides_phorge_without_token(
+    client: TestClient, _seed_bg_website: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "phorge_api_token", "")
+    html = client.get(f"/website/{_seed_bg_website}").text
+    assert "Phorge" not in html
+
+
+async def test_phorge_task_one_match_is_stored(
+    client: TestClient,
+    fresh_db: asyncpg.Connection,
+    _seed_bg_website: int,
+    phorge_token: None,
+    conduit: MagicMock,
+) -> None:
+    conduit.maniphest_search.return_value = [_hit(1426, "Scrape https://test-bg.example.com")]
+
+    response = client.post(f"/htmx/website/{_seed_bg_website}/phorge-task")
+
+    assert f'href="{settings.phorge_url}/T1426"' in response.text
+    conduit.maniphest_search.assert_awaited_once_with(
+        {"projects": [settings.phorge_project_phid], "query": "test-bg.example.com"}
+    )
+    conduit.maniphest_edit.assert_not_awaited()
+    assert await _phorge_task(fresh_db, _seed_bg_website) == (1426, "PHID-TASK-1426")
+
+
+async def test_phorge_task_several_matches_store_and_create_nothing(
+    client: TestClient,
+    fresh_db: asyncpg.Connection,
+    _seed_bg_website: int,
+    phorge_token: None,
+    conduit: MagicMock,
+) -> None:
+    conduit.maniphest_search.return_value = [
+        _hit(1426, "Scrape test-bg.example.com"),
+        _hit(1427, "Scrape https://www.test-bg.example.com/en"),
+    ]
+
+    response = client.post(f"/htmx/website/{_seed_bg_website}/phorge-task")
+
+    assert f'href="{settings.phorge_url}/T1426"' in response.text
+    assert f'href="{settings.phorge_url}/T1427"' in response.text
+    conduit.maniphest_edit.assert_not_awaited()
+    assert await _phorge_task(fresh_db, _seed_bg_website) == (None, None)
+
+
+async def test_phorge_task_no_match_creates_task(
+    client: TestClient,
+    fresh_db: asyncpg.Connection,
+    _seed_bg_website: int,
+    phorge_token: None,
+    conduit: MagicMock,
+) -> None:
+    conduit.maniphest_search.return_value = [_hit(1426, "Scrape other.example.com")]
+
+    response = client.post(f"/htmx/website/{_seed_bg_website}/phorge-task")
+
+    assert f'href="{settings.phorge_url}/T1500"' in response.text
+    conduit.maniphest_edit.assert_awaited_once()
+    (transactions,) = conduit.maniphest_edit.await_args.args
+    assert [t["type"] for t in transactions] == [
+        "title",
+        "description",
+        "projects.add",
+        "custom.repository",
+    ]
+    assert transactions[0]["value"] == "Scrape Example BG Agency (Sofia, Bulgaria)"
+    assert f"/website/{_seed_bg_website}" in transactions[1]["value"]
+    assert transactions[2]["value"] == [settings.phorge_project_phid]
+    assert transactions[3]["value"] == settings.phorge_repository
+    assert await _phorge_task(fresh_db, _seed_bg_website) == (1500, "PHID-TASK-new")
+
+
+async def test_phorge_task_already_linked_makes_no_conduit_call(
+    client: TestClient,
+    fresh_db: asyncpg.Connection,
+    _seed_bg_website: int,
+    phorge_token: None,
+    conduit: MagicMock,
+) -> None:
+    await fresh_db.execute(
+        "UPDATE websites SET phorge_task_id = 1426, phorge_task_phid = 'PHID-TASK-x' WHERE id = $1",
+        _seed_bg_website,
+    )
+
+    response = client.post(f"/htmx/website/{_seed_bg_website}/phorge-task")
+
+    assert f'href="{settings.phorge_url}/T1426"' in response.text
+    conduit.maniphest_search.assert_not_awaited()
+    conduit.maniphest_edit.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ConduitError("maniphest.edit", "ERR-CONDUIT-CORE", "Invalid transaction"),
+        httpx.ReadTimeout("timed out"),
+    ],
+)
+async def test_phorge_task_conduit_error_stores_nothing(
+    client: TestClient,
+    fresh_db: asyncpg.Connection,
+    _seed_bg_website: int,
+    phorge_token: None,
+    conduit: MagicMock,
+    error: Exception,
+) -> None:
+    conduit.maniphest_edit.side_effect = error
+
+    response = client.post(f"/htmx/website/{_seed_bg_website}/phorge-task")
+
+    assert response.status_code == 200
+    assert "text-danger" in response.text
+    assert "Create Phorge ticket" not in response.text
+    assert await _phorge_task(fresh_db, _seed_bg_website) == (None, None)
