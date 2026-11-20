@@ -332,12 +332,6 @@ class TestGeonamesAsync:
 
         from agency_audit.geonames import import_geonames
 
-        # Seed the countries table so the FK constraint passes
-        await db_conn.execute(
-            "INSERT INTO countries (iso, label) VALUES ('BG', 'Bulgaria') "
-            "ON CONFLICT (iso) DO NOTHING"
-        )
-
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
             zf.writestr(
@@ -386,12 +380,6 @@ class TestGeonamesAsync:
         import zipfile
 
         from agency_audit.geonames import import_geonames
-
-        # Seed the countries table so the FK constraint passes
-        await db_conn.execute(
-            "INSERT INTO countries (iso, label) VALUES ('BG', 'Bulgaria') "
-            "ON CONFLICT (iso) DO NOTHING"
-        )
 
         # First import: Sofia with population 1000000
         buf1 = io.BytesIO()

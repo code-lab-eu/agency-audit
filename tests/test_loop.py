@@ -35,7 +35,8 @@ TEST_COUNTRY = "XB"  # Non-existent ISO code — walled-off test-only country
 async def seed_test_country(fresh_db: asyncpg.Connection) -> None:
     """Ensure the XB test country and its city exist in the private database."""
     await fresh_db.execute(
-        "INSERT INTO countries (iso, label, active) VALUES ($1, 'Testland', false) "
+        "INSERT INTO countries (iso, label, active, discovery_rank) "
+        "VALUES ($1, 'Testland', false, 101) "
         "ON CONFLICT (iso) DO NOTHING",
         TEST_COUNTRY,
     )

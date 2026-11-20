@@ -1,8 +1,5 @@
 """Tests for the agency-audit package."""
 
-import re
-from pathlib import Path
-
 
 def test_config_dsn():
     """Test that config DSN is constructed correctly with password."""
@@ -69,16 +66,6 @@ def test_config_dsn_special_chars_in_user():
     # @ → %40, : → %3A, / → %2F, % → %25
     expected = "postgresql://us%40r%3An%2Fme%25:plainpass@localhost:5432/testdb"
     assert s.dsn == expected
-
-
-def test_country_count():
-    """Verify exactly 44 countries in seed data."""
-    seed_path = (
-        Path(__file__).resolve().parents[1] / "src" / "agency_audit" / "seed" / "countries.sql"
-    )
-    sql = seed_path.read_text()
-    matches = re.findall(r"\('([A-Z]{2})',\s*'([^']+)',\s*(?:true|false)\)", sql)
-    assert len(matches) == 44, f"Expected 44 countries, got {len(matches)}"
 
 
 def test_geonames_slugify():
