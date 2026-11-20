@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     socket_connect_timeout: int = 10
     audit_concurrency: int = 5
 
+    # -- Row claims -----------------------------------------------------------
+    # Age after which a website being audited or a city being discovered is
+    # taken to belong to a killed worker and returns to 'pending'.
+    claim_timeout_minutes: int = 120
+
     # -- Playwright browser fetcher -------------------------------------------
     playwright_timeout_ms: int = 30000
     playwright_wait_seconds: float = 3.0

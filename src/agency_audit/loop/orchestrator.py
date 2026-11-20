@@ -25,6 +25,7 @@ from typing import Any
 import asyncpg
 
 from agency_audit.audit.auditor import audit_website
+from agency_audit.claims import claim_websites
 from agency_audit.db import get_pool
 from agency_audit.discovery import DiscoveryPipeline, PlacesAPIClient
 from agency_audit.loop.qc import run_qc_checks
@@ -369,52 +370,34 @@ async def _audit_country_websites(
 ) -> dict[str, int]:
     """Audit all pending websites for a country.
 
-    Uses semaphore-limited concurrency and retries failed audits 3 times.
+    Each of *concurrency* workers claims one website at a time and audits it
+    (retrying 3 times) until no pending website is left, so the loop audits
+    only websites it claimed and each claim lasts as long as its audit.
 
     Returns:
         Dict with 'audited', 'succeeded', 'failed' counts.
     """
     pool = await get_pool()
+    logger.info("Auditing pending websites for %s (concurrency=%d)", country_iso, concurrency)
 
-    # Fetch all pending websites for this country
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT DISTINCT w.id, w.url
-               FROM websites w
-               JOIN website_cities wc ON wc.website_id = w.id
-               JOIN cities c ON c.id = wc.city_id
-               WHERE c.country = $1 AND w.audit_status = 'pending'
-                 AND w.audit_attempts < 3
-               ORDER BY w.id""",
-            country_iso,
-        )
-
-    if not rows:
-        logger.info("No pending websites to audit for %s", country_iso)
-        return {"audited": 0, "succeeded": 0, "failed": 0}
-
-    logger.info("Auditing %d websites for %s (concurrency=%d)", len(rows), country_iso, concurrency)
-
-    semaphore = asyncio.Semaphore(concurrency)
     succeeded = 0
     failed = 0
-    errors: list[str] = []
 
-    async def _audit_one(wid: int, url: str) -> None:
+    async def _worker() -> None:
         nonlocal succeeded, failed
-        async with semaphore:
-            error = await audit_and_store_website(pool, wid, url)
+        while claimed := await claim_websites(1, country=country_iso):
+            error = await audit_and_store_website(pool, claimed[0]["id"], claimed[0]["url"])
             if error is None:
                 succeeded += 1
             else:
                 failed += 1
-                errors.append(f"{url}: {error}")
 
-    tasks = [_audit_one(row["id"], row["url"]) for row in rows]
-    await asyncio.gather(*tasks)
+    await asyncio.gather(*(_worker() for _ in range(concurrency)))
 
+    if succeeded + failed == 0:
+        logger.info("No pending websites to audit for %s", country_iso)
     return {
-        "audited": len(rows),
+        "audited": succeeded + failed,
         "succeeded": succeeded,
         "failed": failed,
     }

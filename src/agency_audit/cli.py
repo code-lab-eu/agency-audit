@@ -249,7 +249,8 @@ def audit(
                     target_url = row["url"]
                     # Mark as auditing
                     await conn.execute(
-                        "UPDATE websites SET audit_status = 'auditing' WHERE id = $1",
+                        "UPDATE websites SET audit_status = 'auditing', "
+                        "audit_claimed_at = now() WHERE id = $1",
                         wid,
                     )
             finally:
