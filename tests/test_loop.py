@@ -14,6 +14,7 @@ exact-count assertions are safe.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
@@ -713,6 +714,39 @@ class TestOrchestrator:
         assert "40✓/5✗ audits" in s
         assert "8 qc" in s
         assert "12 reaudits" in s
+
+    async def test_audits_only_websites_it_claimed(
+        self, fresh_db: asyncpg.Connection, seed_test_country: None
+    ):
+        """A website another worker holds locked is neither audited nor claimed."""
+        from agency_audit.loop.orchestrator import _audit_country_websites
+
+        free = await _seed_website(fresh_db, "free")
+        locked = await _seed_website(fresh_db, "locked")
+
+        class FakeAuditResult:
+            score = 50
+
+            @staticmethod
+            def to_dict():
+                return {"score": 50}
+
+        with patch("agency_audit.loop.orchestrator.retry", new_callable=AsyncMock) as mock_retry:
+            mock_retry.return_value = FakeAuditResult()
+            async with fresh_db.transaction():
+                await fresh_db.execute(
+                    "SELECT id FROM websites WHERE id = $1 FOR UPDATE", locked["id"]
+                )
+                # Auditing the locked website would wait for its lock.
+                async with asyncio.timeout(10):
+                    result = await _audit_country_websites(TEST_COUNTRY, concurrency=2)
+
+        assert [c.args[1] for c in mock_retry.call_args_list] == [free["url"]]
+        assert result == {"audited": 1, "succeeded": 1, "failed": 0}
+        assert (
+            await fresh_db.fetchval("SELECT audit_status FROM websites WHERE id = $1", locked["id"])
+            == "pending"
+        )
 
 
 class TestAuditAttemptsCounter:

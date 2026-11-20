@@ -135,6 +135,7 @@ uv run agency-audit-mcp
 agency-audit/
   src/agency_audit/
     __init__.py               # version 0.1.0
+    claims.py                 # Atomic row claims (SKIP LOCKED) and stale-claim release
     cli.py                    # Typer CLI — all commands (db, seed, audit, discover, run, serve, stats)
     config.py                 # pydantic-settings (AGENCY_AUDIT_* env vars)
     db.py                     # asyncpg pool (get_pool / close_pool)
