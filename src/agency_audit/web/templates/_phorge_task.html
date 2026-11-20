@@ -1,0 +1,19 @@
+<span id="phorge-task">
+{% if task_id %}
+<a href="{{ phorge_task_url(task_id) }}" target="_blank">T{{ task_id }} ↗</a>
+{% elif matches %}
+<span class="text-warning">Several Phorge tasks match:</span>
+{% for m in matches %}<a href="{{ phorge_task_url(m) }}" target="_blank">T{{ m }} ↗</a>{% if not loop.last %}, {% endif %}{% endfor %}
+{% elif error %}
+<span class="text-danger">{{ error }}</span>
+{% else %}
+<button class="btn btn-outline-primary btn-sm"
+        hx-post="/htmx/website/{{ website_id }}/phorge-task"
+        hx-target="#phorge-task"
+        hx-swap="outerHTML"
+        hx-disabled-elt="this">
+    Create Phorge ticket
+    <span class="spinner-border spinner-border-sm htmx-indicator" role="status"></span>
+</button>
+{% endif %}
+</span>

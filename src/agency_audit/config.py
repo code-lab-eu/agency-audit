@@ -72,6 +72,16 @@ class Settings(BaseSettings):
     # -- Web dashboard server -------------------------------------------------
     serve_host: str = "127.0.0.1"
     serve_port: int = 8000
+    # Base of the links back to the dashboard, such as in Phorge tasks.
+    base_url: str = "http://agencyaudit.lan"
+
+    # -- Phorge (scraping tasks) ----------------------------------------------
+    phorge_url: str = "https://phorge.code-lab.eu"
+    # Conduit API token of the agency-audit bot account; empty disables tasks.
+    phorge_api_token: str = ""
+    # Project "Real estate scraper".
+    phorge_project_phid: str = "PHID-PROJ-xytrk33ubviwsqywwdrt"
+    phorge_repository: str = "code-lab-eu/real_estate_scraper"
 
     # -- Scoring config -------------------------------------------------------
     scoring_config_path: str = ""

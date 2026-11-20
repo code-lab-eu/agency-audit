@@ -36,6 +36,12 @@
                         <td class="text-muted">Created</td>
                         <td>{{ data.website.created_at.strftime('%Y-%m-%d %H:%M') if data.website.created_at else '—' }}</td>
                     </tr>
+                    {% if data.website.audit_status == 'audited' and phorge_enabled %}
+                    <tr>
+                        <td class="text-muted">Phorge Task</td>
+                        <td>{% with website_id = data.website.id, task_id = data.website.phorge_task_id %}{% include "_phorge_task.html" %}{% endwith %}</td>
+                    </tr>
+                    {% endif %}
                     {% if data.website.maps_place_id %}
                     <tr>
                         <td class="text-muted">Maps Place ID</td>
