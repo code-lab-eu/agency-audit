@@ -56,6 +56,7 @@ Dockerfile
 docker-compose*.yml
 docker-compose*.yaml
 quadlet/
+systemd/
 
 # Lockfiles (only need requirements.txt)
 uv.lock

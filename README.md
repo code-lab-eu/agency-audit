@@ -65,8 +65,9 @@ agency-audit application serving the dashboard.
 
 **Prerequisites:** Linux with systemd and Podman 6.1 or newer.
 
-The unit files are in `quadlet/`: the image build, the application, the
-PostgreSQL container with its volume, and their network. Only the dashboard is
+The unit files are in `quadlet/`: the image build, the application, the daily
+run, the PostgreSQL container with its volume, and their network. The timer of
+the daily run is in `systemd/`, because Quadlet does not generate timers. Only the dashboard is
 published, on `127.0.0.1:8000`; the database is not reachable from the host.
 
 1. Create the database password, the Google Maps API key and the Conduit API
@@ -94,6 +95,23 @@ published, on `127.0.0.1:8000`; the database is not reachable from the host.
    podman exec agency-audit agency-audit seed-countries
    podman exec agency-audit agency-audit import-geonames
    ```
+
+4. Schedule the [daily run](#daily-run). Quadlet generates
+   `agency-audit-tick.service` from `quadlet/agency-audit-tick.container`;
+   the timer `systemd/agency-audit-tick.timer` starts it every night between
+   03:00 and 04:00, and at the next start of your user instance after a missed
+   run. `systemctl enable` with a full path links the timer into
+   `~/.config/systemd/user/` and enables it:
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user enable --now "$PWD/systemd/agency-audit-tick.timer"
+   ```
+   Start a run by hand, and read the log of the runs:
+   ```bash
+   systemctl --user start agency-audit-tick
+   journalctl --user -u agency-audit-tick
+   ```
+   `systemctl --user list-timers agency-audit-tick` shows the next run.
 
 The stack starts at boot when systemd starts your user instance at boot:
 `loginctl enable-linger "$USER"`.
