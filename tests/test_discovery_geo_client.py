@@ -150,9 +150,10 @@ class TestResolveCityViewportCacheMiss:
             # Exactly one geocode call
             assert len(geocode_calls) == 1
 
-            # Verify the address passed to the API
-            url = str(geocode_calls[0].url)
-            assert "Sofia%2C+BG" in url or "Sofia,+BG" in url
+            # The city is geocoded within its country
+            params = geocode_calls[0].url.params
+            assert params["address"] == "Sofia"
+            assert params["components"] == "country:BG"
 
             # Returns the expected Rectangle
             assert rect.low_lat == pytest.approx(42.6)
@@ -304,12 +305,31 @@ class TestGeocodingClient:
             return httpx.Response(200, json=_geocode_json_response(42.7, 23.3))
 
         client = make_geocoding_client(handler)
-        result = await client.geocode("Sofia, BG")
+        result = await client.geocode("Sofia", "BG")
         await client.close()
 
         assert result is not None
         assert result["status"] == "OK"
         assert "results" in result
+
+    async def test_geocode_restricts_results_to_country(self):
+        """The country is sent as a component filter, not appended to the address.
+
+        "Barcelona, ES" resolves to Barcelona in Espírito Santo, Brazil.
+        """
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=_geocode_json_response(41.39, 2.14))
+
+        client = make_geocoding_client(handler)
+        await client.geocode("Barcelona", "ES")
+        await client.close()
+
+        params = requests[0].url.params
+        assert params["address"] == "Barcelona"
+        assert params["components"] == "country:ES"
 
     async def test_geocode_http_error_returns_none(self):
         """HTTP error → None."""
@@ -318,7 +338,7 @@ class TestGeocodingClient:
             return httpx.Response(403, json={"error": "forbidden"})
 
         client = make_geocoding_client(handler)
-        result = await client.geocode("test")
+        result = await client.geocode("test", "BG")
         await client.close()
 
         assert result is None
@@ -336,7 +356,7 @@ class TestGeocodingClient:
         transport = httpx.MockTransport(handler)
         client._client = httpx.AsyncClient(transport=transport)
 
-        await client.geocode("Sofia, BG")
+        await client.geocode("Sofia", "BG")
         await client.close()
 
         # The sentinel key MUST NOT appear anywhere in the captured log output.
@@ -355,7 +375,7 @@ class TestGeocodingClient:
             )
 
         client = make_geocoding_client(handler)
-        result = await client.geocode("nonexistent")
+        result = await client.geocode("nonexistent", "BG")
         await client.close()
 
         assert result is None
@@ -370,7 +390,7 @@ class TestGeocodingClient:
             )
 
         client = make_geocoding_client(handler)
-        result = await client.geocode("empty")
+        result = await client.geocode("empty", "BG")
         await client.close()
 
         assert result is None
@@ -382,7 +402,7 @@ class TestGeocodingClient:
             raise httpx.TimeoutException("timed out")
 
         client = make_geocoding_client(handler)
-        result = await client.geocode("test")
+        result = await client.geocode("test", "BG")
         await client.close()
 
         assert result is None
@@ -396,10 +416,10 @@ class TestGeocodingClient:
         client = make_geocoding_client(handler)
         assert client._request_count == 0
 
-        await client.geocode("Sofia, BG")
+        await client.geocode("Sofia", "BG")
         assert client._request_count == 1
 
-        await client.geocode("Plovdiv, BG")
+        await client.geocode("Plovdiv", "BG")
         assert client._request_count == 2
 
         await client.close()
