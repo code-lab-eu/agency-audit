@@ -322,8 +322,13 @@ class GeocodingClient:
             )
         return self._client
 
-    async def geocode(self, address: str) -> dict[str, Any] | None:
-        """Geocode an address string via the Google Geocoding API.
+    async def geocode(self, address: str, country_iso: str) -> dict[str, Any] | None:
+        """Geocode an address within one country via the Google Geocoding API.
+
+        The country is sent as the ``country`` component filter, which
+        restricts the results to that country.  Appending the ISO code to
+        the address instead does not: "Barcelona, ES" resolves to Barcelona
+        in the Brazilian state Espírito Santo, abbreviated ES.
 
         Returns the parsed JSON response dict on success, or ``None`` on
         any error (timeout, HTTP error, missing results).
@@ -333,6 +338,7 @@ class GeocodingClient:
         client = await self._ensure_client()
         params = {
             "address": address,
+            "components": f"country:{country_iso}",
             "key": self.api_key,
         }
 
@@ -409,8 +415,8 @@ class DiscoveryPipeline:
         Strategy:
         1. If the four ``viewport_*`` columns on *city* are already populated,
            return a ``Rectangle`` from the cache — no API call.
-        2. Otherwise geocode ``{label}, {country}`` via the Google Geocoding
-           API, parse ``geometry.viewport`` into a ``Rectangle``, persist it
+        2. Otherwise geocode ``{label}`` within ``{country}`` via the Google
+           Geocoding API, parse ``geometry.viewport`` into a ``Rectangle``, persist it
            to the ``cities`` table, and return it.
         3. If geocoding yields no usable viewport (any error, non-OK status,
            empty results, or missing ``geometry.viewport``), raise a
@@ -436,7 +442,7 @@ class DiscoveryPipeline:
 
         # 2. Geocode
         address = f"{city['label']}, {city['country']}"
-        result = await self.geocoding.geocode(address)
+        result = await self.geocoding.geocode(city["label"], city["country"])
         if result is None:
             raise RuntimeError(
                 f"Geocoding failed for '{address}' (city id={city['id']}): "
