@@ -93,7 +93,9 @@ scripts/qa.sh
 # Same, but auto-fix lint + formatting first, then re-check
 scripts/qa.sh --fix
 
-# Run the test suite (NOT dependent on a live database — pool is mocked)
+# Run the test suite against PostgreSQL: the server of AGENCY_AUDIT_PG_HOST when
+# that variable is exported (.env does not count), else a testcontainers
+# container when a Docker socket exists, else the local server of .env
 uv run --extra dev pytest
 
 # Run with coverage
@@ -205,9 +207,10 @@ agency-audit/
 ## Testing
 
 - **Test runner:** pytest with `asyncio_mode = "auto"` (no `@pytest.mark.asyncio`)
-- **Mocking database:** Patch `agency_audit.*.get_pool` with an async mock
-  (see `tests/test_loop.py` for the pattern).  The default test run must NEVER
-  require a live PostgreSQL instance
+- **Database:** use the real database, never a mock: `db_conn` (rollback
+  isolation) or `fresh_db` (a private database for code that opens its own
+  pool through `get_pool()`, such as the web app), both in `tests/conftest.py`.
+  `scripts/check_test_db_mocks.py` rejects database mocks
 - **Settings and `.env`:** `Settings()` reads `.env` from the working
   directory, so a test that checks values from `Settings()` sees the
   developer's own `.env`. Use the `cd_tmp_path` fixture (`tests/conftest.py`),
