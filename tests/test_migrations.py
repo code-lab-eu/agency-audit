@@ -245,3 +245,26 @@ class TestViewportMigration:
         insert_call = mock_conn.execute.call_args_list[1]
         assert "schema_migrations" in insert_call.args[0]
         assert insert_call.args[1] == "005_add_city_viewport.sql"
+
+
+class TestCountryDiscoveryRankMigration:
+    """Prove 010_add_country_discovery_rank.sql is registered."""
+
+    async def test_discovery_rank_migration_applies(self):
+        """The real 010 migration adds a unique, not null discovery_rank to countries."""
+
+        def _fetchval_side_effect(_sql, version):
+            return version != "010_add_country_discovery_rank.sql"
+
+        mock_conn, _mock_tx = _make_connection(fetchval_side_effect=_fetchval_side_effect)
+
+        migrations_dir = Path(__file__).parent.parent / "src/agency_audit/migrations"
+        result = await run_migrations(mock_conn, migrations_dir)
+
+        assert result == ["010_add_country_discovery_rank.sql"]
+        sql = mock_conn.execute.call_args_list[0].args[0]
+        assert "ADD COLUMN discovery_rank INTEGER" in sql
+        assert "SET NOT NULL" in sql
+        assert "UNIQUE (discovery_rank)" in sql
+        insert_call = mock_conn.execute.call_args_list[1]
+        assert insert_call.args[1] == "010_add_country_discovery_rank.sql"

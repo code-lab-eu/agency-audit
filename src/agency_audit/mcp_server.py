@@ -17,6 +17,7 @@ from typing import Any
 import asyncpg
 from fastmcp import FastMCP
 
+from agency_audit.claims import claim_next_city, claim_websites
 from agency_audit.db import get_pool
 from agency_audit.urls import clean_website_url, website_key
 
@@ -38,11 +39,6 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-async def _fetchone(pool: asyncpg.Pool, query: str, *args: Any) -> asyncpg.Record | None:
-    async with pool.acquire() as conn:
-        return await conn.fetchrow(query, *args)
 
 
 async def _execute(pool: asyncpg.Pool, query: str, *args: Any) -> str:
@@ -67,32 +63,11 @@ async def get_next_city(country: str | None = None) -> dict[str, Any]:
         City dict with id, country, label, slug, population
         — or {"error": "no pending cities"} if none available.
     """
-    pool = await get_pool()
-    where = "discovery_status = 'pending'"
-    params: list[Any] = []
-    if country:
-        where += " AND country = $1"
-        params.append(country.upper())
-
-    row = await _fetchone(
-        pool,
-        f"""
-        UPDATE cities SET discovery_status = 'in_progress'
-        WHERE id = (
-            SELECT id FROM cities
-            WHERE {where}
-            ORDER BY population DESC
-            LIMIT 1
-            FOR UPDATE SKIP LOCKED
-        )
-        RETURNING id, country, label, slug, population
-        """,
-        *params,
-    )
+    row = await claim_next_city(country)
     if row is None:
         return {"error": "no pending cities"}
 
-    return dict(row)
+    return {key: row[key] for key in ("id", "country", "label", "slug", "population")}
 
 
 # ---------------------------------------------------------------------------
@@ -203,26 +178,13 @@ async def get_unaudited_website() -> dict[str, Any]:
         Website dict with id, url, label, maps_place_id, address, phone,
         city info — or {"error": "no pending websites"} if none available.
     """
+    claimed = await claim_websites(1)
+    if not claimed:
+        return {"error": "no pending websites"}
+    row = claimed[0]
+
     pool = await get_pool()
-
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            UPDATE websites SET audit_status = 'auditing'
-            WHERE id = (
-                SELECT id FROM websites
-                WHERE audit_status = 'pending'
-                ORDER BY created_at
-                LIMIT 1
-                FOR UPDATE SKIP LOCKED
-            )
-            RETURNING id, url, label, maps_place_id, address, phone
-            """,
-        )
-        if row is None:
-            return {"error": "no pending websites"}
-
-        # Attach city info
         cities = await conn.fetch(
             """
             SELECT c.id, c.label, c.slug, c.country

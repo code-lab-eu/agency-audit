@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 
+from agency_audit.claims import claim_next_city
 from agency_audit.config import settings
 from agency_audit.db import get_pool
 from agency_audit.discovery_geo import Rectangle, is_saturated, subdivide
@@ -785,26 +786,10 @@ class DiscoveryPipeline:
             country_summary = {"cities": 0, "agencies": 0}
 
             while country_summary["cities"] < max_cities_per_country:
-                # Fetch next pending city for this country
-                async with pool.acquire() as conn:
-                    row = await conn.fetchrow(
-                        """SELECT id, label, slug, population,
-                                  viewport_low_lat, viewport_low_lng,
-                                  viewport_high_lat, viewport_high_lng
-                           FROM cities
-                           WHERE country = $1 AND discovery_status = 'pending'
-                           ORDER BY population DESC
-                           LIMIT 1""",
-                        country,
-                    )
-                    if row is None:
-                        break
-
-                    city_id = row["id"]
-                    await conn.execute(
-                        "UPDATE cities SET discovery_status = 'in_progress' WHERE id = $1",
-                        city_id,
-                    )
+                row = await claim_next_city(country)
+                if row is None:
+                    break
+                city_id = row["id"]
 
                 try:
                     count = await self.discover_city(

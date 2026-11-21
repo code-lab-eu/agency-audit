@@ -327,7 +327,8 @@ class TestDiscoveryPipelineDB:
         """
         test_country = "ZZ"
         await fresh_db.execute(
-            "INSERT INTO countries (iso, label) VALUES ($1, $2) ON CONFLICT (iso) DO NOTHING",
+            "INSERT INTO countries (iso, label, discovery_rank) VALUES ($1, $2, 101) "
+            "ON CONFLICT (iso) DO NOTHING",
             test_country,
             "Testland",
         )
@@ -396,10 +397,6 @@ class TestDiscoveryPipelineDB:
         fresh_db: asyncpg.Connection,
     ) -> None:
         """Two countries (BG + RO), one city each, one agency per city."""
-        await fresh_db.execute(
-            "INSERT INTO countries (iso, label) VALUES ('RO', 'Romania') "
-            "ON CONFLICT (iso) DO NOTHING"
-        )
         bg_id = await _seed_test_city(fresh_db, "test-multi-bg", country="BG")
         ro_id = await _seed_test_city(fresh_db, "test-multi-ro", country="RO")
 
@@ -443,7 +440,8 @@ class TestDiscoveryPipelineDB:
         no_city_iso = "YY"
         # Country with a city already done — no pending cities
         await fresh_db.execute(
-            "INSERT INTO countries (iso, label) VALUES ($1, $2) ON CONFLICT (iso) DO NOTHING",
+            "INSERT INTO countries (iso, label, discovery_rank) VALUES ($1, $2, 101) "
+            "ON CONFLICT (iso) DO NOTHING",
             no_city_iso,
             "Nocitiesland",
         )
@@ -456,10 +454,6 @@ class TestDiscoveryPipelineDB:
         )
 
         # Country with a pending city
-        await fresh_db.execute(
-            "INSERT INTO countries (iso, label) VALUES ('RO', 'Romania') "
-            "ON CONFLICT (iso) DO NOTHING"
-        )
         ro_id = await _seed_test_city(fresh_db, "test-one-pending", country="RO")
 
         ro_place = _make_place("ro-pid", "RO Agency", "https://test-ro.example.com")
@@ -492,10 +486,6 @@ class TestDiscoveryPipelineDB:
         fresh_db: asyncpg.Connection,
     ) -> None:
         """When country_codes=None, pending countries are fetched from DB."""
-        await fresh_db.execute(
-            "INSERT INTO countries (iso, label) VALUES ('RO', 'Romania') "
-            "ON CONFLICT (iso) DO NOTHING"
-        )
         bg_id = await _seed_test_city(fresh_db, "test-auto-bg", country="BG")
         ro_id = await _seed_test_city(fresh_db, "test-auto-ro", country="RO")
 

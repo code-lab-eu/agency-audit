@@ -586,7 +586,7 @@ async def htmx_discover_city(
     async with pool.acquire() as conn:
         transitioned = await conn.fetchval(
             "UPDATE cities SET discovery_status = 'in_progress', "
-            "discovery_error = NULL "
+            "discovery_claimed_at = now(), discovery_error = NULL "
             "WHERE id = $1 AND country = $2 AND discovery_status <> 'in_progress' "
             "RETURNING id",
             city_id,
@@ -660,7 +660,7 @@ async def htmx_audit_website(
     # 'auditing' enqueues an audit, so double-clicks never start two audits.
     async with pool.acquire() as conn:
         transitioned = await conn.fetchval(
-            "UPDATE websites SET audit_status = 'auditing' "
+            "UPDATE websites SET audit_status = 'auditing', audit_claimed_at = now() "
             "WHERE id = $1 AND audit_status <> 'auditing' RETURNING id",
             website_id,
         )

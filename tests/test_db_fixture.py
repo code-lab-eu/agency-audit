@@ -31,7 +31,9 @@ async def test_db_conn_can_insert_and_query(db_conn: asyncpg.Connection):
     Writes are rolled back automatically by the fixture — no manual
     cleanup needed.
     """
-    await db_conn.execute("INSERT INTO countries (iso, label) VALUES ('XX', 'Testland')")
+    await db_conn.execute(
+        "INSERT INTO countries (iso, label, discovery_rank) VALUES ('XX', 'Testland', 101)"
+    )
     row = await db_conn.fetchrow("SELECT iso, label FROM countries WHERE iso = 'XX'")
     assert row is not None
     assert row["iso"] == "XX"
@@ -48,7 +50,9 @@ async def test_db_conn_state_does_not_leak(db_conn: asyncpg.Connection, postgres
     remember to clean up.
     """
     # Write inside the transaction
-    await db_conn.execute("INSERT INTO countries (iso, label) VALUES ('ZZ', 'LeakTest')")
+    await db_conn.execute(
+        "INSERT INTO countries (iso, label, discovery_rank) VALUES ('ZZ', 'LeakTest', 101)"
+    )
 
     # Visible within the same transaction
     row = await db_conn.fetchrow("SELECT iso FROM countries WHERE iso = 'ZZ'")
