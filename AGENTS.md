@@ -220,7 +220,9 @@ agency-audit/
   directory, so a test that checks values from `Settings()` sees the
   developer's own `.env`. Use the `cd_tmp_path` fixture (`tests/conftest.py`),
   which runs the test from an empty temporary directory, as the test suite of
-  pydantic-settings does
+  pydantic-settings does. The module-level `settings` has already read `.env`
+  at import, so a test whose outcome depends on one of its values, such as
+  `google_maps_api_key`, sets that value with `monkeypatch.setattr(settings, ...)`
 - **Test structure:** Module-level test files mirror source layout
   (`test_audit.py` → `src/agency_audit/audit/`, `test_loop.py` →
   `src/agency_audit/loop/`)
