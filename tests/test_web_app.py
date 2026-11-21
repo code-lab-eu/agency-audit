@@ -924,17 +924,20 @@ async def test_run_city_discovery_marks_failed_on_error(fresh_db: asyncpg.Connec
     )
     assert sofia_id is not None, "Sofia must exist in the seeded database"
 
-    with patch("agency_audit.discovery.DiscoveryPipeline") as mock_pipeline_cls:
-        pipeline = mock_pipeline_cls.return_value
-        pipeline.discover_city = AsyncMock(side_effect=RuntimeError("boom"))
-        pipeline.close = AsyncMock()
+    from agency_audit.discovery import DiscoveryPipeline
 
+    with (
+        patch.object(
+            DiscoveryPipeline, "discover_city", AsyncMock(side_effect=RuntimeError("boom"))
+        ) as discover_city,
+        patch.object(DiscoveryPipeline, "close", AsyncMock()) as close,
+    ):
         from agency_audit.web.app import _run_city_discovery
 
         await _run_city_discovery(sofia_id, "BG")
 
         # Discovery uses the city's stored country, not a caller-supplied ISO.
-        assert pipeline.discover_city.call_args.kwargs["country_iso"] == "BG"
+        assert discover_city.call_args.kwargs["country_iso"] == "BG"
 
         # Verify the city was marked 'failed' with error stored.
         from agency_audit.db import get_pool
@@ -948,7 +951,7 @@ async def test_run_city_discovery_marks_failed_on_error(fresh_db: asyncpg.Connec
         assert row["discovery_status"] == "failed"
         assert row["discovery_error"] == "boom"
 
-        pipeline.close.assert_awaited_once()
+        close.assert_awaited_once()
 
 
 # ──────────────────────────────────────────────────────────────────────

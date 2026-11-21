@@ -701,6 +701,28 @@ def run_all_cmd(
     asyncio.run(_run())
 
 
+# --- tick (daily run) --------------------------------------------------------
+
+
+@app.command("tick")
+def tick_cmd():
+    """Daily run: audit up to AGENCY_AUDIT_DAILY_AUDIT_LIMIT websites, then discover one city
+    when no audit is pending."""
+    settings.ensure_ready_for("db")
+    settings.ensure_ready_for("audit")
+
+    from agency_audit.loop.tick import run_tick
+
+    async def _run():
+        try:
+            result = await run_tick()
+        finally:
+            await close_pool()
+        console.print(result.summary())
+
+    asyncio.run(_run())
+
+
 # --- qc ----------------------------------------------------------------------
 
 

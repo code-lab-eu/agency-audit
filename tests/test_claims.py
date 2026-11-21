@@ -168,6 +168,20 @@ class TestClaimNextCity:
 
         assert await claim_next_city() is None
 
+    async def test_claim_among_largest_skips_smaller_cities(
+        self, fresh_db: asyncpg.Connection
+    ) -> None:
+        await fresh_db.execute(
+            "UPDATE cities SET discovery_status = 'done' "
+            "WHERE slug IN ('sofia', 'plovdiv', 'burgas', 'ruse')"
+        )
+        await fresh_db.execute("UPDATE cities SET discovery_status = 'failed' WHERE slug = 'varna'")
+
+        assert await claim_next_city("BG", among_largest=5) is None
+        city = await claim_next_city("BG", among_largest=6)
+        assert city is not None
+        assert city["slug"] == "stara-zagora"
+
 
 class TestReleaseStaleClaims:
     @pytest.fixture

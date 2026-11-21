@@ -283,18 +283,20 @@ async def _city_row_data(pool: asyncpg.Pool, city_id: int, iso: str) -> dict[str
 async def _run_city_discovery(city_id: int, iso: str) -> None:
     """Background task: run Google Maps discovery for a single city.
 
-    ``DiscoveryPipeline.discover_city`` flips ``discovery_status`` to ``done``
-    when it finishes; on failure we mark the city ``failed`` so the polling row
-    stops spinning. The city's own stored ``country`` is used for the discovery
-    query templates — never the caller-supplied ISO — and the lookup is bound to
-    that country so a mismatched request finds nothing.
+    ``DiscoveryPipeline.discover_claimed_city`` flips ``discovery_status`` to
+    ``done`` when it finishes and to ``failed`` when it fails, so the polling
+    row stops spinning. The city's own stored ``country`` is used for the
+    discovery query templates — never the caller-supplied ISO — and the lookup
+    is bound to that country so a mismatched request finds nothing.
     """
     from agency_audit.discovery import DiscoveryPipeline
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, label, slug, country FROM cities WHERE id = $1 AND country = $2",
+            "SELECT id, label, slug, country, viewport_low_lat, viewport_low_lng,"
+            " viewport_high_lat, viewport_high_lng"
+            " FROM cities WHERE id = $1 AND country = $2",
             city_id,
             iso.upper(),
         )
@@ -303,23 +305,9 @@ async def _run_city_discovery(city_id: int, iso: str) -> None:
 
     pipeline = DiscoveryPipeline()
     try:
-        await pipeline.discover_city(
-            city_id=row["id"],
-            city_label=row["label"],
-            city_slug=row["slug"],
-            country_iso=row["country"],
-        )
-        # Success: clear any stale error from a prior failed run.
-        async with pool.acquire() as conn:
-            await conn.execute("UPDATE cities SET discovery_error = NULL WHERE id = $1", city_id)
-    except Exception as exc:
+        await pipeline.discover_claimed_city(row)
+    except Exception:
         logger.exception("Background discovery failed for city %s", city_id)
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE cities SET discovery_status = 'failed', discovery_error = $2 WHERE id = $1",
-                city_id,
-                str(exc),
-            )
     finally:
         await pipeline.close()
 

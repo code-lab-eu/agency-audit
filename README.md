@@ -212,6 +212,26 @@ agency-audit run-all
 agency-audit run-all --countries "BG,RO,GR"
 ```
 
+### Daily run
+
+`agency-audit tick` is the command to schedule once a day. It does a bounded
+amount of work, so Places API spending follows the pace at which websites are
+audited:
+
+1. Return stale claims to `pending`.
+2. Audit up to `AGENCY_AUDIT_DAILY_AUDIT_LIMIT` (default 100) pending websites
+   of the active countries, lowest `discovery_rank` first.
+3. When no pending audit is left, discover one city: the largest pending city
+   among the 5 largest cities of the lowest-ranked active country that has
+   one. A failed city waits for the rediscover button of the dashboard. When
+   all 5 largest cities of every active country are discovered, the run logs
+   that the next country can be unlocked.
+4. Log a one-line summary and write it to `audit_log` (`run_type = 'tick'`).
+
+```bash
+agency-audit tick
+```
+
 ### Web dashboard
 
 Start the FastAPI + HTMX dashboard.

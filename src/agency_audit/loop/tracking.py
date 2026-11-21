@@ -13,9 +13,12 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from agency_audit.db import get_pool
+
+if TYPE_CHECKING:
+    from agency_audit.loop.tick import TickResult
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +167,38 @@ async def log_full_loop_run(
                 }
             ),
         )
+    return int(log_id)
+
+
+async def log_tick_run(result: TickResult) -> int:
+    """Log a tick (``agency-audit tick``); return the audit_log ID."""
+    discovered = result.city is not None and result.discovery_error is None
+    discovery_failed = result.city is not None and result.discovery_error is not None
+    pool = await get_pool()
+    log_id = await pool.fetchval(
+        """INSERT INTO audit_log
+           (country, run_type, finished_at, duration_seconds,
+            items_processed, items_succeeded, items_failed, summary, error)
+           VALUES ($1, 'tick', now(), $2, $3, $4, $5, $6::jsonb, $7)
+           RETURNING id""",
+        result.country,
+        result.duration_seconds,
+        result.audited + result.failed + (result.city is not None),
+        result.audited + discovered,
+        result.failed + discovery_failed,
+        _make_json(
+            {
+                "line": result.summary(),
+                "released_websites": result.released_websites,
+                "released_cities": result.released_cities,
+                "audited": result.audited,
+                "failed": result.failed,
+                "city": result.city,
+                "websites_found": result.websites_found,
+            }
+        ),
+        result.discovery_error,
+    )
     return int(log_id)
 
 
