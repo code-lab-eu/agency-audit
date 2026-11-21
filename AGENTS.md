@@ -124,6 +124,10 @@ uv run agency-audit batch-audit --urls "https://a.bg,https://b.bg" --concurrency
 # Run the full operational loop for one country
 uv run agency-audit run --country BG
 
+# Daily bounded run: audit up to AGENCY_AUDIT_DAILY_AUDIT_LIMIT websites, then
+# discover one city when no audit is pending
+uv run agency-audit tick
+
 # Discovery only (Google Maps API + browser fallback)
 uv run agency-audit discover --country BG --max-cities 5
 
@@ -164,6 +168,7 @@ agency-audit/
       orchestrator.py         # Country-by-country loop executor
       qc.py                   # Duplicate detection, suspicious score flagging
       reaudit.py              # Re-audit scheduling (stale >30 days)
+      tick.py                 # Daily bounded run (`agency-audit tick`)
       retry.py                # Exponential backoff retry (3 attempts)
       tracking.py             # Progress tracking via discovery_log / audit_log
     migrations/               # SQL migrations (001_init, 002_discovery_status, 003_audit_log)

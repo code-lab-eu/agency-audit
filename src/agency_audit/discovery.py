@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -736,7 +737,7 @@ class DiscoveryPipeline:
         # Log discovery
         async with pool.acquire() as conn:
             await conn.execute(
-                "UPDATE cities SET discovery_status = 'done' WHERE id = $1",
+                "UPDATE cities SET discovery_status = 'done', discovery_error = NULL WHERE id = $1",
                 city_id,
             )
             # Log city searched
@@ -750,6 +751,48 @@ class DiscoveryPipeline:
 
         logger.info(f"{city_label}: reported {reported} agencies")
         return reported
+
+    async def discover_claimed_city(self, city: Mapping[str, Any]) -> int:
+        """Discover a city claimed for discovery; mark it ``failed`` if that fails.
+
+        Args:
+            city: The claimed ``cities`` row: id, label, slug, country and,
+                when cached, the ``viewport_*`` columns.
+
+        Returns:
+            The number of agencies found and reported.
+
+        Raises:
+            Exception: The discovery error, after the city is marked ``failed``
+                with it as ``discovery_error``.
+        """
+        try:
+            return await self.discover_city(
+                city_id=city["id"],
+                city_label=city["label"],
+                city_slug=city["slug"],
+                country_iso=city["country"],
+                viewport_low_lat=city.get("viewport_low_lat"),
+                viewport_low_lng=city.get("viewport_low_lng"),
+                viewport_high_lat=city.get("viewport_high_lat"),
+                viewport_high_lng=city.get("viewport_high_lng"),
+            )
+        except Exception as e:
+            logger.error(
+                "Discovery failed for city %s (id=%s): %s — marking as failed",
+                city["label"],
+                city["id"],
+                e,
+            )
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE cities SET discovery_status = 'failed', discovery_error = $2"
+                    " WHERE id = $1",
+                    city["id"],
+                    str(e),
+                )
+            raise
 
     async def run_for_countries(
         self,
@@ -789,34 +832,10 @@ class DiscoveryPipeline:
                 row = await claim_next_city(country)
                 if row is None:
                     break
-                city_id = row["id"]
 
                 try:
-                    count = await self.discover_city(
-                        city_id=city_id,
-                        city_label=row["label"],
-                        city_slug=row["slug"],
-                        country_iso=country,
-                        viewport_low_lat=row["viewport_low_lat"],
-                        viewport_low_lng=row["viewport_low_lng"],
-                        viewport_high_lat=row["viewport_high_lat"],
-                        viewport_high_lng=row["viewport_high_lng"],
-                    )
-                except Exception as e:
-                    logger.error(
-                        "Discovery failed for city %s (id=%s): %s — marking as failed",
-                        row["label"],
-                        city_id,
-                        e,
-                    )
-                    async with pool.acquire() as conn:
-                        await conn.execute(
-                            "UPDATE cities SET discovery_status = 'failed',"
-                            " discovery_error = $2"
-                            " WHERE id = $1",
-                            city_id,
-                            str(e),
-                        )
+                    count = await self.discover_claimed_city(row)
+                except Exception:
                     # Count the attempt toward the per-country cap so one
                     # geocoding outage doesn't consume the entire pending queue.
                     country_summary["cities"] += 1

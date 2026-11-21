@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     # taken to belong to a killed worker and returns to 'pending'.
     claim_timeout_minutes: int = 120
 
+    # -- Daily tick -----------------------------------------------------------
+    # Websites audited by one `agency-audit tick` run.
+    daily_audit_limit: int = 100
+
     # -- Playwright browser fetcher -------------------------------------------
     playwright_timeout_ms: int = 30000
     playwright_wait_seconds: float = 3.0

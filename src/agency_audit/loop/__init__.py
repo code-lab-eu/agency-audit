@@ -4,6 +4,7 @@ Modules:
     orchestrator:  Country-by-country discovery scheduler, end-to-end loop execution
     qc:           Quality control checks (suspicious scores, duplicates, manual review)
     reaudit:      Re-audit scheduling (websites older than 30 days)
+    tick:         The daily bounded audit and discovery run
     tracking:     Progress tracking via discovery_log and audit_log
     retry:        Error recovery with exponential backoff (3 retries max)
 """
@@ -17,11 +18,14 @@ from agency_audit.loop.qc import (
 )
 from agency_audit.loop.reaudit import get_reaudit_queue, schedule_reaudits
 from agency_audit.loop.retry import RetryConfig, mark_failed, retry
+from agency_audit.loop.tick import TickResult, run_tick
 from agency_audit.loop.tracking import AuditLogEntry, get_progress, log_audit_run, log_discovery_run
 
 __all__ = [
     "run_country",
     "run_all_countries",
+    "run_tick",
+    "TickResult",
     "flag_suspicious_scores",
     "detect_duplicates",
     "get_websites_needing_review",

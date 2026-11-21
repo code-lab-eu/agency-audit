@@ -62,12 +62,16 @@ async def claim_websites(limit: int, country: str | None = None) -> list[asyncpg
     return claimed
 
 
-async def claim_next_city(country: str | None = None) -> asyncpg.Record | None:
+async def claim_next_city(
+    country: str | None = None, among_largest: int | None = None
+) -> asyncpg.Record | None:
     """Claim the largest pending city for discovery.
 
     Args:
         country: ISO code; when omitted, the largest pending city of any
             country is claimed.
+        among_largest: When given, only a city among the *among_largest*
+            most populous cities of its country is claimed.
 
     Returns:
         The claimed row (id, country, label, slug, population and the cached
@@ -80,19 +84,27 @@ async def claim_next_city(country: str | None = None) -> asyncpg.Record | None:
         UPDATE cities
         SET discovery_status = 'in_progress', discovery_claimed_at = now()
         WHERE id = (
-            SELECT id
-            FROM cities
-            WHERE discovery_status = 'pending'
-              AND ($1::text IS NULL OR country = $1)
-            ORDER BY population DESC
+            SELECT c.id
+            FROM cities c
+            WHERE c.discovery_status = 'pending'
+              AND ($1::text IS NULL OR c.country = $1)
+              AND ($2::int IS NULL OR c.id IN (
+                  SELECT l.id
+                  FROM cities l
+                  WHERE l.country = c.country
+                  ORDER BY l.population DESC, l.id
+                  LIMIT $2
+              ))
+            ORDER BY c.population DESC
             LIMIT 1
-            FOR UPDATE SKIP LOCKED
+            FOR UPDATE OF c SKIP LOCKED
         )
         RETURNING id, country, label, slug, population,
                   viewport_low_lat, viewport_low_lng,
                   viewport_high_lat, viewport_high_lng
         """,
         country.upper() if country else None,
+        among_largest,
     )
 
 
