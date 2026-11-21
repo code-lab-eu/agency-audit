@@ -188,6 +188,7 @@ agency-audit/
   pyproject.toml              # Project metadata, deps, ruff, pytest, mypy config
   docker-compose.yml          # Local PostgreSQL 16
   quadlet/                    # Podman Quadlet units (see README)
+  systemd/                    # systemd timer of the daily run (see README)
   .github/workflows/agency-audit-ci.yml  # CI: lint, format check, mypy
 ```
 

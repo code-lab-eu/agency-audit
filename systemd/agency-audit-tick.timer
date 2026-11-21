@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily run of Agency Audit
+
+[Timer]
+# Quadlet generates agency-audit-tick.service from
+# quadlet/agency-audit-tick.container; this timer starts it once a day.
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=1h
+# Run at the next start of the user instance when the computer was off or the
+# user instance was not running at the scheduled time.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
