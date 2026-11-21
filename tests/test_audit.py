@@ -969,8 +969,9 @@ class TestPropertyCount:
     # count_properties — source="listing_page" (homepage text count)
     # --------------------------------------------------------------
 
-    async def test_count_properties_listing_page_text(self, homepage_with_text_count):
-        """Homepage with '1,250 properties' → source=listing_page, conf=0.7."""
+    async def test_count_properties_homepage_text_ignored(self, homepage_with_text_count):
+        """A figure on the homepage is not a listing total: homepages state
+        figures such as 'plus de 8000 logements gérés' in the same form."""
         from agency_audit.audit.property_count import count_properties
 
         async with httpx.AsyncClient(
@@ -980,9 +981,8 @@ class TestPropertyCount:
         ) as client:
             result = await count_properties("https://example.com", client=client)
 
-        assert result.count == 1250
-        assert result.source == "listing_page"
-        assert result.confidence == 0.7
+        assert result.count == 0
+        assert result.source == "unknown"
 
     async def test_count_properties_listing_page_items(self, homepage_with_listing_items):
         """Homepage with 20 listing divs → source=listing_page, conf=0.3."""
@@ -1351,19 +1351,70 @@ class TestPropertyCount:
         assert url == "https://example.com/imoti"
 
     def test_find_listing_page_url_multiple_links(self):
-        """First matching link wins when multiple candidates exist."""
+        """The link with the fewest path segments wins; the first one wins a tie."""
         from agency_audit.audit.property_count import _find_listing_page_url
 
         html = (
             "<html><body>"
+            '<a href="/te-koop/gent/huis/ruime-woning-123">Woning</a>'
             '<a href="/offers">Offers</a>'
             '<a href="/search">Search</a>'
             '<a href="/annonces">Annonces</a>'
             "</body></html>"
         )
         url = _find_listing_page_url("https://example.com", html)
-        # First match in pattern order: "/offers" matches r"/offers?" first
         assert url == "https://example.com/offers"
+
+    def test_find_listing_page_url_other_website(self):
+        """A link to another website, such as a portal, is not a listing page."""
+        from agency_audit.audit.property_count import _find_listing_page_url
+
+        html = '<html><body><a href="https://portal.example.org/te-koop">Portal</a></body></html>'
+        assert _find_listing_page_url("https://example.com", html) is None
+
+    def test_find_listing_page_url_multilingual(self):
+        """Listing terms of other languages, e.g. Dutch 'te-koop', French 'a-vendre'."""
+        from agency_audit.audit.property_count import _find_listing_page_url
+
+        html = '<html><body><a href="/contact">Contact</a><a href="/nl/te-koop">Te koop</a>'
+        assert _find_listing_page_url("https://example.be", html) == "https://example.be/nl/te-koop"
+        html = '<html><body><a href="/fr/biens/a-vendre">À vendre</a>'
+        assert (
+            _find_listing_page_url("https://example.be", html)
+            == "https://example.be/fr/biens/a-vendre"
+        )
+
+    async def test_listing_page_most_listings_wins(self):
+        """Of the candidate listing pages, the one linking the most listings is
+        used: a page about renting out a property matches the listing terms too."""
+        from agency_audit.audit.property_count import count_properties
+
+        homepage = (
+            '<html><body><a href="/rent-your-property">Rent out</a>'
+            '<a href="/properties">Properties</a></body></html>'
+        )
+        service = "<html><body><p>IPI 520.342 Results over promises</p></body></html>"
+        listing = (
+            "<html><body><p>48 properties</p>"
+            + "".join(f'<a href="/properties/flat-{i}">Flat</a>' for i in range(12))
+            + "</body></html>"
+        )
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            path = req.url.path
+            if path == "/rent-your-property":
+                return httpx.Response(200, text=service, request=req)
+            if path == "/properties":
+                return httpx.Response(200, text=listing, request=req)
+            if "sitemap" in path:
+                return httpx.Response(404, request=req)
+            return httpx.Response(200, text=homepage, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 48
+        assert result.source == "listing_page"
 
     def test_find_listing_page_url_no_links(self):
         """Returns None when there are no links on the page."""
@@ -1380,6 +1431,172 @@ class TestPropertyCount:
         html = '<html><body><a href="">Home</a><a href="/search">Search</a></body></html>'
         url = _find_listing_page_url("https://example.com", html)
         assert url == "https://example.com/search"
+
+    # ------------------------------------------------------------------
+    # Count phrases and pagination
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("Nos biens 454 bien(s) correspondant(s)", 454),
+            ("6 259 panden gevonden", 6259),
+            ("1.250 Treffer", 1250),
+            ("1 - 36 van 6.259", 6259),
+            ("Showing 1–24 of 1,250", 1250),
+            ("2 345 nieruchomości", 2345),
+        ],
+    )
+    def test_count_from_html_multilingual(self, text, expected):
+        from agency_audit.audit.property_count import _count_from_html
+
+        count, conf = _count_from_html(f"<html><body><p>{text}</p></body></html>")
+        assert count == expected
+        assert conf == 0.7
+
+    def test_count_from_pagination(self):
+        """Last page number times the listings linked from the page."""
+        from agency_audit.audit.property_count import _count_from_pagination
+
+        html = (
+            "<html><body>"
+            + "".join(f'<a href="/nl/te-koop/gent/huis/woning-{i}">W</a>' for i in range(36))
+            + '<a href="/nl/te-koop?page=2">2</a><a href="/nl/te-koop?page=175">175</a>'
+            + "</body></html>"
+        )
+        count, conf = _count_from_pagination("https://example.be/nl/te-koop", html)
+        assert count == 175 * 36
+        assert conf == 0.6
+
+    def test_count_from_pagination_path_page_number(self):
+        from agency_audit.audit.property_count import _count_from_pagination
+
+        html = (
+            "<html><body>"
+            + "".join(f'<a href="/properties/flat-{i}/">F</a>' for i in range(10))
+            + '<a href="/properties/page/12/">12</a>'
+            + "</body></html>"
+        )
+        count, _conf = _count_from_pagination("https://example.com/properties/", html)
+        assert count == 120
+
+    def test_count_from_pagination_none(self):
+        """No pagination: no estimate."""
+        from agency_audit.audit.property_count import _count_from_pagination
+
+        html = '<html><body><a href="/properties/flat-1">F</a></body></html>'
+        assert _count_from_pagination("https://example.com/properties", html) == (0, 0.0)
+
+    async def test_count_properties_highest_strong_estimate(self):
+        """Every source tends to count low, so the highest strong estimate wins:
+        here the pagination of the listing page beats an incomplete sitemap."""
+        from agency_audit.audit.property_count import count_properties
+
+        homepage = '<html><body><a href="/properties">Properties</a></body></html>'
+        listing = (
+            "<html><body>"
+            + "".join(f'<a href="/properties/flat-{i}">F</a>' for i in range(20))
+            + '<a href="/properties?page=30">30</a></body></html>'
+        )
+        sitemap = (
+            '<?xml version="1.0"?><urlset>'
+            + "".join(
+                f"<url><loc>https://example.com/properties/flat-{i}</loc></url>" for i in range(50)
+            )
+            + "</urlset>"
+        )
+
+        async def handler(req: httpx.Request) -> httpx.Response:
+            path = req.url.path
+            if path == "/sitemap.xml":
+                return httpx.Response(200, text=sitemap, request=req)
+            if path == "/properties":
+                return httpx.Response(200, text=listing, request=req)
+            if path.startswith("/wp-json"):
+                return httpx.Response(404, request=req)
+            return httpx.Response(200, text=homepage, request=req)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await count_properties("https://example.com", client=client)
+
+        assert result.count == 600
+        assert result.source == "listing_page"
+        assert result.confidence == 0.6
+
+    # ------------------------------------------------------------------
+    # _listing_detail_paths — listings among sitemap URLs
+    # ------------------------------------------------------------------
+
+    def test_listing_detail_paths_skips_category_pages(self):
+        """City pages above the listings are category pages, not listings."""
+        from agency_audit.audit.property_count import _listing_detail_paths
+
+        urls = [f"https://example.be/te-koop/city-{c}" for c in range(30)]
+        urls += [
+            f"https://example.be/te-koop/city-{c % 5}/huis/woning-{i}"
+            for c, i in enumerate(range(12))
+        ]
+        urls += ["https://example.be/contact", "https://example.be/blog/nieuws-1"]
+        assert len(_listing_detail_paths(urls)) == 12
+
+    def test_listing_detail_paths_skips_filter_pages(self):
+        """Filter pages end in a repeated value ('huis'), listings in an identifier."""
+        from agency_audit.audit.property_count import _listing_detail_paths
+
+        urls = [f"https://example.be/te-koop/{zip_}-city/huis" for zip_ in range(1000, 1200)]
+        urls += [
+            f"https://example.be/te-koop/{zip_}-city/huis/t{zip_}" for zip_ in range(1000, 1015)
+        ]
+        assert len(_listing_detail_paths(urls)) == 15
+
+    def test_listing_detail_paths_translated_paths(self):
+        """Translated paths list each listing once per language: count one language."""
+        from agency_audit.audit.property_count import _listing_detail_paths
+
+        urls = []
+        for i in range(20):
+            urls += [
+                f"https://example.be/nl/te-koop/gent/huis/woning-{i}",
+                f"https://example.be/fr/a-vendre/gand/maison/maison-{i}",
+                f"https://example.be/en/for-sale/ghent/house/house-{i}",
+            ]
+        urls += [f"https://example.be/nl/te-huur/gent/appartement/flat-{i}" for i in range(5)]
+        assert len(_listing_detail_paths(urls)) == 25
+
+    def test_listing_detail_paths_repeated_sitemaps(self):
+        """The same listing URL in several sitemaps is one listing."""
+        from agency_audit.audit.property_count import _listing_detail_paths
+
+        urls = [f"https://example.be/biens/a-vendre/maison/liege/rue-{i}/{i}" for i in range(9)]
+        assert len(_listing_detail_paths(urls * 3)) == 9
+
+    def test_split_url_query(self):
+        """The query string identifies a page only behind a script."""
+        from agency_audit.audit.property_count import _split_url
+
+        assert _split_url("https://example.be/nl/te-huur?filter=44") == ("nl", ("te-huur",))
+        assert _split_url("https://example.com/property.php?id=7") == (
+            "",
+            ("property.php", "?id=7"),
+        )
+
+    async def test_count_from_sitemap_gzip(self):
+        import gzip
+
+        from agency_audit.audit.property_count import _count_from_sitemap
+
+        xml = (
+            "<urlset><url><loc>https://example.com/properties/a</loc></url>"
+            "<url><loc>https://example.com/properties/b</loc></url></urlset>"
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, content=gzip.compress(xml.encode()), request=req)
+            )
+        ) as client:
+            count, conf = await _count_from_sitemap(["https://example.com/sitemap.xml.gz"], client)
+        assert (count, conf) == (2, 0.8)
 
 
 # ---------------------------------------------------------------------------

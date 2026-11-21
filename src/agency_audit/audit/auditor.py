@@ -171,7 +171,7 @@ async def audit_website(
 
         # 9. Listing quality
         logger.info("Auditing %s — listing quality...", url)
-        listing_url = _find_listing_page_url(url, response.text)
+        listing_url = _find_listing_page_url(str(response.url), response.text)
         audit.listing_quality = await assess_listing_quality(
             url,
             homepage_response=response,

@@ -116,7 +116,7 @@ class TestPropertyCountCoverage:
                 lambda req: httpx.Response(200, text=sitemap_xml, request=req)
             )
         ) as client:
-            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+            count, conf = await _count_from_sitemap(["https://example.com/sitemap.xml"], client)
         assert count > 0  # should find property URLs
         assert conf == 0.8
 
@@ -134,7 +134,7 @@ class TestPropertyCountCoverage:
                 lambda req: httpx.Response(200, text=sitemap_xml, request=req)
             )
         ) as client:
-            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+            count, conf = await _count_from_sitemap(["https://example.com/sitemap.xml"], client)
         assert count == 2  # total URL count
         assert conf == 0.4
 
@@ -159,23 +159,24 @@ class TestPropertyCountCoverage:
                 lambda req: httpx.Response(200, text=sitemap_xml, request=req)
             )
         ) as client:
-            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+            count, conf = await _count_from_sitemap(["https://example.com/sitemap.xml"], client)
         assert count == 2  # x and y, not 4
         assert conf == 0.8
 
     async def test_count_from_sitemap_dedup_multilingual_preserves_query(self):
-        """_count_from_sitemap preserves query strings when deduplicating.
+        """_count_from_sitemap preserves the query string behind a script.
 
-        /properties/x?id=1 and /en/properties/x?id=1 are the same listing in
-        two languages — collapse to 1.  /properties/x?id=2 is a distinct
-        listing — keep it.  End result: 2 unique listings, not 3 or 1.
+        /properties/detail.php?id=1 and /en/properties/detail.php?id=1 are the
+        same listing in two languages — collapse to 1.
+        /properties/detail.php?id=2 is a distinct listing — keep it.  End
+        result: 2 unique listings, not 3 or 1.
         """
         sitemap_xml = (
             '<?xml version="1.0"?>\n'
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-            "<url><loc>https://example.com/properties/x?id=1</loc></url>\n"
-            "<url><loc>https://example.com/en/properties/x?id=1</loc></url>\n"
-            "<url><loc>https://example.com/properties/x?id=2</loc></url>\n"
+            "<url><loc>https://example.com/properties/detail.php?id=1</loc></url>\n"
+            "<url><loc>https://example.com/en/properties/detail.php?id=1</loc></url>\n"
+            "<url><loc>https://example.com/properties/detail.php?id=2</loc></url>\n"
             "</urlset>"
         )
         async with httpx.AsyncClient(
@@ -183,7 +184,7 @@ class TestPropertyCountCoverage:
                 lambda req: httpx.Response(200, text=sitemap_xml, request=req)
             )
         ) as client:
-            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+            count, conf = await _count_from_sitemap(["https://example.com/sitemap.xml"], client)
         assert count == 2  # id=1 and id=2, not 3
         assert conf == 0.8
 
@@ -210,7 +211,7 @@ class TestPropertyCountCoverage:
             return httpx.Response(200, text=index_xml, request=req)
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+            count, conf = await _count_from_sitemap(["https://example.com/sitemap.xml"], client)
         assert count > 0
         assert conf == 0.8
 
@@ -253,7 +254,7 @@ class TestPropertyCountCoverage:
             return httpx.Response(200, text=index_xml, request=req)
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+            count, conf = await _count_from_sitemap(["https://example.com/sitemap.xml"], client)
         assert count == 2  # deduplicated, not 4
         assert conf == 0.8
 
@@ -296,7 +297,7 @@ class TestPropertyCountCoverage:
             return httpx.Response(200, text=index_xml, request=req)
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+            count, conf = await _count_from_sitemap(["https://example.com/sitemap.xml"], client)
         assert count == 5  # 2 (pages) + 3 (blog) = 5, not 0
         assert conf == 0.4
 
@@ -307,20 +308,19 @@ class TestPropertyCountCoverage:
                 lambda req: httpx.Response(500, text="Error", request=req)
             )
         ) as client:
-            count, conf = await _count_from_sitemap("https://example.com/sitemap.xml", client)
+            count, conf = await _count_from_sitemap(["https://example.com/sitemap.xml"], client)
         assert count == 0
         assert conf == 0.0
 
-    async def test_count_properties_from_homepage(self):
-        """count_properties finds count from homepage HTML."""
-        html = "<html><body>1,250 properties found</body></html>"
-
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html, request=req))
-        ) as client:
-            result = await count_properties("https://example.com", client=client)
-        assert result.count == 1250
-        assert result.source == "listing_page"
+    def test_count_from_html_skips_price(self):
+        """A price followed by a heading is not a count: '€ 680.000 Biens'."""
+        html = (
+            "<html><body><p>Villa - € 680.000</p><h2>Biens à vendre</h2>"
+            "<p>36 biens</p></body></html>"
+        )
+        count, conf = _count_from_html(html)
+        assert count == 36
+        assert conf == 0.7
 
     async def test_count_properties_from_listing_url(self):
         """count_properties falls back to listing page when homepage has no count."""
