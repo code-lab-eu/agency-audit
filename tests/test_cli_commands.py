@@ -628,6 +628,7 @@ async def test_tick_logs_its_summary(
     """tick writes its summary through the configured JSON log handler."""
     monkeypatch.setattr(settings, "log_format", "json")
     monkeypatch.setattr(settings, "log_level", "INFO")
+    monkeypatch.setattr(settings, "google_maps_api_key", "test-key")
     await fresh_db.execute("UPDATE cities SET discovery_status = 'done'")
 
     result = await asyncio.to_thread(runner.invoke, app, ["tick"])
