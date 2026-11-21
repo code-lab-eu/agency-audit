@@ -12,6 +12,7 @@ from rich.table import Table
 from agency_audit.config import settings
 from agency_audit.db import close_pool, get_pool
 from agency_audit.geonames import import_geonames_for_countries
+from agency_audit.logging_config import setup_logging
 from agency_audit.migrations import run_migrations
 
 console = Console()
@@ -21,6 +22,24 @@ app = typer.Typer(
     help="Real Estate Radar — Website Discovery & Audit System",
     no_args_is_help=True,
 )
+
+
+@app.callback()
+def main(
+    log_level: str | None = typer.Option(
+        None,
+        "--log-level",
+        help="Override AGENCY_AUDIT_LOG_LEVEL (default: INFO)",
+    ),
+):
+    """Configure logging for every command.
+
+    Structured JSON logging to stdout is the default; set
+    AGENCY_AUDIT_LOG_FORMAT=console for human-readable output.
+    """
+    if log_level is not None:
+        settings.log_level = log_level
+    setup_logging()
 
 
 # --- db subcommands ---------------------------------------------------------
@@ -132,32 +151,18 @@ def serve(
     host: str = typer.Option(settings.serve_host, "--host", "-h", help="Bind address"),
     port: int = typer.Option(settings.serve_port, "--port", "-p", help="Port number"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload"),
-    log_level: str = typer.Option(
-        None,
-        "--log-level",
-        help="Override AGENCY_AUDIT_LOG_LEVEL (default: INFO)",
-    ),
 ):
     """Start the FastAPI + HTMX web dashboard.
 
     The migrations that the database does not have yet are applied first, as
     db-init does, so a new version of the code starts on an up-to-date schema.
 
-    Structured JSON logging is enabled by default (set AGENCY_AUDIT_LOG_FORMAT=console
-    for human-readable output). The server handles SIGTERM/SIGINT gracefully: it stops
-    accepting new requests, finishes in-flight ones, and closes the database pool.
+    The server handles SIGTERM/SIGINT gracefully: it stops accepting new
+    requests, finishes in-flight ones, and closes the database pool.
     """
     import signal
 
     import uvicorn
-
-    from agency_audit.logging_config import setup_logging
-
-    # Allow CLI flag to override env setting
-    if log_level is not None:
-        settings.log_level = log_level
-
-    setup_logging()
 
     _migrate_database()
 
@@ -715,10 +720,9 @@ def tick_cmd():
 
     async def _run():
         try:
-            result = await run_tick()
+            await run_tick()
         finally:
             await close_pool()
-        console.print(result.summary())
 
     asyncio.run(_run())
 

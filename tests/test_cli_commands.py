@@ -7,6 +7,9 @@ functions and assert on CLI output.
 """
 
 import asyncio
+import json
+import logging
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
@@ -19,6 +22,20 @@ from agency_audit.cli import app
 from agency_audit.config import settings
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _restore_root_logger() -> Iterator[None]:
+    """Undo the logging setup of the app callback after each test.
+
+    The callback replaces the handlers of the root logger with one bound to
+    the output stream of ``CliRunner``, which is closed after the test.
+    """
+    root = logging.getLogger()
+    handlers, level = root.handlers[:], root.level
+    yield
+    root.handlers[:] = handlers
+    root.setLevel(level)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -598,3 +615,35 @@ def test_serve_does_not_start_when_migrations_fail():
         result = runner.invoke(app, ["serve"])
         assert result.exit_code != 0
         mock_server_cls.assert_not_called()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# logging — the app callback configures logging for every command
+# ──────────────────────────────────────────────────────────────────────
+
+
+async def test_tick_logs_its_summary(
+    fresh_db: asyncpg.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """tick writes its summary through the configured JSON log handler."""
+    monkeypatch.setattr(settings, "log_format", "json")
+    monkeypatch.setattr(settings, "log_level", "INFO")
+    monkeypatch.setattr(settings, "google_maps_api_key", "test-key")
+    await fresh_db.execute("UPDATE cities SET discovery_status = 'done'")
+
+    result = await asyncio.to_thread(runner.invoke, app, ["tick"])
+
+    assert result.exit_code == 0, result.output
+    messages = [json.loads(line)["message"] for line in result.output.splitlines()]
+    assert "Tick: 0 audited, 0 failed, no city discovered" in messages
+
+
+def test_log_level_option_overrides_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--log-level before the command sets the level of every log handler."""
+    monkeypatch.setattr(settings, "log_level", "INFO")
+
+    with patch("agency_audit.cli._migrate_database"):
+        result = runner.invoke(app, ["--log-level", "WARNING", "db-init"])
+
+    assert result.exit_code == 0
+    assert logging.getLogger().level == logging.WARNING
