@@ -1,5 +1,5 @@
 <table id="websites-table" class="websites-table table table-sm table-hover mb-0"
-       hx-get="/htmx/country/{{ iso }}/websites"
+       hx-get="{{ websites_url }}"
        hx-trigger="discoveryComplete from:body"
        hx-swap="outerHTML">
     <thead class="table-light">

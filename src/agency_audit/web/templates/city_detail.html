@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{{ city.label }}, {{ city.country_label }} — Agency Audit{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center mb-4">
+    <a href="/country/{{ iso }}" class="btn btn-outline-secondary btn-sm me-3">← {{ city.country_label }}</a>
+    <h2 class="mb-0">🏙️ {{ city.label }} <small class="text-muted">({{ city.country_label }})</small></h2>
+</div>
+
+<h5>🌐 Websites</h5>
+<div class="card">
+    <div class="card-body p-0">
+        {% include "_websites_table.html" %}
+    </div>
+</div>
+{% endblock %}

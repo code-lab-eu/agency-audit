@@ -153,8 +153,10 @@ async def _country_list(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-async def _country_websites(pool: asyncpg.Pool, iso: str) -> list[dict[str, Any]]:
-    """Websites discovered for a country, highest score first."""
+async def _country_websites(
+    pool: asyncpg.Pool, iso: str, city_slug: str | None = None
+) -> list[dict[str, Any]]:
+    """Websites discovered for a country, or for one of its cities, highest score first."""
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -164,12 +166,30 @@ async def _country_websites(pool: asyncpg.Pool, iso: str) -> list[dict[str, Any]
                 SELECT 1 FROM website_cities wc
                 JOIN cities ci ON ci.id = wc.city_id
                 WHERE wc.website_id = w.id AND ci.country = $1
+                  AND ($2::text IS NULL OR ci.slug = $2)
             )
             ORDER BY w.score DESC, w.label
             """,
             iso.upper(),
+            city_slug,
         )
     return [dict(r) for r in rows]
+
+
+async def _city(pool: asyncpg.Pool, iso: str, city_slug: str) -> dict[str, Any] | None:
+    """The city with this slug in this country, with its country, or None."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT ci.label, ci.slug, co.iso AS country_iso, co.label AS country_label
+            FROM cities ci
+            JOIN countries co ON co.iso = ci.country
+            WHERE ci.country = $1 AND ci.slug = $2
+            """,
+            iso.upper(),
+            city_slug,
+        )
+    return dict(row) if row else None
 
 
 async def _website_row_data(pool: asyncpg.Pool, website_id: int, iso: str) -> dict[str, Any] | None:
@@ -473,7 +493,31 @@ async def country_detail(request: Request, iso: str):
     return templates.TemplateResponse(
         request,
         "country_detail.html",
-        {"data": data, "page": "countries"},
+        {
+            "data": data,
+            "page": "countries",
+            "websites_url": f"/htmx/country/{data['country']['iso']}/websites",
+        },
+    )
+
+
+@app.get("/country/{iso}/{city_slug}", response_class=HTMLResponse)
+async def city_detail(request: Request, iso: str, city_slug: str):
+    pool = await get_pool()
+    city = await _city(pool, iso, city_slug)
+    if city is None:
+        return HTMLResponse("<h1>City not found</h1>", status_code=404)
+    websites = await _country_websites(pool, iso, city_slug)
+    return templates.TemplateResponse(
+        request,
+        "city_detail.html",
+        {
+            "city": city,
+            "iso": city["country_iso"],
+            "websites": websites,
+            "page": "countries",
+            "websites_url": f"/htmx/country/{city['country_iso']}/{city['slug']}/websites",
+        },
     )
 
 
@@ -624,7 +668,26 @@ async def htmx_country_websites(request: Request, iso: str):
     return templates.TemplateResponse(
         request,
         "_websites_table.html",
-        {"websites": websites, "iso": iso},
+        {"websites": websites, "iso": iso, "websites_url": f"/htmx/country/{iso}/websites"},
+    )
+
+
+@app.get("/htmx/country/{iso}/{city_slug}/websites", response_class=HTMLResponse)
+async def htmx_city_websites(request: Request, iso: str, city_slug: str):
+    """Partial: the Websites table of one city."""
+    pool = await get_pool()
+    city = await _city(pool, iso, city_slug)
+    if city is None:
+        return HTMLResponse("Not found", status_code=404)
+    websites = await _country_websites(pool, iso, city_slug)
+    return templates.TemplateResponse(
+        request,
+        "_websites_table.html",
+        {
+            "websites": websites,
+            "iso": city["country_iso"],
+            "websites_url": f"/htmx/country/{city['country_iso']}/{city['slug']}/websites",
+        },
     )
 
 

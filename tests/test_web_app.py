@@ -269,12 +269,103 @@ def test_country_detail_route_found(client: TestClient) -> None:
     """Country detail page for a seeded country (BG)."""
     response = client.get("/country/BG")
     assert response.status_code == 200
+    assert 'hx-get="/htmx/country/BG/websites"' in response.text
 
 
 def test_country_detail_route_not_found(client: TestClient) -> None:
     """Non-existent country returns 404."""
     response = client.get("/country/XX")
     assert response.status_code == 404
+
+
+def test_country_detail_cities_link_to_city_page(client: TestClient) -> None:
+    """The city name in the Cities table links to the city page."""
+    response = client.get("/country/BG")
+    assert '<a href="/country/BG/sofia"' in response.text
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Route: /country/{iso}/{city_slug}
+# ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+async def _seed_plovdiv_website(fresh_db: asyncpg.Connection) -> int:
+    """Insert a test website linked to Plovdiv and return its id."""
+    website_id: int = await fresh_db.fetchval(
+        """\
+        INSERT INTO websites (url, url_key, label, score, audit_status)
+        VALUES ('https://test-plovdiv.example.com', 'test-plovdiv.example.com',
+            'Example Plovdiv Agency', 30, 'audited')
+        RETURNING id\
+        """
+    )
+    await fresh_db.execute(
+        "INSERT INTO website_cities (website_id, city_id) "
+        "SELECT $1, id FROM cities WHERE country = 'BG' AND slug = 'plovdiv'",
+        website_id,
+    )
+    return website_id
+
+
+def test_city_page_lists_only_its_websites(
+    client: TestClient, _seed_bg_website: int, _seed_plovdiv_website: int
+) -> None:
+    """The city page shows the city's websites, not those of other cities of the country."""
+    response = client.get("/country/BG/sofia")
+    assert response.status_code == 200
+    assert "Sofia" in response.text
+    assert 'href="/country/BG"' in response.text
+    assert f'href="/website/{_seed_bg_website}"' in response.text
+    assert f'href="/website/{_seed_plovdiv_website}"' not in response.text
+    assert 'hx-get="/htmx/country/BG/sofia/websites"' in response.text
+    assert f"/htmx/country/BG/websites/{_seed_bg_website}/audit" in response.text
+
+
+async def test_city_page_shows_website_of_several_cities_on_each(
+    client: TestClient, fresh_db: asyncpg.Connection, _seed_bg_website: int
+) -> None:
+    """A website linked to two cities shows on the page of each."""
+    await fresh_db.execute(
+        "INSERT INTO website_cities (website_id, city_id) "
+        "SELECT $1, id FROM cities WHERE country = 'BG' AND slug = 'plovdiv'",
+        _seed_bg_website,
+    )
+    # One event loop for both requests: the app's pool is bound to the loop it was created on.
+    with client:
+        for slug in ("sofia", "plovdiv"):
+            response = client.get(f"/country/BG/{slug}")
+            assert response.status_code == 200
+            assert response.text.count(f'href="/website/{_seed_bg_website}"') == 1
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/country/BG/no-such-city",
+        "/country/XX/sofia",
+        "/country/BG/test-brussels",
+        "/htmx/country/BG/no-such-city/websites",
+        "/htmx/country/BG/test-brussels/websites",
+    ],
+)
+def test_city_page_and_partial_unknown_city_404(
+    client: TestClient, _test_brussels_city: int, path: str
+) -> None:
+    """An unknown country, an unknown slug or the slug of another country's city is 404."""
+    assert client.get(path).status_code == 404
+
+
+def test_htmx_city_websites_lists_only_its_websites(
+    client: TestClient, _seed_bg_website: int, _seed_plovdiv_website: int
+) -> None:
+    """The city partial returns the city's Websites table with its own refresh URL."""
+    response = client.get("/htmx/country/BG/plovdiv/websites")
+    assert response.status_code == 200
+    assert 'id="websites-table"' in response.text
+    assert 'hx-get="/htmx/country/BG/plovdiv/websites"' in response.text
+    assert f'href="/website/{_seed_plovdiv_website}"' in response.text
+    assert f'href="/website/{_seed_bg_website}"' not in response.text
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -472,6 +563,7 @@ def test_htmx_country_websites(client: TestClient, _seed_bg_website: int) -> Non
     response = client.get("/htmx/country/BG/websites")
     assert response.status_code == 200
     assert 'id="websites-table"' in response.text
+    assert 'hx-get="/htmx/country/BG/websites"' in response.text
     assert "discoveryComplete from:body" in response.text
     assert "Example BG Agency" in response.text
     assert "Actions</th>" in response.text
