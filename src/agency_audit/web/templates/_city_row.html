@@ -1,6 +1,6 @@
 <tr{% if ci.discovery_status == 'in_progress' %} hx-get="/htmx/country/{{ iso }}/cities/{{ ci.id }}/row" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
     <td>
-        <strong>{{ ci.label }}</strong>
+        <a href="/country/{{ iso }}/{{ ci.slug }}" class="fw-bold">{{ ci.label }}</a>
         <small class="text-muted">/{{ ci.slug }}</small>
     </td>
     <td class="text-end">{{ "{:,}".format(ci.population) }}</td>
