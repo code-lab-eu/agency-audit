@@ -19,9 +19,9 @@
             </thead>
             <tbody>
                 {% for c in countries %}
-                <tr onclick="window.location='/country/{{ c.iso }}'">
+                <tr class="position-relative">
                     <td>
-                        <strong>{{ c.label }}</strong>
+                        <a href="/country/{{ c.iso }}" class="stretched-link fw-bold text-reset text-decoration-none">{{ c.label }}</a>
                         <small class="text-muted">({{ c.iso }})</small>
                     </td>
                     <td class="text-end">{{ c.city_count }}</td>
