@@ -1,13 +1,13 @@
-<tr onclick="window.location='/website/{{ w.id }}'"{% if w.audit_status == 'auditing' %} hx-get="/htmx/country/{{ iso }}/websites/{{ w.id }}/row" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+<tr class="position-relative"{% if w.audit_status == 'auditing' %} hx-get="/htmx/country/{{ iso }}/websites/{{ w.id }}/row" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
     <td>
-        <strong>{{ w.label or w.url }}</strong>
+        <a href="/website/{{ w.id }}" class="stretched-link fw-bold text-reset text-decoration-none">{{ w.label or w.url }}</a>
         <br><small class="text-muted">{{ w.url }}</small>
     </td>
     <td class="text-end">
         <span class="{{ w.score | score_color }}">{{ w.score }}</span>
     </td>
     <td>{{ w.audit_status | status_badge }}</td>
-    <td class="text-end" onclick="event.stopPropagation()">
+    <td class="text-end position-relative z-2">
         {% if w.audit_status == 'auditing' %}
         <span class="spinner-border spinner-border-sm text-info" role="status" aria-label="Auditing"></span>
         {% else %}

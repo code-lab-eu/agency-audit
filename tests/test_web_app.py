@@ -253,6 +253,13 @@ def test_countries_route(client: TestClient) -> None:
     assert response.status_code == 200
 
 
+def test_countries_rows_link_to_country(client: TestClient) -> None:
+    """Each country row has a real link to its detail page, not a script handler."""
+    response = client.get("/countries")
+    assert '<a href="/country/BG"' in response.text
+    assert "onclick" not in response.text
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Route: /country/{iso}
 # ──────────────────────────────────────────────────────────────────────
@@ -469,6 +476,8 @@ def test_htmx_country_websites(client: TestClient, _seed_bg_website: int) -> Non
     assert "Example BG Agency" in response.text
     assert "Actions</th>" in response.text
     assert f"/htmx/country/BG/websites/{_seed_bg_website}/audit" in response.text
+    assert f'<a href="/website/{_seed_bg_website}"' in response.text
+    assert "onclick" not in response.text
 
 
 async def test_htmx_country_websites_lists_multi_city_website_once(
@@ -482,7 +491,7 @@ async def test_htmx_country_websites_lists_multi_city_website_once(
     )
     response = client.get("/htmx/country/BG/websites")
     assert response.status_code == 200
-    assert response.text.count(f"window.location='/website/{_seed_bg_website}'") == 1
+    assert response.text.count(f'href="/website/{_seed_bg_website}"') == 1
 
 
 # ──────────────────────────────────────────────────────────────────────
