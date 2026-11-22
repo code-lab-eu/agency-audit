@@ -9,6 +9,10 @@ After=agency-audit-db.container agency-audit.container
 ContainerName=agency-audit-tick
 Image=agency-audit.build
 Exec=agency-audit tick
+# A oneshot container runs attached: the output of the container reaches the
+# journal through the stdout of podman. Passthrough writes each line once; the
+# default journald driver of conmon would write it a second time.
+LogDriver=passthrough
 Environment=AGENCY_AUDIT_PG_HOST=db
 Network=agency-audit.network
 Secret=agency-audit-db-password,type=env,target=AGENCY_AUDIT_PG_PASSWORD
