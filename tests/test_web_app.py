@@ -40,6 +40,10 @@ def client(fresh_db: asyncpg.Connection) -> TestClient:
     Depending on ``fresh_db`` redirects ``get_pool()`` onto this test's
     private database and drops it (with its pool) afterwards, so the app
     reads and writes an isolated, pristine dataset.
+
+    A test that sends more than one request sends them inside ``with client:``:
+    outside it, each request runs on a new event loop, and the app's pool stays
+    bound to the loop of the first request.
     """
     return TestClient(app)
 
