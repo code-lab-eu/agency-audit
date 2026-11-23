@@ -350,6 +350,35 @@ class TestPlacesAPIClientSearchTextPagination:
         assert len(results) == 1
         assert call_count == 1
 
+    async def test_field_mask_requests_next_page_token(self):
+        """The API returns nextPageToken only when the field mask names it."""
+        call_count = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            places = [{"id": f"p{call_count}-{i}", "displayName": {"text": "x"}} for i in range(20)]
+            response: dict = {"places": places}
+            field_mask = request.headers["x-goog-fieldmask"].split(",")
+            if call_count < 3 and "nextPageToken" in field_mask:
+                response["nextPageToken"] = f"token-{call_count}"
+            return httpx.Response(200, json=response, request=request)
+
+        client = PlacesAPIClient(api_key="mock-key")
+        transport = httpx.MockTransport(handler)
+        orig_init = httpx.AsyncClient.__init__
+
+        def patched_init(self_, **kwargs):
+            kwargs["transport"] = transport
+            return orig_init(self_, **kwargs)
+
+        with patch.object(httpx.AsyncClient, "__init__", patched_init):
+            results = (await client.search_text("test", max_results=60)).places
+        await client.close()
+
+        assert call_count == 3
+        assert len(results) == 60
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Error paths
