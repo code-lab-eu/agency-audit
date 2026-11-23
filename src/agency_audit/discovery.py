@@ -157,9 +157,12 @@ class PlacesAPIClient:
                     "Content-Type": "application/json",
                     "X-Goog-Api-Key": self.api_key,
                     "X-Goog-FieldMask": (
+                        # The response holds only the fields in the mask, so
+                        # without nextPageToken every search stops after one page.
                         "places.id,places.displayName,places.formattedAddress,"
                         "places.internationalPhoneNumber,places.websiteUri,"
-                        "places.location,places.rating,places.userRatingCount"
+                        "places.location,places.rating,places.userRatingCount,"
+                        "nextPageToken"
                     ),
                 },
             )
