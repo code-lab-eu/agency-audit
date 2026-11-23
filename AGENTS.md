@@ -34,7 +34,9 @@ country-by-country through the orchestrator.
 - A task is NOT complete until the corresponding pull request has been created
   and all required CI checks pass. Work committed to a branch with no PR is
   lost work — it will never be reviewed or merged.
-- Use the `gh` CLI for PR creation: `gh pr create --title "..." --body "..."`.
+- Open the PR with `scripts/open-pr.sh --title "..." --body "..."`: it merges
+  `origin/master`, runs `scripts/qa.sh`, pushes, runs `gh pr create` and waits
+  for the CI checks.
 
 ## Prerequisites
 
@@ -185,6 +187,7 @@ agency-audit/
     integration/test_pipeline.py  # End-to-end pipeline tests
   scripts/
     qa.sh                     # Full local QA gate (lint + format + mypy + tests); run before every push
+    open-pr.sh                # Merge origin/master, QA gate, push, open the PR, watch CI
   pyproject.toml              # Project metadata, deps, ruff, pytest, mypy config
   docker-compose.yml          # Local PostgreSQL 16
   quadlet/                    # Podman Quadlet units (see README)
@@ -247,15 +250,14 @@ merge conflicts.
 2. Make changes, write tests, run the full QA gate (`scripts/qa.sh`)
 3. Commit with [conventional commit](https://www.conventionalcommits.org/)
    prefixes (`feat:`, `fix:`, `test:`, `refactor:`)
-4. **Re-sync before pushing.** `master` may have moved while you worked:
-   `git fetch origin && git merge origin/master`, resolve any conflicts, then
-   re-run `scripts/qa.sh` before continuing.
-5. Push your branch and open a PR against `master` — CI runs ruff lint,
-   ruff format check, and mypy.  A human reviews before merge
-6. **If the PR reports conflicts with `master`**, merge master into your branch:
-   `git fetch origin && git merge origin/master` (resolve conflicts, re-run the
-   suite) then `git push origin <branch-name>`. Do NOT rebase and force-push.
-7. Never push directly to `master`
+4. Publish with `scripts/open-pr.sh`: it merges the latest `origin/master`, since
+   `master` may have moved while you worked, re-runs `scripts/qa.sh`, pushes, opens
+   the PR against `master` and watches CI. A human reviews before merge. When the
+   merge reports conflicts, resolve them, commit, and re-run the script.
+5. **If the PR reports conflicts with `master`**, or you add commits, re-run
+   `scripts/open-pr.sh`: it merges, pushes and watches CI again without creating a
+   second PR. Do NOT rebase and force-push.
+6. Never push directly to `master`
 
 ## Force-push avoidance
 
