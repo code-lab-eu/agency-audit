@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 
 from agency_audit.config import settings
 from agency_audit.phorge import ConduitError, PhorgeTask
-from agency_audit.web.app import _score_color, _status_badge, app
+from agency_audit.web.app import WebsitesPage, _score_color, _status_badge, app
 
 # ──────────────────────────────────────────────────────────────────────
 # Client fixture — the FastAPI app runs against the per-test database
@@ -273,7 +273,7 @@ def test_country_detail_route_found(client: TestClient) -> None:
     """Country detail page for a seeded country (BG)."""
     response = client.get("/country/BG")
     assert response.status_code == 200
-    assert 'hx-get="/htmx/country/BG/websites"' in response.text
+    assert 'hx-get="/htmx/country/BG/websites?page=1"' in response.text
 
 
 def test_country_detail_route_not_found(client: TestClient) -> None:
@@ -322,7 +322,7 @@ def test_city_page_lists_only_its_websites(
     assert 'href="/country/BG"' in response.text
     assert f'href="/website/{_seed_bg_website}"' in response.text
     assert f'href="/website/{_seed_plovdiv_website}"' not in response.text
-    assert 'hx-get="/htmx/country/BG/sofia/websites"' in response.text
+    assert 'hx-get="/htmx/country/BG/sofia/websites?page=1"' in response.text
     assert f"/htmx/country/BG/websites/{_seed_bg_website}/audit" in response.text
 
 
@@ -367,7 +367,7 @@ def test_htmx_city_websites_lists_only_its_websites(
     response = client.get("/htmx/country/BG/plovdiv/websites")
     assert response.status_code == 200
     assert 'id="websites-table"' in response.text
-    assert 'hx-get="/htmx/country/BG/plovdiv/websites"' in response.text
+    assert 'hx-get="/htmx/country/BG/plovdiv/websites?page=1"' in response.text
     assert f'href="/website/{_seed_plovdiv_website}"' in response.text
     assert f'href="/website/{_seed_bg_website}"' not in response.text
 
@@ -567,7 +567,7 @@ def test_htmx_country_websites(client: TestClient, _seed_bg_website: int) -> Non
     response = client.get("/htmx/country/BG/websites")
     assert response.status_code == 200
     assert 'id="websites-table"' in response.text
-    assert 'hx-get="/htmx/country/BG/websites"' in response.text
+    assert 'hx-get="/htmx/country/BG/websites?page=1"' in response.text
     assert "discoveryComplete from:body" in response.text
     assert "Example BG Agency" in response.text
     assert "Actions</th>" in response.text
@@ -588,6 +588,148 @@ async def test_htmx_country_websites_lists_multi_city_website_once(
     response = client.get("/htmx/country/BG/websites")
     assert response.status_code == 200
     assert response.text.count(f'href="/website/{_seed_bg_website}"') == 1
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Websites table pager
+# ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+async def _seed_120_sofia_websites(fresh_db: asyncpg.Connection) -> None:
+    """Insert 120 websites linked to Sofia, labelled Agency 001 to Agency 120, all with
+    score 50, so the table orders them by label: three pages of 50, 50 and 20."""
+    await fresh_db.execute(
+        """\
+        WITH new AS (
+            INSERT INTO websites (url, url_key, label, score, audit_status)
+            SELECT 'https://agency-' || n || '.example.com', 'agency-' || n || '.example.com',
+                   'Agency ' || lpad(n::text, 3, '0'), 50, 'audited'
+            FROM generate_series(1, 120) AS n
+            RETURNING id
+        )
+        INSERT INTO website_cities (website_id, city_id)
+        SELECT new.id, ci.id FROM new, cities ci WHERE ci.country = 'BG' AND ci.slug = 'sofia'\
+        """
+    )
+
+
+def _agencies(html: str) -> list[str]:
+    """The labels of the website rows in a Websites table."""
+    return re.findall(r">(Agency \d{3})</a>", html)
+
+
+def _pager_links(html: str) -> list[str]:
+    """The href of every link in the pager."""
+    nav = re.search(r'<nav [^>]*aria-label="Websites pages".*?</nav>', html, re.S)
+    assert nav is not None, "the pager must be rendered"
+    return re.findall(r'<a class="page-link" href="([^"]*)"', nav.group(0))
+
+
+def test_websites_table_first_page(client: TestClient, _seed_120_sofia_websites: None) -> None:
+    """Page 1 shows the first 50 websites, the total and links to the other pages."""
+    response = client.get("/country/BG")
+    assert response.status_code == 200
+    agencies = _agencies(response.text)
+    assert agencies == [f"Agency {n:03d}" for n in range(1, 51)]
+    assert "120 websites</caption>" in response.text
+    assert _pager_links(response.text) == [
+        "/country/BG?page=2",
+        "/country/BG?page=3",
+        "/country/BG?page=2",
+    ]
+    assert '<li class="page-item active" aria-current="page"><span class="page-link">1</span>' in (
+        response.text
+    )
+    assert 'hx-get="/htmx/country/BG/websites?page=1"' in response.text
+
+
+def test_websites_table_last_page(client: TestClient, _seed_120_sofia_websites: None) -> None:
+    """The last page shows the remaining websites; page 1 links to the page URL without page."""
+    response = client.get("/country/BG?page=3")
+    assert response.status_code == 200
+    assert _agencies(response.text) == [f"Agency {n:03d}" for n in range(101, 121)]
+    assert _pager_links(response.text) == [
+        "/country/BG?page=2",
+        "/country/BG",
+        "/country/BG?page=2",
+    ]
+    assert 'hx-get="/htmx/country/BG/websites?page=3"' in response.text
+
+
+def test_websites_table_partial_keeps_page(
+    client: TestClient, _seed_120_sofia_websites: None
+) -> None:
+    """The HTMX partial serves the requested page, refreshes that page, and its pager links
+    to the page that shows the table, not to the partial."""
+    response = client.get("/htmx/country/BG/websites?page=2")
+    assert response.status_code == 200
+    assert _agencies(response.text) == [f"Agency {n:03d}" for n in range(51, 101)]
+    assert 'hx-get="/htmx/country/BG/websites?page=2"' in response.text
+    assert _pager_links(response.text) == [
+        "/country/BG",
+        "/country/BG",
+        "/country/BG?page=3",
+        "/country/BG?page=3",
+    ]
+
+
+def test_city_websites_table_pages(client: TestClient, _seed_120_sofia_websites: None) -> None:
+    """The city page and its partial page the table with the city's own URLs."""
+    with client:
+        page = client.get("/country/BG/sofia?page=3")
+        partial = client.get("/htmx/country/BG/sofia/websites?page=3")
+    for response in (page, partial):
+        assert response.status_code == 200
+        assert _agencies(response.text) == [f"Agency {n:03d}" for n in range(101, 121)]
+        assert 'hx-get="/htmx/country/BG/sofia/websites?page=3"' in response.text
+        assert _pager_links(response.text)[0] == "/country/BG/sofia?page=2"
+
+
+@pytest.mark.parametrize(
+    ("path", "first", "page"),
+    [
+        ("/country/BG?page=0", 1, 1),
+        ("/country/BG?page=-4", 1, 1),
+        ("/country/BG?page=4", 101, 3),
+        ("/htmx/country/BG/websites?page=0", 1, 1),
+        ("/htmx/country/BG/websites?page=99", 101, 3),
+        ("/htmx/country/BG/sofia/websites?page=99", 101, 3),
+    ],
+)
+def test_websites_table_page_out_of_range(
+    client: TestClient, _seed_120_sofia_websites: None, path: str, first: int, page: int
+) -> None:
+    """A page below 1 shows the first page, a page past the last shows the last page."""
+    response = client.get(path)
+    assert response.status_code == 200
+    assert _agencies(response.text)[0] == f"Agency {first:03d}"
+    assert f'websites?page={page}"' in response.text
+
+
+def test_websites_table_one_page_has_no_pager(client: TestClient, _seed_bg_website: int) -> None:
+    """With one page of websites the pager is hidden."""
+    response = client.get("/country/BG")
+    assert response.status_code == 200
+    assert "1 website</caption>" in response.text
+    assert "pagination" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("page", "last_page", "links"),
+    [
+        (1, 1, [1]),
+        (1, 3, [1, 2, 3]),
+        (1, 10, [1, 2, 3, None, 10]),
+        (5, 10, [1, 2, 3, 4, 5, 6, 7, None, 10]),
+        (6, 10, [1, None, 4, 5, 6, 7, 8, 9, 10]),
+        (10, 10, [1, None, 8, 9, 10]),
+    ],
+)
+def test_websites_page_links(page: int, last_page: int, links: list[int | None]) -> None:
+    """The pager shows the first, the last and two pages on each side of the current one;
+    a gap of one page shows that page instead of an ellipsis."""
+    assert WebsitesPage([], 0, page, last_page).links == links
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -884,7 +1026,6 @@ async def test_country_detail(_app_pool: asyncpg.Pool) -> None:
     assert result is not None
     assert result["country"]["iso"] == "BG"
     assert "cities" in result
-    assert "websites" in result
     assert len(result["cities"]) == base["total_cities"]
 
 
