@@ -1,20 +1,54 @@
-<table id="websites-table" class="websites-table table table-sm table-hover mb-0"
-       hx-get="{{ websites_url }}"
-       hx-trigger="discoveryComplete from:body"
-       hx-swap="outerHTML">
-    <thead class="table-light">
-        <tr>
-            <th>Website</th>
-            <th class="text-end">Score</th>
-            <th>Status</th>
-            <th class="text-end">Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for w in websites %}
-        {% include "_website_row.html" %}
-        {% else %}
-        <tr><td colspan="4" class="text-muted text-center py-3">No websites discovered yet</td></tr>
-        {% endfor %}
-    </tbody>
-</table>
+{#- Context: iso, websites_page (WebsitesPage), websites_url (the HTMX partial of this table)
+    and pager_url (the page that shows this table). -#}
+{%- macro page_href(number) -%}
+{{ pager_url }}{% if number > 1 %}?page={{ number }}{% endif %}
+{%- endmacro -%}
+<div id="websites-table"
+     hx-get="{{ websites_url }}?page={{ websites_page.page }}"
+     hx-trigger="discoveryComplete from:body"
+     hx-swap="outerHTML">
+    <table class="websites-table table table-sm table-hover mb-0">
+        <caption class="caption-top px-2">{{ websites_page.total }} website{{ "s" if websites_page.total != 1 }}</caption>
+        <thead class="table-light">
+            <tr>
+                <th>Website</th>
+                <th class="text-end">Score</th>
+                <th>Status</th>
+                <th class="text-end">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for w in websites_page.rows %}
+            {% include "_website_row.html" %}
+            {% else %}
+            <tr><td colspan="4" class="text-muted text-center py-3">No websites discovered yet</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if websites_page.last_page > 1 %}
+    {% set current = websites_page.page %}
+    <nav class="border-top p-2" aria-label="Websites pages">
+        <ul class="pagination pagination-sm justify-content-center flex-wrap mb-0">
+            {% if current > 1 %}
+            <li class="page-item"><a class="page-link" href="{{ page_href(current - 1) }}" aria-label="Previous page">&laquo;</a></li>
+            {% else %}
+            <li class="page-item disabled"><span class="page-link" aria-hidden="true">&laquo;</span></li>
+            {% endif %}
+            {% for number in websites_page.links %}
+            {% if number is none %}
+            <li class="page-item disabled"><span class="page-link">&hellip;</span></li>
+            {% elif number == current %}
+            <li class="page-item active" aria-current="page"><span class="page-link">{{ number }}</span></li>
+            {% else %}
+            <li class="page-item"><a class="page-link" href="{{ page_href(number) }}">{{ number }}</a></li>
+            {% endif %}
+            {% endfor %}
+            {% if current < websites_page.last_page %}
+            <li class="page-item"><a class="page-link" href="{{ page_href(current + 1) }}" aria-label="Next page">&raquo;</a></li>
+            {% else %}
+            <li class="page-item disabled"><span class="page-link" aria-hidden="true">&raquo;</span></li>
+            {% endif %}
+        </ul>
+    </nav>
+    {% endif %}
+</div>
